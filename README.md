@@ -24,7 +24,7 @@ server. A small Go backend (with Postgres) adds:
 docker compose up -d --build
 ```
 
-Open http://localhost:8080. Use `PORT=9000 docker compose up -d` for another port.
+Open http://localhost:8080. Use `PORT=9000 docker compose up -d --build` for another port.
 
 Development:
 

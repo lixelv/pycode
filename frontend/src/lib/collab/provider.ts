@@ -46,12 +46,16 @@ type Control =
   | { type: "welcome"; you: PeerInfo; session: SessionInfo; peers?: PeerInfo[] }
   | { type: "join" | "leave"; peer: PeerInfo }
   | { type: "signal"; from: number; data: SignalData }
+  | { type: "reset"; from: number }
+  | { type: "error"; error: string }
   | { type: "ended" }
 
 type SignalData = { sdp: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateInit }
 
 type Events = {
   status: (status: ProviderStatus) => void
+  /** The owner reset the session's project (announced by the server). */
+  reset: () => void
   signal: (signal: Signal) => void
   links: () => void
 }
@@ -259,7 +263,7 @@ export class CollabProvider {
   readonly links = new Map<number, Link>()
 
   private ws: WebSocket | null = null
-  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), signal: new Set(), links: new Set() }
+  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set() }
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
@@ -390,6 +394,12 @@ export class CollabProvider {
       case "signal":
         void this.links.get(msg.from)?.onSignal(msg.data)
         break
+      case "reset":
+        this.listeners.reset.forEach((fn) => fn())
+        break
+      case "error":
+        console.warn("session:", msg.error)
+        break
       case "ended":
         this.setStatus("ended")
         this.ws?.close()
@@ -401,6 +411,11 @@ export class CollabProvider {
     this.links.get(info.peer)?.close()
     this.links.set(info.peer, new Link(this, info, initiator))
     this.emitLinks()
+  }
+
+  /** Announces a reset of the project to everyone; the server accepts it from the owner only. */
+  announceReset() {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "reset" }))
   }
 
   sendSignal(to: number, data: SignalData) {

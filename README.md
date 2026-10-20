@@ -1,5 +1,7 @@
 # python-coder
 
+![python-coder: editor, file tree and console after running a program](docs/screenshot.png)
+
 A small web IDE for learning Python. Python (Pyodide, CPython 3.14 compiled
 to WebAssembly) and Ruff run in the browser, so no user code ever runs on a
 server. A small Go backend (with Postgres) adds:

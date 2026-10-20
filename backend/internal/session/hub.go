@@ -208,8 +208,14 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var msg control
-		if json.Unmarshal(data, &msg) == nil && msg.Type == "signal" {
+		if json.Unmarshal(data, &msg) != nil {
+			continue
+		}
+		switch msg.Type {
+		case "signal":
 			rm.signal(m, msg)
+		case "reset":
+			rm.reset(m)
 		}
 	}
 

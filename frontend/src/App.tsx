@@ -1,4 +1,4 @@
-import { FolderTree, Network, Paintbrush, Play, Radio, Square, TerminalSquare } from "lucide-react"
+import { FolderTree, Moon, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -43,7 +43,20 @@ import { cn } from "@/lib/utils"
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
 const MOD = IS_MAC ? "⌘" : "Ctrl"
-const THEME = "dark" as const
+const THEME_KEY = "python-coder:theme"
+
+function loadTheme(): "dark" | "light" {
+  try {
+    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"
+  } catch {
+    return "dark"
+  }
+}
+
+function applyTheme(theme: "dark" | "light") {
+  document.documentElement.classList.toggle("dark", theme === "dark")
+  document.documentElement.style.colorScheme = theme
+}
 
 type View = "editor" | "packages"
 
@@ -51,8 +64,7 @@ type View = "editor" | "packages"
 export default function App() {
   const [ready, setReady] = useState(false)
   useEffect(() => {
-    document.documentElement.classList.add("dark")
-    document.documentElement.style.colorScheme = "dark"
+    applyTheme(loadTheme())
     localProject().ready.then(() => setReady(true))
   }, [])
   if (!ready) return <div className="h-full bg-background" />
@@ -61,6 +73,15 @@ export default function App() {
 
 function Workspace() {
   const { lang, t } = useI18n()
+  const [theme, setTheme] = useState(loadTheme)
+  useEffect(() => {
+    applyTheme(theme)
+    try {
+      localStorage.setItem(THEME_KEY, theme)
+    } catch {
+      // storage unavailable
+    }
+  }, [theme])
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -249,19 +270,34 @@ function Workspace() {
     [doc, provider],
   )
 
+  // In a session only the owner resets — the session's project, for everyone.
+  const isOwner = provider?.role === "owner"
+  const canReset = !provider || isOwner
+
   const reset = useCallback(() => {
+    if (!canReset) return
     setConfirm({
       title: t("confirm.reset.title"),
-      description: isGuest ? t("confirm.reset.guest") : t("confirm.reset.own"),
+      description: provider ? t("confirm.reset.session") : t("confirm.reset.own"),
       action: t("confirm.reset.action"),
       destructive: true,
       onConfirm: () => {
-        resetProject(localProject().doc)
-        if (!isGuest) setActive(DEFAULT_FILE)
+        resetProject(doc)
+        setActive(DEFAULT_FILE)
+        provider?.announceReset()
         toast.success(t("toast.reset"))
       },
     })
-  }, [isGuest])
+  }, [canReset, provider, doc, t])
+
+  // Everyone else follows the owner's reset.
+  useEffect(() => {
+    if (!provider) return
+    return provider.on("reset", () => {
+      setActive(DEFAULT_FILE)
+      toast.message(t("toast.ownerReset"))
+    })
+  }, [provider, t])
 
   const createEntry = useCallback(
     (path: string, kind: "file" | "dir") => {
@@ -480,6 +516,7 @@ function Workspace() {
                 onDownload={download}
                 onUpload={upload}
                 onReset={reset}
+              canReset={canReset}
               />
             </div>
           )}
@@ -511,7 +548,7 @@ function Workspace() {
                 available={activeExists}
                 awareness={awareness}
                 readOnly={!canWrite}
-                theme={THEME}
+                theme={theme}
                 onText={setText}
                 onDiagnostics={setDiagnostics}
                 onCursor={(line, column) => setCursor({ line, column })}
@@ -594,10 +631,18 @@ function Workspace() {
           >
             {lang === "ru" ? "RU" : "EN"}
           </button>
+          <button
+            onClick={() => setTheme((v) => (v === "dark" ? "light" : "dark"))}
+            title={t(theme === "dark" ? "theme.light" : "theme.dark")}
+            aria-label={t(theme === "dark" ? "theme.light" : "theme.dark")}
+            className="flex size-[18px] items-center justify-center rounded border border-console-border hover:text-console-foreground"
+          >
+            {theme === "dark" ? <Sun className="size-3" /> : <Moon className="size-3" />}
+          </button>
         </footer>
       </div>
 
-      <AstDialog open={treeOpen} onOpenChange={setTreeOpen} code={text} theme={THEME} onReveal={reveal} />
+      <AstDialog open={treeOpen} onOpenChange={setTreeOpen} code={text} theme={theme} onReveal={reveal} />
       <ShareDialog
         open={shareOpen}
         onOpenChange={setShareOpen}
@@ -611,7 +656,7 @@ function Workspace() {
       />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <RemoteCursorStyles peers={collab.peers} />
-      <Toaster position="bottom-right" theme={THEME} />
+      <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>
   )
 }

@@ -40,4 +40,5 @@ type control struct {
 	To      uint32     `json:"to,omitempty"`      // signal (client -> server)
 	From    uint32     `json:"from,omitempty"`    // signal (server -> client)
 	Data    jsonRaw    `json:"data,omitempty"`    // signal payload (SDP / ICE), opaque
+	Error   string     `json:"error,omitempty"`   // error
 }

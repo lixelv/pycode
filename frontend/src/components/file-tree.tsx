@@ -43,6 +43,8 @@ interface FileTreeProps {
   onDownload: () => void
   onUpload: (file: File) => void
   onReset: () => void
+  /** In a session only the owner may reset the project. */
+  canReset: boolean
 }
 
 interface Node {
@@ -84,7 +86,7 @@ function FileIcon({ path }: { path: string }) {
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { doc, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset } = props
+  const { doc, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -267,7 +269,7 @@ export function FileTree(props: FileTreeProps) {
         <TreeAction label={t("tree.upload")} disabled={readOnly} onClick={() => upload.current?.click()}>
           <Upload />
         </TreeAction>
-        <TreeAction label={t("tree.reset")} onClick={onReset}>
+        <TreeAction label={canReset ? t("tree.reset") : t("tree.resetOwnerOnly")} disabled={!canReset} onClick={onReset}>
           <RotateCcw />
         </TreeAction>
         <input

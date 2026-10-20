@@ -67,6 +67,21 @@ func (r *room) signal(from *member, msg control) {
 	}
 }
 
+// reset tells everyone the owner reset the project. Only the owner may.
+func (r *room) reset(from *member) {
+	if from.info.Role != RoleOwner {
+		from.enqueueJSON(control{Type: "error", Error: "Only the owner can reset the session's project."})
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range r.members {
+		if m != from {
+			m.enqueueJSON(control{Type: "reset", From: from.info.Peer})
+		}
+	}
+}
+
 // relay forwards binary data for pairs without a direct connection.
 func (r *room) relay(from *member, frame []byte) {
 	if len(frame) < 4 {

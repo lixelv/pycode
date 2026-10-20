@@ -41,7 +41,8 @@ const en = {
   "toast.onlyPython": "Only Python files run. Markdown files open a preview.",
   "toast.badZip": "This file is not a readable .zip archive.",
   "toast.opened": "Opened {name}",
-  "toast.reset": "Your project was reset.",
+  "toast.reset": "The project was reset.",
+  "toast.ownerReset": "The owner reset the project.",
   "toast.fixSyntax": "Fix the syntax errors before formatting.",
   "toast.slowDown": "Slow down — at most {n} runs per second.",
   "toast.sessionEnded": "The owner ended the session. You are back in your own project.",
@@ -51,7 +52,7 @@ const en = {
   "confirm.zip.whoseYour": "your",
   "confirm.zip.action": "Replace project",
   "confirm.reset.title": "Reset your project?",
-  "confirm.reset.guest": "This deletes every file of your own project (not the session's) and starts over with main.py.",
+  "confirm.reset.session": "This deletes every file and package of the session's project for everyone and starts over with main.py.",
   "confirm.reset.own": "This deletes every file and package of your project and starts over with main.py. Download a .zip first if you want to keep it.",
   "confirm.reset.action": "Reset project",
   // file tree
@@ -60,7 +61,8 @@ const en = {
   "tree.newFolder": "New folder",
   "tree.download": "Download as .zip (⌘S)",
   "tree.upload": "Open a .zip project",
-  "tree.reset": "Reset my project",
+  "tree.reset": "Reset the project",
+  "tree.resetOwnerOnly": "Only the session owner can reset the project",
   "tree.rename": "Rename",
   "tree.delete": "Delete",
   "tree.newFileName": "New file name",
@@ -154,6 +156,8 @@ const en = {
   "flow.reveal": "Reveal in editor (line {n})",
   "flow.step": "step #{n}",
   "lang.label": "Language",
+  "theme.light": "Light theme",
+  "theme.dark": "Dark theme",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -192,6 +196,7 @@ const ru: Record<MessageKey, string> = {
   "toast.badZip": "Это не читаемый .zip-архив.",
   "toast.opened": "Открыт {name}",
   "toast.reset": "Проект сброшен.",
+  "toast.ownerReset": "Владелец сбросил проект.",
   "toast.fixSyntax": "Сначала исправьте синтаксические ошибки.",
   "toast.slowDown": "Помедленнее — не больше {n} запусков в секунду.",
   "toast.sessionEnded": "Владелец завершил сессию. Вы снова в своём проекте.",
@@ -201,7 +206,7 @@ const ru: Record<MessageKey, string> = {
   "confirm.zip.whoseYour": "вашем",
   "confirm.zip.action": "Заменить проект",
   "confirm.reset.title": "Сбросить проект?",
-  "confirm.reset.guest": "Будут удалены все файлы вашего собственного проекта (не проекта сессии), останется только main.py.",
+  "confirm.reset.session": "Будут удалены все файлы и библиотеки проекта сессии у всех участников, останется только main.py.",
   "confirm.reset.own": "Будут удалены все файлы и библиотеки проекта, останется только main.py. Если нужно сохранить, сначала скачайте .zip.",
   "confirm.reset.action": "Сбросить",
   "tree.project": "Проект",
@@ -209,7 +214,8 @@ const ru: Record<MessageKey, string> = {
   "tree.newFolder": "Новая папка",
   "tree.download": "Скачать .zip (⌘S)",
   "tree.upload": "Открыть проект из .zip",
-  "tree.reset": "Сбросить мой проект",
+  "tree.reset": "Сбросить проект",
+  "tree.resetOwnerOnly": "Сбросить проект может только владелец сессии",
   "tree.rename": "Переименовать",
   "tree.delete": "Удалить",
   "tree.newFileName": "Имя нового файла",
@@ -299,6 +305,8 @@ const ru: Record<MessageKey, string> = {
   "flow.reveal": "Показать в редакторе (строка {n})",
   "flow.step": "шаг №{n}",
   "lang.label": "Язык",
+  "theme.light": "Светлая тема",
+  "theme.dark": "Тёмная тема",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

@@ -164,7 +164,7 @@ export function ConsolePanel({
                 chunk.kind === "system" && "text-console-muted",
               )}
             >
-              {chunk.text}
+              {chunk.kind === "stderr" ? <StderrText text={chunk.text} /> : chunk.text}
             </span>
           ))}
           {waiting && (
@@ -227,5 +227,25 @@ function ConsoleButton({ label, onClick, children }: { label: string; onClick: (
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  )
+}
+
+/**
+ * The line that explains an error ("ZeroDivisionError: division by zero")
+ * is red; the rest of the traceback stays in the console's colours.
+ */
+const ERROR_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Exit|Warning)\b(?::.*)?$/
+
+function StderrText({ text }: { text: string }) {
+  const lines = text.split("\n")
+  return (
+    <>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {ERROR_LINE.test(line) ? <span className="text-[#ff6166]">{line}</span> : line}
+          {i < lines.length - 1 && "\n"}
+        </span>
+      ))}
+    </>
   )
 }

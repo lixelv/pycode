@@ -58,9 +58,20 @@ export function CodeEditor({
     handlers.current = { onRun, onCursor, onSave, onText }
   }, [onRun, onCursor, onSave, onText])
 
+  // The file's shared text. A reset or an opened archive replaces the Y.Text
+  // under the same path: follow it, or the editor would stay bound to the
+  // deleted one (and show nothing).
+  const [ytext, setYtext] = useState(() => filesOf(doc).get(path))
+  useEffect(() => {
+    const files = filesOf(doc)
+    const read = () => setYtext(files.get(path))
+    read()
+    files.observe(read)
+    return () => files.unobserve(read)
+  }, [doc, path])
+
   // One Monaco model per open file, bound to the file's shared text.
   useEffect(() => {
-    const ytext = filesOf(doc).get(path)
     if (!editor || !ytext || !available) return
     const model = monaco.editor.createModel("", languageOf(path), monaco.Uri.parse(`file:///${++modelCounter}/${path}`))
     // Bracket colours by depth (the theme defines them); our own models need it set here.
@@ -84,7 +95,7 @@ export function CodeEditor({
       editor.setModel(null)
       model.dispose()
     }
-  }, [editor, doc, path, available, awareness])
+  }, [editor, ytext, path, available, awareness])
 
   // Errors: Ruff for Python, the parser for JSON, nothing for other files.
   useEffect(() => {

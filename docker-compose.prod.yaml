@@ -1,0 +1,71 @@
+# Production stack, meant to sit behind a TLS reverse proxy (e.g. Caddy):
+#
+#   coder.example.com {
+#       encode zstd gzip
+#       reverse_proxy 127.0.0.1:8080
+#   }
+#
+# HTTPS is required: input() (SharedArrayBuffer) and the offline cache
+# (service worker) only work in a secure context.
+#
+#   POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yaml up -d --build
+name: python-coder-prod
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  restart: always
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  frontend:
+    <<: *hardening
+    build: ./frontend
+    # Only the reverse proxy on this host may reach it.
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    tmpfs:
+      - /tmp
+    depends_on:
+      backend:
+        condition: service_started
+
+  backend:
+    <<: *hardening
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://pycoder:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/pycoder?sslmode=disable
+      LISTEN_ADDR: ":8090"
+      # No PROXY_ALLOW_CIDRS here: on a server every special-purpose range stays blocked.
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: pycoder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: pycoder
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pycoder -d pycoder"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  db-data:

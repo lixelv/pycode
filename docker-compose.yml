@@ -1,0 +1,53 @@
+name: python-coder
+
+# Python and Ruff run in the browser. The backend only provides user ids,
+# a network proxy for the in-browser Python, and live-share sessions.
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "${PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://pycoder:${POSTGRES_PASSWORD:-pycoder}@db:5432/pycoder?sslmode=disable
+      LISTEN_ADDR: ":8090"
+      # Only for VPNs with "fake IP" DNS on a dev machine, e.g. 198.18.0.0/15.
+      PROXY_ALLOW_CIDRS: ${PROXY_ALLOW_CIDRS:-}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pycoder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pycoder}
+      POSTGRES_DB: pycoder
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pycoder -d pycoder"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  db-data:

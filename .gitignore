@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Machine-specific settings (port, VPN fake-IP range)
+.env
+# Built VS Code extensions (rebuild with vsce)
+*.vsix

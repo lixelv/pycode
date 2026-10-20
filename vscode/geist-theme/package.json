@@ -1,0 +1,18 @@
+{
+  "name": "geist-theme",
+  "displayName": "Geist Theme",
+  "description": "Monochrome Vercel/Geist inspired color themes (dark and light), matching the python-coder editor.",
+  "version": "1.0.0",
+  "publisher": "lixelv",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Themes"],
+  "keywords": ["geist", "vercel", "monochrome", "dark", "light"],
+  "scripts": { "build": "node build.mjs" },
+  "contributes": {
+    "themes": [
+      { "label": "Geist Dark", "uiTheme": "vs-dark", "path": "./themes/geist-dark-color-theme.json" },
+      { "label": "Geist Light", "uiTheme": "vs", "path": "./themes/geist-light-color-theme.json" }
+    ]
+  }
+}

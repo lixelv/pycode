@@ -1,0 +1,22 @@
+{
+  "name": "geist-motion",
+  "displayName": "Geist Motion",
+  "description": "Smooth caret physics like the python-coder editor: the cursor glides between positions, fades instead of blinking, and scrolling is smooth.",
+  "version": "1.0.0",
+  "publisher": "lixelv",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["cursor", "caret", "smooth", "animation"],
+  "contributes": {
+    "configurationDefaults": {
+      "editor.cursorSmoothCaretAnimation": "on",
+      "editor.cursorBlinking": "smooth",
+      "editor.cursorStyle": "line",
+      "editor.cursorWidth": 2,
+      "editor.smoothScrolling": true,
+      "workbench.list.smoothScrolling": true,
+      "terminal.integrated.smoothScrolling": true
+    }
+  }
+}

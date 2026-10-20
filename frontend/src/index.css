@@ -1,0 +1,248 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --color-success: var(--success);
+    --color-console: var(--console);
+    --color-console-foreground: var(--console-foreground);
+    --color-console-muted: var(--console-muted);
+    --color-console-border: var(--console-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/*
+ * Vercel / Geist inspired palette. Values are provisional (no design system
+ * yet): monochrome surfaces, hairline borders, a single blue accent for focus.
+ */
+:root {
+    --background: #ffffff;
+    --foreground: #171717;
+    --card: #fafafa;
+    --card-foreground: #171717;
+    --popover: #ffffff;
+    --popover-foreground: #171717;
+    --primary: #171717;
+    --primary-foreground: #ffffff;
+    --secondary: #f2f2f2;
+    --secondary-foreground: #171717;
+    --muted: #f2f2f2;
+    --muted-foreground: #666666;
+    --accent: #ebebeb;
+    --accent-foreground: #171717;
+    --destructive: #da2f35;
+    --success: #297c3b;
+    --border: #eaeaea;
+    --input: #e5e5e5;
+    --ring: #0070f3;
+    --chart-1: #0070f3;
+    --chart-2: #8e4ec6;
+    --chart-3: #297c3b;
+    --chart-4: #c41562;
+    --chart-5: #a35200;
+    --radius: 0.4rem;
+    --sidebar: #fafafa;
+    --sidebar-foreground: #171717;
+    --sidebar-primary: #171717;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #ebebeb;
+    --sidebar-accent-foreground: #171717;
+    --sidebar-border: #eaeaea;
+    --sidebar-ring: #0070f3;
+    /* The console is always black & white, in both themes. */
+    --console: #000000;
+    --console-foreground: #ffffff;
+    --console-muted: #8f8f8f;
+    --console-border: #2e2e2e;
+}
+
+.dark {
+    --background: #000000;
+    --foreground: #ededed;
+    --card: #0a0a0a;
+    --card-foreground: #ededed;
+    --popover: #0a0a0a;
+    --popover-foreground: #ededed;
+    --primary: #ededed;
+    --primary-foreground: #0a0a0a;
+    --secondary: #1a1a1a;
+    --secondary-foreground: #ededed;
+    --muted: #1a1a1a;
+    --muted-foreground: #a1a1a1;
+    --accent: #1f1f1f;
+    --accent-foreground: #ededed;
+    --destructive: #ff6166;
+    --success: #62c073;
+    --border: #242424;
+    --input: #2e2e2e;
+    --ring: #3291ff;
+    --chart-1: #52a8ff;
+    --chart-2: #bf7af0;
+    --chart-3: #62c073;
+    --chart-4: #f75f8f;
+    --chart-5: #ff990a;
+    --sidebar: #0a0a0a;
+    --sidebar-foreground: #ededed;
+    --sidebar-primary: #ededed;
+    --sidebar-primary-foreground: #0a0a0a;
+    --sidebar-accent: #1f1f1f;
+    --sidebar-accent-foreground: #ededed;
+    --sidebar-border: #242424;
+    --sidebar-ring: #3291ff;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+@layer base {
+  html {
+    height: 100%;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "liga" 1, "calt" 1;
+  }
+}
+
+@keyframes console-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.console-caret {
+  animation: console-blink 1s steps(1) infinite;
+}
+
+/* React Flow: blend into the Geist surfaces. */
+.react-flow {
+  --xy-background-color: var(--background);
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-label-background-color: var(--background);
+  --xy-edge-label-color: var(--muted-foreground);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: none;
+}
+
+
+/*
+ * The app fills the visible viewport exactly and the document never scrolls
+ * (Safari showed page scrollbars). svh first as a fallback, dvh where supported;
+ * body is pinned so nothing can make it scroll.
+ */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100svh;
+  height: 100dvh;
+}
+#root {
+  width: 100%;
+  height: 100svh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Markdown preview: always dark, like the console. */
+.markdown-body {
+  color: #ededed;
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 80ch;
+}
+.markdown-body > * + * { margin-top: 0.85em; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  color: #fff; font-weight: 600; line-height: 1.25; margin-top: 1.4em;
+}
+.markdown-body h1 { font-size: 1.75em; border-bottom: 1px solid #2e2e2e; padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.4em; border-bottom: 1px solid #2e2e2e; padding-bottom: 0.25em; }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body a { color: #52a8ff; text-decoration: underline; text-underline-offset: 3px; }
+.markdown-body code { font-family: var(--font-mono); font-size: 0.88em; background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 4px; padding: 0.1em 0.35em; }
+.markdown-body pre { background: #0a0a0a; border: 1px solid #2e2e2e; border-radius: 6px; padding: 12px 14px; overflow: auto; }
+.markdown-body pre code { background: none; border: 0; padding: 0; }
+.markdown-body ul { list-style: disc; padding-left: 1.5em; }
+.markdown-body ol { list-style: decimal; padding-left: 1.5em; }
+.markdown-body li + li { margin-top: 0.25em; }
+.markdown-body blockquote { border-left: 3px solid #333; padding-left: 1em; color: #a1a1a1; }
+.markdown-body hr { border: 0; border-top: 1px solid #2e2e2e; }
+.markdown-body table { border-collapse: collapse; }
+.markdown-body th, .markdown-body td { border: 1px solid #2e2e2e; padding: 6px 10px; }
+.markdown-body th { background: #111; }
+.markdown-body img { max-width: 100%; }
+.markdown-body input[type="checkbox"] { margin-right: 0.4em; }
+
+/* An empty pair of brackets is always grey (see emptyPairs in code-editor.tsx). */
+.monaco-editor .bracket-empty {
+  color: #8f8f8f !important;
+}

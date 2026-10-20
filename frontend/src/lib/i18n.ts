@@ -1,0 +1,353 @@
+import { useSyncExternalStore } from "react"
+
+export type Lang = "en" | "ru"
+
+const KEY = "python-coder:lang"
+
+const en = {
+  // header
+  "header.files.show": "Show files",
+  "header.files.hide": "Hide files",
+  "header.noFile": "no file open",
+  "tab.code": "Code",
+  "tab.packages": "Packages",
+  "btn.format": "Format",
+  "btn.format.ruff": "Format with Ruff",
+  "btn.format.json": "Format JSON",
+  "btn.tree": "Show tree",
+  "btn.share": "Share",
+  "btn.live": "Live",
+  "btn.liveReadOnly": "Live · read only",
+  "btn.run": "Run",
+  "btn.preview": "Preview",
+  "btn.stop": "Stop",
+  "btn.cancel": "Cancel",
+  "btn.delete": "Delete",
+  // footer
+  "footer.noErrors": "No errors",
+  "footer.errors": "{n} errors",
+  "footer.error": "1 error",
+  "footer.console": "Console",
+  "footer.guest": "editing the session's project",
+  "footer.position": "Ln {line}, Col {col}",
+  "footer.python": "Python {v} · in browser",
+  "footer.loadingPython": "Loading Python…",
+  "footer.pythonIdle": "Python (in browser)",
+  // editor
+  "editor.readOnly": "This session is read only: only the owner can edit.",
+  "editor.waitingProject": "Waiting for the session's project…",
+  "editor.createFile": "Create a file to start.",
+  // toasts & confirms
+  "toast.onlyPython": "Only Python files run. Markdown files open a preview.",
+  "toast.badZip": "This file is not a readable .zip archive.",
+  "toast.opened": "Opened {name}",
+  "toast.reset": "Your project was reset.",
+  "toast.fixSyntax": "Fix the syntax errors before formatting.",
+  "toast.slowDown": "Slow down — at most {n} runs per second.",
+  "toast.sessionEnded": "The owner ended the session. You are back in your own project.",
+  "confirm.zip.title": "Open this archive?",
+  "confirm.zip.text": "{name} has {n} files. They replace every file in {whose} project.",
+  "confirm.zip.whoseSession": "the session's",
+  "confirm.zip.whoseYour": "your",
+  "confirm.zip.action": "Replace project",
+  "confirm.reset.title": "Reset your project?",
+  "confirm.reset.guest": "This deletes every file of your own project (not the session's) and starts over with main.py.",
+  "confirm.reset.own": "This deletes every file and package of your project and starts over with main.py. Download a .zip first if you want to keep it.",
+  "confirm.reset.action": "Reset project",
+  // file tree
+  "tree.project": "Project",
+  "tree.newFile": "New file",
+  "tree.newFolder": "New folder",
+  "tree.download": "Download as .zip (⌘S)",
+  "tree.upload": "Open a .zip project",
+  "tree.reset": "Reset my project",
+  "tree.rename": "Rename",
+  "tree.delete": "Delete",
+  "tree.newFileName": "New file name",
+  "tree.newFolderName": "New folder name",
+  "tree.renameTo": "New name",
+  "tree.err.dots": "Use a name without “..”.",
+  "tree.err.exists": "Something with this name already exists.",
+  "tree.placeholder.file": "name.py",
+  "tree.placeholder.dir": "folder name",
+  // console
+  "console.title": "Console",
+  "console.waiting": "Waiting for input — type below and press Enter",
+  "console.waitingOwner": "Waiting for input from the owner",
+  "console.starting": "Starting Python…",
+  "console.running": "Running",
+  "console.timeout": "Timed out after {n}s",
+  "console.outputLimit": "Stopped: output limit exceeded",
+  "console.stopped": "Stopped",
+  "console.error": "Sandbox error",
+  "console.exited": "Exited with code {code} · {t}s",
+  "console.stop": "Stop (Ctrl+C)",
+  "console.clear": "Clear console",
+  "console.hide": "Hide console",
+  "console.hint": "Enter to send · Ctrl+D for end of input · Ctrl+C to stop",
+  "console.input": "Program input",
+  "console.executorLeft": "The person running the program left the session.",
+  "preview.title": "Preview",
+  "preview.close": "Close preview",
+  // packages
+  "pkg.title": "Packages",
+  "pkg.text": "Libraries from PyPI for the Python that runs in your browser. Each one is downloaded once and then served from the cache. The standard library (math, random, json…) is always available.",
+  "pkg.add": "Add package",
+  "pkg.empty": "No packages yet",
+  "pkg.emptyText": "Add one to import it in your code.",
+  "pkg.latest": "latest",
+  "pkg.pinned": "pinned =={v}",
+  "pkg.installing": "Downloading and installing…",
+  "pkg.note": "Pure-Python packages from PyPI work, plus the ~250 packages Pyodide builds for the browser (numpy, pandas, matplotlib, scipy…). Packages that need threads, sockets or native code not built for Pyodide can't be installed. Removing a package restarts Python.",
+  "pkg.dialog.text": "Installed from PyPI. Without a version, the latest one is used and remembered.",
+  "pkg.dialog.label": "Package",
+  "pkg.dialog.format": "Format: name or name==version",
+  "pkg.dialog.invalid": "Use a package name, optionally with ==version (e.g. numpy==2.4.6).",
+  "pkg.dialog.replaces": "{name} is already added; this replaces it.",
+  "pkg.retry": "Retry {name}",
+  "pkg.remove": "Remove {name}",
+  // share
+  "share.title": "Live session",
+  "share.text": "Share your project: files, packages and console, with everyone's cursor. Changes travel directly between browsers (WebRTC); the project stays saved in yours.",
+  "share.unavailable": "The collaboration server is not reachable, so sessions are unavailable right now.",
+  "share.start": "Start a session",
+  "share.rw": "Read & write",
+  "share.rwText": "Everyone edits and runs the code.",
+  "share.ro": "Read only",
+  "share.roText": "Only you edit and run; others watch.",
+  "share.startBtn": "Start session",
+  "share.or": "or join one",
+  "share.codePlaceholder": "Code or link, e.g. K7Q2-M9XD",
+  "share.join": "Join",
+  "share.linkText": "Share the link or the code. Anyone with it can join.",
+  "share.link": "Link",
+  "share.code": "Code",
+  "share.members": "In this session · {n}",
+  "share.you": "(you)",
+  "share.owner": "Owner",
+  "share.editor": "Can edit",
+  "share.viewer": "Viewer",
+  "share.direct": "Connected directly (WebRTC)",
+  "share.relay": "Through the server (connecting directly…)",
+  "share.leave": "Leave",
+  "share.end": "End for everyone",
+  // structure dialog
+  "tree.flowchart": "Flowchart",
+  "tree.syntax": "Syntax tree",
+  "tree.steps": "{n} steps",
+  "tree.nodes": "{n} nodes",
+  "tree.order": "What runs, in which order",
+  "tree.analysing": "Analysing… (the first time loads Python)",
+  "tree.failed": "Could not build the view",
+  "tree.syntaxError": "Your code has a syntax error",
+  "tree.line": "line {n}",
+  "flow.intro": "The program runs from Program start following the arrows. Click a step to read what it does.",
+  "flow.next": "then",
+  "flow.yes": "yes / next item",
+  "flow.no": "no / done",
+  "flow.repeat": "repeat the loop",
+  "flow.call": "calls a function or method",
+  "flow.create": "creates an object",
+  "flow.inherit": "inherits from",
+  "flow.frames": "Dashed frames are functions (purple) and classes (pink). Their steps run only when another step calls them.",
+  "flow.inside": "Inside {name}: runs only when it is called.",
+  "flow.reveal": "Reveal in editor (line {n})",
+  "flow.step": "step #{n}",
+  "lang.label": "Language",
+} as const
+
+export type MessageKey = keyof typeof en
+
+const ru: Record<MessageKey, string> = {
+  "header.files.show": "Показать файлы",
+  "header.files.hide": "Скрыть файлы",
+  "header.noFile": "файл не открыт",
+  "tab.code": "Код",
+  "tab.packages": "Библиотеки",
+  "btn.format": "Формат",
+  "btn.format.ruff": "Отформатировать через Ruff",
+  "btn.format.json": "Отформатировать JSON",
+  "btn.tree": "Схема",
+  "btn.share": "Поделиться",
+  "btn.live": "В эфире",
+  "btn.liveReadOnly": "В эфире · просмотр",
+  "btn.run": "Запуск",
+  "btn.preview": "Просмотр",
+  "btn.stop": "Стоп",
+  "btn.cancel": "Отмена",
+  "btn.delete": "Удалить",
+  "footer.noErrors": "Ошибок нет",
+  "footer.errors": "Ошибок: {n}",
+  "footer.error": "1 ошибка",
+  "footer.console": "Консоль",
+  "footer.guest": "вы в проекте сессии",
+  "footer.position": "Стр {line}, стл {col}",
+  "footer.python": "Python {v} · в браузере",
+  "footer.loadingPython": "Загрузка Python…",
+  "footer.pythonIdle": "Python (в браузере)",
+  "editor.readOnly": "Сессия только для просмотра: редактирует только владелец.",
+  "editor.waitingProject": "Ждём проект сессии…",
+  "editor.createFile": "Создайте файл, чтобы начать.",
+  "toast.onlyPython": "Запускаются только файлы Python. Markdown открывается как просмотр.",
+  "toast.badZip": "Это не читаемый .zip-архив.",
+  "toast.opened": "Открыт {name}",
+  "toast.reset": "Проект сброшен.",
+  "toast.fixSyntax": "Сначала исправьте синтаксические ошибки.",
+  "toast.slowDown": "Помедленнее — не больше {n} запусков в секунду.",
+  "toast.sessionEnded": "Владелец завершил сессию. Вы снова в своём проекте.",
+  "confirm.zip.title": "Открыть этот архив?",
+  "confirm.zip.text": "В {name} файлов: {n}. Они заменят все файлы в {whose} проекте.",
+  "confirm.zip.whoseSession": "общем",
+  "confirm.zip.whoseYour": "вашем",
+  "confirm.zip.action": "Заменить проект",
+  "confirm.reset.title": "Сбросить проект?",
+  "confirm.reset.guest": "Будут удалены все файлы вашего собственного проекта (не проекта сессии), останется только main.py.",
+  "confirm.reset.own": "Будут удалены все файлы и библиотеки проекта, останется только main.py. Если нужно сохранить, сначала скачайте .zip.",
+  "confirm.reset.action": "Сбросить",
+  "tree.project": "Проект",
+  "tree.newFile": "Новый файл",
+  "tree.newFolder": "Новая папка",
+  "tree.download": "Скачать .zip (⌘S)",
+  "tree.upload": "Открыть проект из .zip",
+  "tree.reset": "Сбросить мой проект",
+  "tree.rename": "Переименовать",
+  "tree.delete": "Удалить",
+  "tree.newFileName": "Имя нового файла",
+  "tree.newFolderName": "Имя новой папки",
+  "tree.renameTo": "Новое имя",
+  "tree.err.dots": "Имя не должно содержать «..».",
+  "tree.err.exists": "Файл или папка с таким именем уже есть.",
+  "tree.placeholder.file": "имя.py",
+  "tree.placeholder.dir": "имя папки",
+  "console.title": "Консоль",
+  "console.waiting": "Ждём ввод — напишите ниже и нажмите Enter",
+  "console.waitingOwner": "Ждём ввод от владельца",
+  "console.starting": "Запуск Python…",
+  "console.running": "Выполняется",
+  "console.timeout": "Остановлено по таймауту ({n} с)",
+  "console.outputLimit": "Остановлено: слишком много вывода",
+  "console.stopped": "Остановлено",
+  "console.error": "Ошибка исполнения",
+  "console.exited": "Завершено с кодом {code} · {t} с",
+  "console.stop": "Остановить (Ctrl+C)",
+  "console.clear": "Очистить консоль",
+  "console.hide": "Скрыть консоль",
+  "console.hint": "Enter — отправить · Ctrl+D — конец ввода · Ctrl+C — остановить",
+  "console.input": "Ввод программы",
+  "console.executorLeft": "Тот, кто запустил программу, покинул сессию.",
+  "preview.title": "Просмотр",
+  "preview.close": "Закрыть просмотр",
+  "pkg.title": "Библиотеки",
+  "pkg.text": "Библиотеки с PyPI для Python, который работает в вашем браузере. Каждая скачивается один раз и дальше берётся из кэша. Стандартная библиотека (math, random, json…) доступна всегда.",
+  "pkg.add": "Добавить",
+  "pkg.empty": "Библиотек пока нет",
+  "pkg.emptyText": "Добавьте библиотеку, чтобы импортировать её в коде.",
+  "pkg.latest": "последняя",
+  "pkg.pinned": "версия =={v}",
+  "pkg.installing": "Скачивание и установка…",
+  "pkg.note": "Работают библиотеки на чистом Python с PyPI и ~250 библиотек, собранных Pyodide для браузера (numpy, pandas, matplotlib, scipy…). Библиотеки, которым нужны потоки, сокеты или нативный код вне Pyodide, установить нельзя. Удаление библиотеки перезапускает Python.",
+  "pkg.dialog.text": "Устанавливается с PyPI. Без версии берётся последняя, и она запоминается.",
+  "pkg.dialog.label": "Библиотека",
+  "pkg.dialog.format": "Формат: имя или имя==версия",
+  "pkg.dialog.invalid": "Укажите имя библиотеки, можно с ==версия (например numpy==2.4.6).",
+  "pkg.dialog.replaces": "{name} уже добавлена — она будет заменена.",
+  "pkg.retry": "Повторить {name}",
+  "pkg.remove": "Удалить {name}",
+  "share.title": "Совместная сессия",
+  "share.text": "Поделитесь проектом: файлы, библиотеки и консоль, с курсорами всех участников. Изменения идут напрямую между браузерами (WebRTC), проект остаётся у вас.",
+  "share.unavailable": "Сервер совместной работы недоступен, поэтому сессии сейчас не работают.",
+  "share.start": "Начать сессию",
+  "share.rw": "Чтение и запись",
+  "share.rwText": "Все редактируют и запускают код.",
+  "share.ro": "Только просмотр",
+  "share.roText": "Редактируете и запускаете только вы, остальные смотрят.",
+  "share.startBtn": "Начать сессию",
+  "share.or": "или подключитесь",
+  "share.codePlaceholder": "Код или ссылка, например K7Q2-M9XD",
+  "share.join": "Войти",
+  "share.linkText": "Поделитесь ссылкой или кодом. Войти может любой, у кого они есть.",
+  "share.link": "Ссылка",
+  "share.code": "Код",
+  "share.members": "В сессии · {n}",
+  "share.you": "(вы)",
+  "share.owner": "Владелец",
+  "share.editor": "Может править",
+  "share.viewer": "Зритель",
+  "share.direct": "Напрямую (WebRTC)",
+  "share.relay": "Через сервер (пробуем напрямую…)",
+  "share.leave": "Выйти",
+  "share.end": "Завершить для всех",
+  "tree.flowchart": "Блок-схема",
+  "tree.syntax": "Синтаксическое дерево",
+  "tree.steps": "шагов: {n}",
+  "tree.nodes": "узлов: {n}",
+  "tree.order": "Что выполняется и в каком порядке",
+  "tree.analysing": "Анализ… (в первый раз загружается Python)",
+  "tree.failed": "Не удалось построить схему",
+  "tree.syntaxError": "В коде синтаксическая ошибка",
+  "tree.line": "строка {n}",
+  "flow.intro": "Программа начинается с «Начала программы» и идёт по стрелкам. Нажмите на шаг, чтобы прочитать, что он делает.",
+  "flow.next": "дальше",
+  "flow.yes": "да / следующий элемент",
+  "flow.no": "нет / готово",
+  "flow.repeat": "повторить цикл",
+  "flow.call": "вызывает функцию или метод",
+  "flow.create": "создаёт объект",
+  "flow.inherit": "наследует от",
+  "flow.frames": "Пунктирные рамки — функции (фиолетовые) и классы (розовые). Их шаги выполняются, только когда их вызывают.",
+  "flow.inside": "Внутри {name}: выполняется, только когда её вызывают.",
+  "flow.reveal": "Показать в редакторе (строка {n})",
+  "flow.step": "шаг №{n}",
+  "lang.label": "Язык",
+}
+
+const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }
+
+function initial(): Lang {
+  try {
+    const saved = localStorage.getItem(KEY)
+    if (saved === "en" || saved === "ru") return saved
+  } catch {
+    // storage unavailable
+  }
+  return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en"
+}
+
+let current: Lang = initial()
+const listeners = new Set<() => void>()
+
+export function getLang() {
+  return current
+}
+
+export function setLang(lang: Lang) {
+  current = lang
+  try {
+    localStorage.setItem(KEY, lang)
+  } catch {
+    // storage unavailable
+  }
+  document.documentElement.lang = lang
+  listeners.forEach((l) => l())
+}
+
+/** Translates outside React (toasts, workers' callers). */
+export function translate(key: MessageKey, vars?: Record<string, string | number>): string {
+  let text = dictionaries[current][key] ?? en[key]
+  if (vars) for (const [k, v] of Object.entries(vars)) text = text.replaceAll(`{${k}}`, String(v))
+  return text
+}
+
+/** The current language and a translator that re-renders on change. */
+export function useI18n() {
+  const lang = useSyncExternalStore(
+    (fn) => {
+      listeners.add(fn)
+      return () => listeners.delete(fn)
+    },
+    () => current,
+  )
+  return { lang, t: translate }
+}
+
+document.documentElement.lang = current

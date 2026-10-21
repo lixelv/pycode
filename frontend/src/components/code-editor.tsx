@@ -2,7 +2,7 @@ import Editor, { type OnMount } from "@monaco-editor/react"
 import { useEffect, useRef, useState } from "react"
 import { MonacoBinding } from "y-monaco"
 import type { Awareness } from "y-protocols/awareness"
-import type * as Y from "yjs"
+import * as Y from "yjs"
 
 import { useI18n } from "@/lib/i18n"
 import { registerPythonIntellisense } from "@/lib/intellisense"
@@ -79,6 +79,20 @@ export function CodeEditor({
     editor.setModel(model)
     const empty = editor.createDecorationsCollection()
     const binding = new MonacoBinding(ytext, model, new Set([editor]), awareness)
+    // y-monaco publishes the cursor only when it moves: share where it is now,
+    // so the others see it from the start (same shape y-monaco uses).
+    if (awareness) {
+      const sel = editor.getSelection()
+      if (sel) {
+        let anchor = model.getOffsetAt(sel.getStartPosition())
+        let head = model.getOffsetAt(sel.getEndPosition())
+        if (sel.getDirection() === monaco.SelectionDirection.RTL) [anchor, head] = [head, anchor]
+        awareness.setLocalStateField("selection", {
+          anchor: Y.createRelativePositionFromTypeIndex(ytext, anchor),
+          head: Y.createRelativePositionFromTypeIndex(ytext, head),
+        })
+      }
+    }
     const report = () => {
       const value = model.getValue()
       setText(value)

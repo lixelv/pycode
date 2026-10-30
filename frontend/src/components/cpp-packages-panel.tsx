@@ -74,7 +74,7 @@ export function CppPackagesPanel({ packages, readOnly = false, onAdd, onRemove, 
                         : `-I${p.include ? `${p.repo}/${p.include}` : p.repo}`}
                   </div>
                 </div>
-                {p.status === "error" && !readOnly && (
+                {p.status === "error" && (!readOnly || p.loadFailed) && (
                   <Button variant="ghost" size="icon-sm" aria-label={t("pkg.retry", { name: p.repo })} onClick={() => onRetry(p.repo)}>
                     <RotateCw />
                   </Button>

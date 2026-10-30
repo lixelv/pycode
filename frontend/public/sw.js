@@ -11,7 +11,7 @@
 const CACHE = "polycode-v1"
 
 // `owner/repo@<version>` in the path: a tag (v1.2.3, 3.11.3) or a full commit SHA.
-const FIXED_VERSION = /^(v?\d+(\.\d+)*([-+].*)?|[0-9a-f]{40})$/
+const FIXED_VERSION = /^(v?\d+\.\d+\.\d+([-+].*)?|[0-9a-f]{40})$/
 const fixedVersion = (url) => FIXED_VERSION.test(/@([^/]+)/.exec(url.pathname)?.[1] ?? "")
 
 const IMMUTABLE = [

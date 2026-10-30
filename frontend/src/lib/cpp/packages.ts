@@ -16,6 +16,8 @@ export interface CppPackage {
   include?: string
   status: CppPackageStatus
   error?: string
+  /** Set only by `applyLoadFailures` (installed in the project, but did not load here); never written to the doc. */
+  loadFailed?: boolean
 }
 
 export const cppPackagesOf = (s: ProjectStore) => s.structure.getArray<CppPackage>("cppPackages")
@@ -26,7 +28,16 @@ export function parseCppSpec(input: string): { repo: string; ref: string | null;
   const m = SPEC.exec(input.trim())
   if (!m || m[1].split("/").some((part) => /^\.+$/.test(part))) return null
   const ref = m[2] ?? null
+  if (ref?.split("/").some((part) => part === "." || part === "..")) return null
   return { repo: m[1], ref, spec: ref ? `${m[1]}@${ref}` : m[1] }
+}
+
+/** Shows installed packages that did not load here (`failed`, keyed `repo@version`) as errors; the stored list is not changed. */
+export function applyLoadFailures(stored: CppPackage[], failed: Record<string, string>): CppPackage[] {
+  return stored.map((p) => {
+    const error = p.status === "installed" ? failed[`${p.repo}@${p.version}`] : undefined
+    return error === undefined ? p : { ...p, status: "error", error, loadFailed: true }
+  })
 }
 
 /** The include folder: `include`, else `single_include`, else the root. */
@@ -107,7 +118,7 @@ export async function installCppPackage(repo: string, version: string | null): P
 }
 
 /** The headers of every installed package, ready for clang (`/packages/<repo>/…`); one that fails to load is left out and reported. */
-export async function loadCppPackages(list: CppPackage[], onFail?: (repo: string, message: string) => void): Promise<CppPackageFiles> {
+export async function loadCppPackages(list: CppPackage[], onFail?: (repo: string, version: string, message: string) => void): Promise<CppPackageFiles> {
   const result: CppPackageFiles = { files: {}, includes: [] }
   const wanted = list.filter((p) => p.status === "installed" && p.version)
   const loaded = await Promise.allSettled(
@@ -125,7 +136,7 @@ export async function loadCppPackages(list: CppPackage[], onFail?: (repo: string
   )
   loaded.forEach((entry, i) => {
     if (entry.status === "rejected") {
-      onFail?.(wanted[i].repo, entry.reason instanceof Error ? entry.reason.message : String(entry.reason))
+      onFail?.(wanted[i].repo, wanted[i].version!, entry.reason instanceof Error ? entry.reason.message : String(entry.reason))
       return
     }
     const { repo, include, files } = entry.value

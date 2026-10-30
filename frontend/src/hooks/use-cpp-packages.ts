@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type * as Y from "yjs"
 
-import { installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/packages"
+import { applyLoadFailures, installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/packages"
 
 /**
  * The project's C++ package list (a Y.Array in `structure`): saved with the
@@ -10,16 +10,19 @@ import { installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/pack
  */
 export function useCppPackages(shared: Y.Array<CppPackage>) {
   const [stored, setPackages] = useState<CppPackage[]>(() => shared.toArray())
-  // Packages that are installed in the project but did not load here (offline…): shown as errors, not retried by every lint.
+  // Packages that are installed in the project but did not load here (offline…), keyed `repo@version`: shown as errors, not retried by every lint.
   const [failed, setFailed] = useState<Record<string, string>>({})
-  const packages = useMemo(
-    () => stored.map((p) => (failed[p.repo] && p.status === "installed" ? { ...p, status: "error" as const, error: failed[p.repo] } : p)),
-    [stored, failed],
+  const packages = useMemo(() => applyLoadFailures(stored, failed), [stored, failed])
+  const fail = useCallback((repo: string, version: string, error: string) => setFailed((f) => ({ ...f, [`${repo}@${version}`]: error })), [])
+  // Every key of the repo, whatever its version.
+  const clearFailure = useCallback(
+    (repo: string) => setFailed((f) => (Object.keys(f).some((k) => k.startsWith(`${repo}@`)) ? Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${repo}@`))) : f)),
+    [],
   )
-  const fail = useCallback((repo: string, error: string) => setFailed((f) => ({ ...f, [repo]: error })), [])
-  const clearFailure = useCallback((repo: string) => setFailed((f) => Object.fromEntries(Object.entries(f).filter(([r]) => r !== repo))), [])
 
   useEffect(() => {
+    // Another project or session: what failed to load there says nothing about this list.
+    setFailed((f) => (Object.keys(f).length ? {} : f))
     const read = () => setPackages(shared.toArray())
     read()
     shared.observe(read)
@@ -79,6 +82,8 @@ export function useCppPackages(shared: Y.Array<CppPackage>) {
       const entry = stored.find((p) => p.repo === repo)
       if (!entry) return
       clearFailure(repo)
+      // Installed in the project, only this browser failed to load it: the next lint loads it again, the shared list stays as it is.
+      if (entry.status === "installed") return
       patch(repo, { status: "installing", error: undefined })
       void install(repo, entry.version ?? entry.ref)
     },

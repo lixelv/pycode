@@ -65,6 +65,7 @@ import {
   type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
+import { cppClient, useCppStatus, type CppPackageFiles } from "@/lib/cpp/client"
 import { fileAccess, isTest } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
@@ -86,6 +87,8 @@ const MD_MODE_KEY = "polycode:md-mode"
 const HTML_MODE_KEY = "polycode:html-mode"
 const BREAKPOINTS_KEY = "polycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
+// C++ packages arrive with task 11; until then clang sees only the project.
+const NO_CPP_PACKAGES: CppPackageFiles = { files: {}, includes: [] }
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type ViewMode = "code" | "split" | "preview"
 
@@ -231,6 +234,16 @@ function Workspace() {
   const [htmlMode, setHtmlMode] = usePersisted<ViewMode>(HTML_MODE_KEY, "split")
   const viewMode = !activeExists ? null : language === "markdown" ? mdMode : language === "html" ? htmlMode : null
   const setViewMode = language === "html" ? setHtmlMode : setMdMode
+  // Clang checks the open C++ file against the files a run would see.
+  const cppStatus = useCppStatus()
+  const lintCpp = useCallback(
+    async (source: string) => {
+      const files = await projectFiles(store, provider, active)
+      files[active] = source
+      return cppClient.lint(files, active, NO_CPP_PACKAGES)
+    },
+    [store, provider, active],
+  )
   const follow = useFollow({
     provider,
     editor: editorInstance,
@@ -968,6 +981,7 @@ function Workspace() {
                 store={store}
                 breakpoints={language === "python" ? (breakpoints[active] ?? []) : undefined}
                 onToggleBreakpoint={language === "python" ? toggleBreakpoint : undefined}
+                lintCpp={language === "cpp" ? lintCpp : undefined}
                 debugLine={sharedConsole.debugging && consoleActive && sharedConsole.debug?.file === active ? sharedConsole.debug.line : null}
                 path={active}
                 available={activeExists}
@@ -1107,6 +1121,9 @@ function Workspace() {
             <span className="hidden md:inline">
               {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
             </span>
+          )}
+          {(language === "cpp" || cppStatus !== "idle") && (
+            <span className="hidden md:inline">{t(cppStatus === "loading" ? "footer.loadingCpp" : cppStatus === "failed" ? "footer.cppFailed" : "footer.cpp")}</span>
           )}
           {ruff && <span className="hidden lg:inline">Ruff {ruff}</span>}
           <button

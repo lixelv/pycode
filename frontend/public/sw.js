@@ -2,7 +2,7 @@
 //
 // Heavy files are downloaded once and then always served from the cache:
 //   - the Python runtime (/pyodide/v<version>/…) and hashed build assets
-//     (/assets/…, including Ruff's WASM) — their URLs change when they change;
+//     (/assets/…, including Ruff's WASM and clang's 105 MB) — their URLs change when they change;
 //   - Pyodide's packages (cdn.jsdelivr.net/pyodide/v<version>/…) and PyPI
 //     wheels (files.pythonhosted.org) — immutable by URL as well.
 // PyPI's package index is served from the cache and refreshed in the

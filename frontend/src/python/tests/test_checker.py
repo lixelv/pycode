@@ -8,7 +8,9 @@ import tempfile
 import threading
 import time
 import tracemalloc
+import types
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -349,7 +351,7 @@ class CppChecks(unittest.TestCase):
 
     @staticmethod
     def upper(s, t):
-        return {"stdout": s.upper(), "memory": 2_000_000, "timedOut": False}
+        return {"stdout": s.upper(), "memory": 2_000_000, "timedOut": False, "exitCode": 0, "failure": ""}
 
     def test_run_goes_through_the_hook(self):
         res = self.check("import polycode_test\ndef test_a():\n    assert polycode_test.run('ab') == 'AB'\n", self.upper)
@@ -363,7 +365,7 @@ class CppChecks(unittest.TestCase):
     def test_time_limit(self):
         res = self.check(
             "import polycode_test\ndef test_a():\n    polycode_test.run('x', timeout=1)\n",
-            lambda s, t: {"stdout": "", "memory": 0, "timedOut": True},
+            lambda s, t: {"stdout": "", "memory": 0, "timedOut": True, "exitCode": 0, "failure": ""},
         )
         self.assertFalse(res[0]["ok"])
         self.assertTrue(res[0]["message"].startswith("time limit 1 s exceeded"), res[0]["message"])
@@ -380,6 +382,119 @@ class CppChecks(unittest.TestCase):
         self.assertTrue(res[0]["ok"], res)
         self.assertIn("time", res[0])
         self.assertEqual(res[0]["memory"], 2_000_000)
+
+
+class CppExitStatus(CppChecks):
+    """run() of a C++ solution fails on a bad exit, even if the output is right."""
+
+    SECRET = "SECRET-from-the-program"
+    RIGHT = "import polycode_test\ndef test_a():\n    assert polycode_test.run('x') == 'SECRET-from-the-program'\n"
+
+    def result(self, code=0, failure="", timed_out=False, memory=2_000_000):
+        return lambda s, t: {
+            "stdout": self.SECRET,
+            "memory": memory,
+            "timedOut": timed_out,
+            "exitCode": code,
+            "failure": failure,
+        }
+
+    def failed(self, source, wasm, message):
+        res = self.check(source, wasm)
+        self.assertFalse(res[0]["ok"], res)
+        self.assertEqual(res[0]["message"], message)
+        self.assertNotIn("SECRET", res[0]["message"])
+
+    def test_exit_zero_passes(self):
+        res = self.check(self.RIGHT, self.result())
+        self.assertTrue(res[0]["ok"], res)
+
+    def test_return_1_fails_though_the_output_is_right(self):
+        self.failed(self.RIGHT, self.result(code=1), "exit code 1")
+
+    def test_abort_or_trap_fails(self):
+        self.failed(self.RIGHT, self.result(code=134), "exit code 134")
+
+    def test_negative_exit_code_is_reported_as_a_number(self):
+        self.failed(self.RIGHT, self.result(code=-1), "exit code -1")
+
+    def test_a_program_returning_130_is_not_called_output_limit(self):
+        self.failed(self.RIGHT, self.result(code=130), "exit code 130")
+
+    def test_output_limit_has_a_fixed_text(self):
+        self.failed(self.RIGHT, self.result(code=130, failure="output_limit"), "output limit exceeded")
+
+    def test_program_that_did_not_start_fails(self):
+        self.failed(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x')\n",
+            lambda s, t: {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 1, "failure": "not_started"},
+            "the program did not start",
+        )
+
+    def test_a_test_expecting_empty_output_does_not_pass_when_not_started(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    assert polycode_test.run('x') == ''\n",
+            lambda s, t: {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 1, "failure": "not_started"},
+        )
+        self.assertFalse(res[0]["ok"], res)
+
+    def test_time_limit_wins_over_exit_code(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', timeout=1)\n",
+            self.result(code=134, timed_out=True),
+        )
+        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["message"].startswith("time limit 1 s exceeded"), res[0]["message"])
+
+    def test_memory_limit_wins_over_exit_code(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', ram_usage=1)\n",
+            self.result(code=134),
+        )
+        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["message"].startswith("memory limit 1 MB exceeded"), res[0]["message"])
+
+    def test_memory_limit_wins_over_output_limit(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', ram_usage=1)\n",
+            self.result(code=130, failure="output_limit"),
+        )
+        self.assertTrue(res[0]["message"].startswith("memory limit 1 MB exceeded"), res[0]["message"])
+
+    def test_measures_are_kept_on_a_bad_exit(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', timeout=5, ram_usage=100)\n",
+            self.result(code=1),
+        )
+        self.assertEqual(res[0]["message"], "exit code 1")
+        self.assertIn("time", res[0])
+        self.assertEqual(res[0]["memory"], 2_000_000)
+
+    def test_a_later_run_failing_fails_the_test(self):
+        codes = iter([0, 3])
+        self.failed(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x')\n    polycode_test.run('y')\n",
+            lambda s, t: self.result(code=next(codes))(s, t),
+            "exit code 3",
+        )
+
+    def test_no_opt_in_for_a_non_zero_exit(self):
+        for arg in ("check=False", "exit_code=1", "expect_exit=1"):
+            res = self.check(
+                f"import polycode_test\ndef test_a():\n    polycode_test.run('x', {arg})\n",
+                self.result(code=1),
+            )
+            self.assertEqual(res[0]["message"], "TypeError", arg)
+
+    def test_real_hook_passes_exit_status_from_the_worker(self):
+        fake = types.ModuleType("js")
+        fake.polycode_run_wasm = lambda stdin, ms: types.SimpleNamespace(
+            stdout="out", memory=7, timedOut=False, exitCode=134, failure=""
+        )
+        real = self.saved
+        with unittest.mock.patch.dict(sys.modules, {"js": fake}):
+            result = real("x", 100)
+        self.assertEqual(result, {"stdout": "out", "memory": 7, "timedOut": False, "exitCode": 134, "failure": ""})
 
 
 if __name__ == "__main__":

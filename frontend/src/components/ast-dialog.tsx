@@ -39,6 +39,7 @@ interface AstDialogProps {
   code: string
   theme: Theme
   onReveal: (loc: AstLoc) => void
+  language: "python" | "cpp"
 }
 
 const LEGEND: [AstCategory, string][] = [
@@ -79,8 +80,20 @@ const AstNode = memo(function AstNode({ data, selected }: NodeProps<FlowNode>) {
 
 const nodeTypes = { ast: AstNode }
 
-function TreeCanvas({ data, theme, code, onReveal }: { data: AstResponse; theme: Theme; code: string; onReveal: (loc: AstLoc) => void }) {
-  const { nodes, edges } = useMemo(() => layout(data), [data])
+function TreeCanvas({
+  data,
+  theme,
+  code,
+  onReveal,
+  language,
+}: {
+  data: AstResponse
+  theme: Theme
+  code: string
+  onReveal: (loc: AstLoc) => void
+  language: "python" | "cpp"
+}) {
+  const { nodes, edges } = useMemo(() => layout(data, language), [data, language])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = nodes.find((n) => n.id === selectedId)?.data
   const { fitView } = useReactFlow()
@@ -179,7 +192,7 @@ function TreeCanvas({ data, theme, code, onReveal }: { data: AstResponse; theme:
 
 type Mode = "flow" | "tree"
 
-export function AstDialog({ open, onOpenChange, code, theme, onReveal }: AstDialogProps) {
+export function AstDialog({ open, onOpenChange, code, theme, onReveal, language }: AstDialogProps) {
   const { lang, t } = useI18n()
   const [mode, setMode] = useState<Mode>("flow")
   const [data, setData] = useState<{ mode: Mode; body: AstResponse | FlowResponse } | null>(null)
@@ -191,14 +204,21 @@ export function AstDialog({ open, onOpenChange, code, theme, onReveal }: AstDial
     let cancelled = false
     setLoading(true)
     setFailure(null)
-    callTool<AstResponse | FlowResponse>(mode === "flow" ? "flow" : "ast", { code, lang })
+    // C++ is parsed on the page by tree-sitter (loaded on demand); Python in the tools worker.
+    const build: Promise<AstResponse | FlowResponse> =
+      language === "cpp"
+        ? mode === "flow"
+          ? import("@/lib/cpp/flow").then((m) => m.cppFlow(code, lang))
+          : import("@/lib/cpp/tree").then((m) => m.cppTree(code))
+        : callTool<AstResponse | FlowResponse>(mode === "flow" ? "flow" : "ast", { code, lang })
+    build
       .then((body) => !cancelled && setData({ mode, body }))
-      .catch((err: Error) => !cancelled && setFailure(err.message || "Python failed to analyse the code."))
+      .catch((err: Error) => !cancelled && setFailure(err.message || "Could not analyse the code."))
       .finally(() => !cancelled && setLoading(false))
     return () => {
       cancelled = true
     }
-  }, [open, code, mode, lang])
+  }, [open, code, mode, lang, language])
 
   const body = data?.mode === mode ? data.body : null
   const count = body?.nodes?.length ?? 0
@@ -237,13 +257,13 @@ export function AstDialog({ open, onOpenChange, code, theme, onReveal }: AstDial
             </Badge>
           )}
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            {mode === "flow" ? t("tree.order") : "ast.parse(source)"}
+            {mode === "flow" ? t("tree.order") : language === "cpp" ? "tree-sitter-cpp" : "ast.parse(source)"}
           </span>
         </DialogHeader>
 
         {loading && !body ? (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" /> {t("tree.analysing")}
+            <Loader2 className="mr-2 size-4 animate-spin" /> {t(language === "cpp" ? "tree.analysingCpp" : "tree.analysing")}
           </div>
         ) : failure ? (
           <EmptyState title={t("tree.failed")} detail={failure} />
@@ -257,7 +277,7 @@ export function AstDialog({ open, onOpenChange, code, theme, onReveal }: AstDial
             {mode === "flow" ? (
               <FlowCanvas data={body as FlowResponse} theme={theme} onReveal={onReveal} />
             ) : (
-              <TreeCanvas data={body as AstResponse} theme={theme} code={code} onReveal={onReveal} />
+              <TreeCanvas data={body as AstResponse} theme={theme} code={code} onReveal={onReveal} language={language} />
             )}
           </ReactFlowProvider>
         ) : null}

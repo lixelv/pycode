@@ -34,7 +34,20 @@ const EXPRESSIONS = new Set([
   "Starred", "NamedExpr", "keyword", "comprehension",
 ])
 
-export function categorize(type: string): AstCategory {
+const CPP_EXPRESSIONS = new Set(["identifier", "field_identifier", "qualified_identifier"])
+
+/** tree-sitter-cpp node types, by their name's suffix. */
+function categorizeCpp(type: string): AstCategory {
+  if (type === "translation_unit") return "module"
+  if (/_(definition|declaration|declarator)$/.test(type) || type === "parameter_list") return "definition"
+  if (type.endsWith("_literal") || type === "initializer_list") return "literal"
+  if (type.endsWith("_expression") || CPP_EXPRESSIONS.has(type)) return "expression"
+  if (type.endsWith("_statement")) return "statement"
+  return "other"
+}
+
+export function categorize(type: string, lang: "python" | "cpp" = "python"): AstCategory {
+  if (lang === "cpp") return categorizeCpp(type)
   if (type === "Module") return "module"
   if (DEFINITIONS.has(type)) return "definition"
   if (LITERALS.has(type)) return "literal"
@@ -67,7 +80,7 @@ function nodeSize(node: AstNodeData) {
   return { width, height }
 }
 
-export function layout(response: AstResponse): { nodes: FlowNode[]; edges: Edge[] } {
+export function layout(response: AstResponse, lang: "python" | "cpp" = "python"): { nodes: FlowNode[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: "TB", nodesep: 28, ranksep: 64, marginx: 24, marginy: 24 })
   g.setDefaultEdgeLabel(() => ({}))
@@ -91,7 +104,7 @@ export function layout(response: AstResponse): { nodes: FlowNode[]; edges: Edge[
       id: node.id,
       type: "ast",
       position: { x: pos.x - size.width / 2, y: pos.y - size.height / 2 },
-      data: { ...node, category: categorize(node.type), depth: depth.get(node.id) ?? 0 },
+      data: { ...node, category: categorize(node.type, lang), depth: depth.get(node.id) ?? 0 },
       style: { width: size.width },
     }
   })

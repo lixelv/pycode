@@ -169,6 +169,123 @@ run(stdin: str = "", timeout: float | None = None, ram_usage: float | None = Non
 
 Код прототипа выбрасывается.
 
+### Результаты spike
+
+Проверено 2026-10-30 в Chrome (headless, puppeteer-core) и WebKit
+(Playwright 1.64), на `vite dev` и на `vite build` + `vite preview` с
+COOP/COEP и CSP приложения. Подробности и рабочие куски кода:
+`.superpowers/sdd/2026-10-30-polycode-cpp/task-6-report.md`.
+
+**Версии.** `@yowasp/clang` 22.0.0-git20542-10 (clang 22, sysroot
+`wasm32-wasip1`), `@bjorn3/browser_wasi_shim` 0.4.2, Vite 8, Pyodide
+314.0.7 (Python 3.14.2).
+
+**Размер.** 105 МБ без сжатия: `llvm.core.wasm` 75.5 МБ (gzip 23 МБ),
+`llvm-resources.tar` 29.7 МБ (gzip 4.3 МБ), мелкие `llvm.core2..4.wasm`,
+`bundle.js` 250 КБ. При gzip по сети ≈ 27 МБ.
+
+**Время** (localhost, M-серия; сеть добавит скачивание 27 МБ):
+
+- загрузка и компиляция модулей (`runClang(null)`): 0.3–1.0 с, из
+  HTTP-кэша 0.3–0.6 с;
+- первая компиляция программы с `<iostream>` (`-O1`): 1.3–2.6 с, дальше
+  0.9–1.5 с; `-fsyntax-only` с `<iostream>` 0.75–1.9 с; программа без
+  заголовков 35–80 мс;
+- запуск wasm: компиляция модуля 1–17 мс, сама программа единицы мс.
+
+**`runClang` в одном воркере** вызывается сколько угодно раз (проверено
+10 подряд). Ресурсы скачиваются один раз на экземпляр `Application`;
+каждый вызов создаёт новый экземпляр wasm. Предзагрузка —
+`await runClang(null)`. Файлы — дерево `{"project": {"main.cpp": "…"}}`,
+пути абсолютные (`/project/main.cpp`), результат — `out["a.out"]`
+(`Uint8Array`, нужен `decodeASCII: false`). Ошибка компиляции — `Exit`
+с `code`, диагностика приходит в `options.stderr` (ANSI-цвета нет и без
+`-fno-color-diagnostics`).
+
+**Как Vite отдаёт ресурсы.** `bundle.js` берёт их через
+`new URL("./llvm.core.wasm", import.meta.url)`:
+
+- dev: обязательно `optimizeDeps: { exclude: ["@yowasp/clang"] }`, иначе
+  пребандл переносит `bundle.js` в `.vite/deps` и URL ломаются;
+- build: Vite сам кладёт `.wasm` и `.tar` в `assets/` с хешами, если
+  воркер — `new Worker(new URL("./cpp.worker.ts", import.meta.url),
+  {type: "module"})` (или `?worker`), `worker.format: "es"` уже есть;
+- `llvm.core4.wasm` (787 байт) Vite встраивает как `data:` URL, а CSP
+  приложения (`connect-src` без `data:`) запрещает его `fetch` — clang не
+  стартует. Нужен `build.assetsInlineLimit: (f) => /\.(wasm|tar)$/.test(f)
+  ? false : undefined`;
+- предупреждение «`node:fs/promises` externalized» безвредно;
+- nginx: добавить `application/x-tar` в `gzip_types` (`.wasm` уже есть);
+  на прод лучше заранее сжатые файлы (`gzip_static`), 75 МБ жать на
+  лету дорого. Service worker уже кэширует `/assets/`.
+
+**Исключения не работают.** В sysroot нет libunwind и libc++abi с
+поддержкой исключений: `throw` даёт ошибку линковки
+`undefined symbol: __cxa_allocate_exception / __cxa_throw` с любыми
+флагами (`-fexceptions`, `-fwasm-exceptions`). Без
+`-fwasm-exceptions` блоки `catch` просто выбрасываются компилятором.
+
+Выбрано: флаги без `-fno-exceptions`, к каждой программе линкуется
+маленький `stub.o` (компилируется один раз при старте воркера, 0.3–0.8 с)
+с собственными `__cxa_allocate_exception`, `__cxa_free_exception`,
+`__cxa_throw`. `throw` печатает в stderr `terminate called after throwing
+an instance of 'std::runtime_error'` и `what():  …` (как g++), затем
+`abort()` → ловушка `unreachable`, код выхода 134. `try/catch`
+компилируется, но не ловит. С `-fno-exceptions` код с `try`/`throw` не
+компилировался бы вовсе. В справке написать: «исключения завершают
+программу». Тот же `stub.o` содержит конструктор, который делает
+`chdir(getenv("POLYCODE_CWD"))`: так cwd — папка entry.
+
+**WASI-шим.**
+
+- Блокирующий stdin через свой `Fd` на `RunnerBuffers` работает в обоих
+  браузерах: `cin` сбрасывает `cout` перед чтением, поэтому подсказка
+  выводится до `input_request`. EOF — `fd_read` возвращает пустые данные.
+- Preopen `/project` работает: `ifstream` читает относительные пути от
+  cwd, абсолютные `/project/…`, `../…`; запись `ofstream` тоже.
+- `memory.buffer.byteLength` после выхода: 128 КБ для пустой программы,
+  50 МБ для `vector<char>(50'000'000)` — годится для `ram_usage`.
+- Ловушка wasm приходит как исключение из `wasi.start()` (Chrome:
+  `unreachable`, WebKit: `Unreachable code should not be executed`).
+
+**`tracemalloc`** в Pyodide 314.0.7 есть: `start()`,
+`get_traced_memory()` и `stop()` работают.
+
+**Вложенный воркер не годится.** Ни в Chrome, ни в WebKit вложенный
+воркер, созданный внутри синхронного участка, не стартует, пока родитель
+стоит в `Atomics.wait`: каждый запуск упирается в таймаут. Заранее
+созданный воркер в Chrome тоже не получает сообщение от заблокированного
+родителя; в WebKit получает, но только первое (новый после `terminate()`
+уже не стартует).
+
+**Выбранный путь проверки — через страницу** (ни вложенный воркер, ни
+fallback из пункта 4):
+
+1. хук `polycode_run_wasm` в воркере проверки создаёт
+   `SharedArrayBuffer` для результата и шлёт странице
+   `{type: "run_wasm", wasm, stdin, result}`, затем `Atomics.wait` с
+   таймаутом;
+2. `RunnerClient` на странице создаёт `cpp-run.worker` в режиме `batch` и
+   передаёт ему сообщение; тот пишет вывод, `memory` и код выхода в SAB и
+   делает `Atomics.notify`;
+3. после ожидания (успех или таймаут) хук шлёт `{type: "kill_wasm"}`,
+   страница делает `terminate()`.
+
+`postMessage` из заблокированного воркера доходит, страница свободна.
+Работает в Chrome и WebKit: запуск 5–20 мс, бесконечный цикл
+обрывается ровно по таймауту, следующий запуск идёт сразу. Значит,
+`timeout` у C++ работает на каждый `run()`.
+
+**Другие подводные камни.**
+
+- `new WASI(args, env, fds)` без опций включает отладочный лог на каждый
+  вызов — передавать `{debug: false}`.
+- Vite (dev и preview) не ставит `server.headers` на ответы 304; WebKit
+  тогда отказывается грузить воркер из кэша («Refused to load … because
+  of Cross-Origin-Embedder-Policy»). Лечится middleware-плагином, который
+  ставит COOP/COEP на каждый ответ. nginx ставит их и на 304.
+- `poll_oneoff` (sleep) в шиме — активное ожидание, допустимо.
+
 ## 5. C++
 
 ### 5.1 Языки проекта
@@ -329,14 +446,18 @@ run(stdin: str = "", timeout: float | None = None, ram_usage: float | None = Non
   3. В `checker.py` решение-C++ запускается в `run()` через JS-хук
      `polycode_run_wasm(stdin, timeoutMs) → {stdout, memory, timedOut}`,
      синхронно.
-- **Хук `polycode_run_wasm`** (в `runner.worker.ts`, только для проверок):
-  1. Создаёт вложенный воркер `cpp-run.worker.ts` в режиме `batch`: stdin
-     целиком, без SAB-ввода, EOF в конце.
-  2. Ждёт `Atomics.wait` на своём SAB с таймаутом: `timeoutMs` или
-     остаток 30 с проверки.
-  3. При таймауте делает `terminate()` и возвращает `timedOut`.
-  4. Вывод приходит через SharedArrayBuffer (до лимита вывода).
-  5. Если spike покажет, что так нельзя, используется fallback из раздела 4.
+- **Хук `polycode_run_wasm`** (в `runner.worker.ts`, только для проверок).
+  По итогам spike вложенный воркер не работает, поэтому запуск идёт через
+  страницу:
+  1. Воркер проверки шлёт странице `{type: "run_wasm", stdin, timeoutMs}` и
+     ждёт `Atomics.wait` на SAB результата (передан в `check`).
+  2. `RunnerClient` на странице запускает `cpp-run.worker.ts` в режиме
+     `batch` (stdin целиком, EOF в конце), wasm передан ему при `check`.
+  3. Результат (stdout до лимита вывода, `memory`, код) пишется в SAB, затем
+     `Atomics.notify`.
+  4. Если за `timeoutMs` (или за остаток 30 с проверки) ответа нет, воркер
+     проверки возвращает `timedOut` и шлёт `{type: "kill_wasm"}`. Страница
+     делает `terminate()` воркеру C++.
 - **Вывод C++.** Подсказки ввода остаются частью вывода (`cout` перед
   `cin`). Это отмечается в справке по тестам.
 - **Лимиты.** `timeout` и `ram_usage` работают так же: время меряется

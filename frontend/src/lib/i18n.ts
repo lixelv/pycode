@@ -33,6 +33,7 @@ const en = {
   "footer.pythonIdle": "Python (in browser)",
   "footer.loadingCpp": "Loading C++ compiler…",
   "footer.cpp": "C++ · clang in browser",
+  "footer.cppFailed": "C++ compiler failed to load",
   // editor
   "editor.readOnly": "This session is read only: only the owner can edit.",
   "editor.waitingProject": "Waiting for the session's project…",
@@ -279,6 +280,7 @@ const ru: Record<MessageKey, string> = {
   "footer.pythonIdle": "Python (в браузере)",
   "footer.loadingCpp": "Загрузка компилятора C++…",
   "footer.cpp": "C++ · clang в браузере",
+  "footer.cppFailed": "Компилятор C++ не загрузился",
   "editor.readOnly": "Сессия только для просмотра: редактирует только владелец.",
   "editor.waitingProject": "Ждём проект сессии…",
   "editor.createFile": "Создайте файл, чтобы начать.",

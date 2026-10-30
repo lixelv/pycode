@@ -11,13 +11,14 @@ const clang = commands["clang++"]
 const STD = ["-std=c++20", "-fno-color-diagnostics"]
 
 // Fetches and compiles the toolchain (105 MB) once; every later call reuses
-// it. A failed download is tried again on the next request.
+// it. A failed download is reported and tried again on the next request.
 let prefetch: Promise<void> | null = null
 function ready() {
   prefetch ??= Promise.resolve(clang(undefined, {}, { fetchProgress: () => {} })).then(
     () => postMessage({ ready: true }),
     (err: unknown) => {
       prefetch = null
+      postMessage({ ready: false })
       throw err
     },
   )

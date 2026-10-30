@@ -1084,7 +1084,7 @@ function Workspace() {
             {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
           </span>
           {(language === "cpp" || cppStatus !== "idle") && (
-            <span className="hidden md:inline">{cppStatus === "loading" ? t("footer.loadingCpp") : t("footer.cpp")}</span>
+            <span className="hidden md:inline">{t(cppStatus === "loading" ? "footer.loadingCpp" : cppStatus === "failed" ? "footer.cppFailed" : "footer.cpp")}</span>
           )}
           {ruff && <span className="hidden lg:inline">Ruff {ruff}</span>}
           <button

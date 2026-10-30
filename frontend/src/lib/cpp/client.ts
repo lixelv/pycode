@@ -22,7 +22,13 @@ export interface CppResponse {
   wasm?: Uint8Array
 }
 
-export type CppStatus = "idle" | "loading" | "ready"
+/** `failed`: the compiler could not be downloaded; the next request tries again. */
+export type CppStatus = "idle" | "loading" | "ready" | "failed"
+
+// How long one request may run once the compiler is loaded (the download is not counted).
+// Past it the worker is killed: a pathological file must not block every later lint and compile.
+export const LINT_DEADLINE_MS = 15_000
+export const COMPILE_DEADLINE_MS = 30_000
 
 interface Job {
   request: Omit<CppRequest, "id">
@@ -35,13 +41,21 @@ interface Job {
  * compiler is a 27 MB download), never for a project without C++. Requests
  * go one at a time; a lint still waiting is replaced by a newer one.
  */
-class CppClient {
+export class CppClient {
   status: CppStatus = "idle"
   private worker: Worker | null = null
   private queue: Job[] = []
   private busy: (Job & { id: number }) | null = null
+  private deadline: ReturnType<typeof setTimeout> | undefined
   private nextId = 1
   private listeners = new Set<() => void>()
+
+  private createWorker: () => Worker
+
+  /** `createWorker` is replaced in tests. */
+  constructor(createWorker: () => Worker = () => new CppWorker()) {
+    this.createWorker = createWorker
+  }
 
   /** Problems of `entry` (`clang++ -fsyntax-only`). */
   async lint(files: ProjectFiles, entry: string, pkgs: CppPackageFiles): Promise<ClangDiagnostic[]> {
@@ -82,32 +96,53 @@ class CppClient {
   private next() {
     if (this.busy || !this.queue.length) return
     const worker = this.start()
+    // After a failed download the worker tries again with this request.
+    if (this.status === "failed") this.setStatus("loading")
     this.busy = { ...this.queue.shift()!, id: this.nextId++ }
     worker.postMessage({ id: this.busy.id, ...this.busy.request } satisfies CppRequest)
+    if (this.status === "ready") this.arm()
+  }
+
+  /** Starts the clock for the request in flight. */
+  private arm() {
+    clearTimeout(this.deadline)
+    if (!this.busy) return
+    const ms = this.busy.request.kind === "compile" ? COMPILE_DEADLINE_MS : LINT_DEADLINE_MS
+    this.deadline = setTimeout(() => this.kill("The C++ compiler took too long"), ms)
+  }
+
+  /** Stops the worker and fails what it had; the next request starts a new one. */
+  private kill(message: string) {
+    clearTimeout(this.deadline)
+    this.worker?.terminate()
+    this.worker = null
+    const failed = [...(this.busy ? [this.busy] : []), ...this.queue.splice(0)]
+    this.busy = null
+    this.setStatus("idle")
+    for (const job of failed) job.reject(new Error(message))
   }
 
   private start(): Worker {
     if (this.worker) return this.worker
-    const worker = new CppWorker()
+    const worker = this.createWorker()
     this.worker = worker
     this.setStatus("loading")
-    worker.onmessage = ({ data }: MessageEvent<CppResponse | { ready: true }>) => {
-      if ("ready" in data) return this.setStatus("ready")
+    worker.onmessage = ({ data }: MessageEvent<CppResponse | { ready: boolean }>) => {
+      if ("ready" in data) {
+        this.setStatus(data.ready ? "ready" : "failed")
+        if (data.ready) this.arm()
+        return
+      }
       if (data.id !== this.busy?.id) return
+      clearTimeout(this.deadline)
       const job = this.busy
       this.busy = null
       job.resolve(data)
       this.next()
     }
-    // A crashed worker fails what it had; the next request starts a new one.
     worker.onerror = (event) => {
       event.preventDefault()
-      worker.terminate()
-      this.worker = null
-      const failed = [...(this.busy ? [this.busy] : []), ...this.queue.splice(0)]
-      this.busy = null
-      this.setStatus("idle")
-      for (const job of failed) job.reject(new Error(event.message || "C++ compiler failed"))
+      this.kill(event.message || "C++ compiler failed")
     }
     return worker
   }

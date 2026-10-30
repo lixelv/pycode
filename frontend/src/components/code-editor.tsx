@@ -6,6 +6,7 @@ import * as Y from "yjs"
 
 import { useI18n } from "@/lib/i18n"
 import { registerPythonIntellisense } from "@/lib/intellisense"
+import type { ClangDiagnostic } from "@/lib/cpp/diagnostics"
 import { monaco, type MonacoApi } from "@/lib/monaco"
 import { languageOf, metasOf, textOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
@@ -37,9 +38,13 @@ interface CodeEditorProps {
   breakpoints?: number[]
   onToggleBreakpoint?: (line: number) => void
   debugLine?: number | null
+  /** C++ only: clang's problems for the file's text (see lib/cpp/client.ts). */
+  lintCpp?: (text: string) => Promise<ClangDiagnostic[]>
 }
 
 let modelCounter = 0
+
+const SOURCE: Partial<Record<string, string>> = { python: "ruff", cpp: "clang", html: "htmlhint" }
 
 export function CodeEditor({
   store,
@@ -57,6 +62,7 @@ export function CodeEditor({
   breakpoints,
   onToggleBreakpoint,
   debugLine,
+  lintCpp,
 }: CodeEditorProps) {
   const { t } = useI18n()
   const [editor, setEditor] = useState<EditorInstance | null>(null)
@@ -150,7 +156,7 @@ export function CodeEditor({
     }
   }, [editor, ytext, path, available, awareness])
 
-  // Errors: Ruff for Python, the parser for JSON, nothing for other files.
+  // Errors: Ruff for Python, clang for C++, the parser for JSON, nothing for other files.
   useEffect(() => {
     let cancelled = false
     const language = languageOf(path)
@@ -158,7 +164,15 @@ export function CodeEditor({
       const model = editor?.getModel()
       if (!model) return
       let diagnostics: Diagnostic[] = []
+      // Clang reports warnings too; everything else here is an error.
+      let warnings = new Set<Diagnostic>()
       if (language === "python") diagnostics = await lint(text).catch(() => [])
+      else if (language === "cpp") {
+        if (!lintCpp) return
+        const found = await lintCpp(text).catch(() => [])
+        diagnostics = found.map((d) => diagnostic(d.line, d.col, d.message, null))
+        warnings = new Set(diagnostics.filter((_, i) => found[i].severity === "warning"))
+      }
       else if (language === "json") diagnostics = jsonDiagnostics(text)
       else if (language === "html") diagnostics = htmlProblems(text).map((p) => diagnostic(p.line, p.col, p.message, p.rule))
       // CSS and JavaScript are checked by Monaco's own workers (see below).
@@ -168,10 +182,9 @@ export function CodeEditor({
         model,
         "lint",
         diagnostics.map((d) => ({
-          // Warnings are disabled: everything reported here is an error.
-          severity: monaco.MarkerSeverity.Error,
+          severity: warnings.has(d) ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
           message: d.message,
-          source: language === "python" ? "ruff" : language === "html" ? "htmlhint" : "json",
+          source: SOURCE[language] ?? "json",
           code: d.code ?? undefined,
           startLineNumber: d.start_location.row,
           startColumn: d.start_location.column,
@@ -179,13 +192,14 @@ export function CodeEditor({
           endColumn: Math.max(d.end_location.column, d.start_location.row === d.end_location.row ? d.start_location.column + 1 : 0),
         })),
       )
-      onDiagnostics(diagnostics)
-    }, 200)
+      // The footer counts errors only.
+      onDiagnostics(diagnostics.filter((d) => !warnings.has(d)))
+    }, language === "cpp" ? 500 : 200)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [text, path, editor, onDiagnostics])
+  }, [text, path, editor, onDiagnostics, lintCpp])
 
   // CSS and JavaScript: Monaco's language workers set their own markers; report their errors.
   useEffect(() => {

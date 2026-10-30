@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { docAccess, fileAccess, parseEnv, renameRules, runVisible, serializeEnv, type Member, type Rules } from "./access"
+import { docAccess, fileAccess, isReserved, parseEnv, renameRules, runVisible, serializeEnv, type Member, type Rules } from "./access"
 import type { FileMeta } from "./store"
 
 const meta = (id: string, extra: Partial<FileMeta> = {}): FileMeta => ({ id, kind: "text", size: 0, ...extra })
@@ -134,5 +134,13 @@ describe(".pycode.env built-in names", () => {
       protected: [],
       hidden: [],
     })
+  })
+})
+
+describe("isReserved", () => {
+  it("reserves both env names at the root only", () => {
+    expect(isReserved(".polycode.env")).toBe(true)
+    expect(isReserved(".pycode.env")).toBe(true)
+    expect(isReserved("a/.pycode.env")).toBe(false)
   })
 })

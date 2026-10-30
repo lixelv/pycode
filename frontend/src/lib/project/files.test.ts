@@ -1,3 +1,4 @@
+import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
@@ -99,6 +100,15 @@ describe("openArchive", () => {
     })
     expect(seen).toContain("alice/a.py:false:alice")
     expect(seen).toContain("notes.txt:true:alice")
+  })
+})
+
+describe("legacy .pycode.env", () => {
+  it("still hides files when an archive has only the old env name", async () => {
+    const s = new ProjectStore(false)
+    const zip = zipSync({ ".pycode.env": strToU8("hidden t.test.py\n"), "t.test.py": strToU8("x = 1") })
+    await openArchive(s, importZip(zip))
+    expect(metasOf(s).get("t.test.py")?.hidden).toBe(true)
   })
 })
 

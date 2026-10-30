@@ -1,5 +1,5 @@
 // Generated from monaco-editor/esm/vs/editor/editor.main.js: every editor
-// feature, but only the Python language (no TS/CSS/HTML/JSON workers).
+// feature, but only the languages we need.
 import 'monaco-esm/editor/contrib/anchorSelect/browser/anchorSelect.js'
 import 'monaco-esm/editor/contrib/bracketMatching/browser/bracketMatching.js'
 import 'monaco-esm/editor/contrib/caretOperations/browser/transpose.js'
@@ -76,6 +76,8 @@ import 'monaco-esm/editor/common/standaloneStrings.js'
 import 'monaco-esm/base/browser/ui/codicons/codicon/codicon-modifiers.css'
 import 'monaco-esm/languages/definitions/yaml/register.js'
 import 'monaco-esm/languages/definitions/markdown/register.js'
+// C++: highlighting only (clang checks it, see lib/cpp/client.ts).
+import 'monaco-esm/languages/definitions/cpp/register.js'
 // Web pages: highlighting plus the language services (their workers start on first use).
 import 'monaco-esm/languages/definitions/html/register.js'
 import 'monaco-esm/languages/definitions/css/register.js'

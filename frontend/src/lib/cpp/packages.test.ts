@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { fetchCppPackage, headerFiles, parseCppSpec, pickInclude } from "./packages"
+import { fetchCppPackage, headerFiles, loadCppPackages, parseCppSpec, pickInclude, type CppPackage } from "./packages"
 
 describe("parseCppSpec", () => {
   it("parses owner/repo@ref", () => {
@@ -11,6 +11,10 @@ describe("parseCppSpec", () => {
   })
   it("parses owner/repo without a ref", () => {
     expect(parseCppSpec("nlohmann/json")).toMatchObject({ repo: "nlohmann/json", ref: null })
+  })
+  it("rejects . and .. as owner or repo", () => {
+    for (const bad of ["../..", "./x", "x/..", "../x@v1", "./."]) expect(parseCppSpec(bad)).toBeNull()
+    expect(parseCppSpec("a.b/c..d")).toMatchObject({ repo: "a.b/c..d" })
   })
   it("rejects a bare name", () => {
     expect(parseCppSpec("json")).toBeNull()
@@ -100,5 +104,25 @@ describe("fetchCppPackage", () => {
     await expect(fetchCppPackage("foo/bar", null)).rejects.toThrow(/too large/)
     const urls = fn.mock.calls.map(c => String(c[0]))
     expect(urls.some(u => u.startsWith("https://cdn.jsdelivr.net/"))).toBe(false)
+  })
+})
+
+describe("loadCppPackages", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("leaves out a package that fails to load and reports it, but loads the others", async () => {
+    const ok = (repo: string): CppPackage => ({ repo, ref: "1.0.0", spec: `${repo}@1.0.0`, status: "installed", version: "1.0.0" })
+    const onFail = vi.fn()
+    stub({
+      "https://data.jsdelivr.com/v1/packages/gh/ok/lib@1.0.0?structure=flat": json({ files: [{ name: "/include/a.hpp", size: 4 }] }),
+      "https://cdn.jsdelivr.net/gh/ok/lib@1.0.0/include/a.hpp": () => new Response("// a", { status: 200 }),
+      "https://data.jsdelivr.com/v1/packages/gh/bad/lib@1.0.0?structure=flat": () => new Response("", { status: 503 }),
+    })
+    const list: CppPackage[] = [ok("ok/lib"), ok("bad/lib"), { ...ok("err/lib"), status: "error" }]
+    const result = await loadCppPackages(list, onFail)
+    expect(result.files).toEqual({ "/packages/ok/lib/include/a.hpp": "// a" })
+    expect(result.includes).toEqual(["/packages/ok/lib/include"])
+    expect(onFail).toHaveBeenCalledTimes(1)
+    expect(onFail).toHaveBeenCalledWith("bad/lib", expect.stringContaining("503"))
   })
 })

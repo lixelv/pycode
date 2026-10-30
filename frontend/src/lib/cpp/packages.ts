@@ -24,7 +24,7 @@ const SPEC = /^([\w.-]+\/[\w.-]+)(?:@([\w./+-]+))?$/
 
 export function parseCppSpec(input: string): { repo: string; ref: string | null; spec: string } | null {
   const m = SPEC.exec(input.trim())
-  if (!m) return null
+  if (!m || m[1].split("/").some((part) => /^\.+$/.test(part))) return null
   const ref = m[2] ?? null
   return { repo: m[1], ref, spec: ref ? `${m[1]}@${ref}` : m[1] }
 }
@@ -106,29 +106,31 @@ export async function installCppPackage(repo: string, version: string | null): P
   return fetched
 }
 
-/** The headers of every installed package, ready for clang (`/packages/<repo>/…`); one that fails to load is left out. */
-export async function loadCppPackages(list: CppPackage[]): Promise<CppPackageFiles> {
+/** The headers of every installed package, ready for clang (`/packages/<repo>/…`); one that fails to load is left out and reported. */
+export async function loadCppPackages(list: CppPackage[], onFail?: (repo: string, message: string) => void): Promise<CppPackageFiles> {
   const result: CppPackageFiles = { files: {}, includes: [] }
+  const wanted = list.filter((p) => p.status === "installed" && p.version)
   const loaded = await Promise.allSettled(
-    list
-      .filter((p) => p.status === "installed" && p.version)
-      .map(async (p) => {
-        const key = `${p.repo}@${p.version}`
-        let pending = cache.get(key)
-        if (!pending) cache.set(key, (pending = fetchCppPackage(p.repo, p.version!)))
-        try {
-          return { repo: p.repo, ...(await pending) }
-        } catch (error) {
-          cache.delete(key)
-          throw error
-        }
-      }),
+    wanted.map(async (p) => {
+      const key = `${p.repo}@${p.version}`
+      let pending = cache.get(key)
+      if (!pending) cache.set(key, (pending = fetchCppPackage(p.repo, p.version!)))
+      try {
+        return { repo: p.repo, ...(await pending) }
+      } catch (error) {
+        cache.delete(key)
+        throw error
+      }
+    }),
   )
-  for (const entry of loaded) {
-    if (entry.status !== "fulfilled") continue
+  loaded.forEach((entry, i) => {
+    if (entry.status === "rejected") {
+      onFail?.(wanted[i].repo, entry.reason instanceof Error ? entry.reason.message : String(entry.reason))
+      return
+    }
     const { repo, include, files } = entry.value
     for (const [path, text] of Object.entries(files)) result.files[`/packages/${repo}/${path}`] = text
     result.includes.push(include ? `/packages/${repo}/${include}` : `/packages/${repo}`)
-  }
+  })
   return result
 }

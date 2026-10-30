@@ -243,9 +243,9 @@ function Workspace() {
     async (source: string) => {
       const files = await projectFiles(store, provider, active)
       files[active] = source
-      return cppClient.lint(files, active, await loadCppPackages(cppPackages))
+      return cppClient.lint(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))
     },
-    [store, provider, active, cppPackages],
+    [store, provider, active, cppPackages, cppPkgs.fail],
   )
   const follow = useFollow({
     provider,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type * as Y from "yjs"
 
 import { installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/packages"
@@ -9,7 +9,15 @@ import { installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/pack
  * everyone else downloads it lazily before a lint or run.
  */
 export function useCppPackages(shared: Y.Array<CppPackage>) {
-  const [packages, setPackages] = useState<CppPackage[]>(() => shared.toArray())
+  const [stored, setPackages] = useState<CppPackage[]>(() => shared.toArray())
+  // Packages that are installed in the project but did not load here (offline…): shown as errors, not retried by every lint.
+  const [failed, setFailed] = useState<Record<string, string>>({})
+  const packages = useMemo(
+    () => stored.map((p) => (failed[p.repo] && p.status === "installed" ? { ...p, status: "error" as const, error: failed[p.repo] } : p)),
+    [stored, failed],
+  )
+  const fail = useCallback((repo: string, error: string) => setFailed((f) => ({ ...f, [repo]: error })), [])
+  const clearFailure = useCallback((repo: string) => setFailed((f) => Object.fromEntries(Object.entries(f).filter(([r]) => r !== repo))), [])
 
   useEffect(() => {
     const read = () => setPackages(shared.toArray())
@@ -50,24 +58,32 @@ export function useCppPackages(shared: Y.Array<CppPackage>) {
     async (input: string) => {
       const parsed = parseCppSpec(input)
       if (!parsed) return
+      clearFailure(parsed.repo)
       const entry: CppPackage = { ...parsed, status: "installing" }
       mutate((list) => [...list.filter((p) => p.repo !== parsed.repo), entry])
       await install(parsed.repo, parsed.ref)
     },
-    [mutate, install],
+    [mutate, install, clearFailure],
   )
 
-  const remove = useCallback((repo: string) => mutate((list) => list.filter((p) => p.repo !== repo)), [mutate])
+  const remove = useCallback(
+    (repo: string) => {
+      clearFailure(repo)
+      mutate((list) => list.filter((p) => p.repo !== repo))
+    },
+    [mutate, clearFailure],
+  )
 
   const retry = useCallback(
     (repo: string) => {
-      const entry = packages.find((p) => p.repo === repo)
+      const entry = stored.find((p) => p.repo === repo)
       if (!entry) return
+      clearFailure(repo)
       patch(repo, { status: "installing", error: undefined })
       void install(repo, entry.version ?? entry.ref)
     },
-    [packages, patch, install],
+    [stored, patch, install, clearFailure],
   )
 
-  return { packages, add, remove, retry }
+  return { packages, add, remove, retry, fail }
 }

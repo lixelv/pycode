@@ -109,6 +109,7 @@ export function DocViewer({
     let live = true
     let opened: Doc | null = null
     const el = box.current!
+    setError(null)
     ;(kind === "pdf" ? openPdf(bytes) : openPptx(bytes, el)).then(
       (d) => {
         opened = d

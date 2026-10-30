@@ -89,7 +89,8 @@ def run_tests(project: str, solution: str, source: str) -> list:
     results = []
     try:
         for name, fn in list(module.__dict__.items()):
-            if not name.startswith("test") or not callable(fn):
+            # def test_…(): functions named so (not lambdas or helpers bound to such names).
+            if not name.startswith("test_") or not isinstance(fn, types.FunctionType) or fn.__name__ != name:
                 continue
             try:
                 fn()

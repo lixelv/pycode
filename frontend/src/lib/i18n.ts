@@ -236,6 +236,7 @@ const en = {
   "debug.watching": "{name} is debugging",
   "tab.board": "Board",
   "check.tooSoon": "Checked a moment ago: try again in a few seconds.",
+  "toast.zipMissing": "Left out of the archive (nobody online has them): {files}",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -463,6 +464,7 @@ const ru: Record<MessageKey, string> = {
   "debug.watching": "Отлаживает {name}",
   "tab.board": "Доска",
   "check.tooSoon": "Проверка была только что: попробуйте через пару секунд.",
+  "toast.zipMissing": "Не вошли в архив (их нет ни у кого в сети): {files}",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

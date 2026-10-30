@@ -327,12 +327,18 @@ export function mimeOf(path: string) {
 
 // ---- archive --------------------------------------------------------------
 
-/** Packs the project; binary files are fetched first if this browser lacks them. */
-export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promise<Uint8Array>): Promise<Uint8Array> {
+/**
+ * Packs the project; binary files are fetched first if this browser lacks
+ * them. Those nobody has are left out and their paths put into `missing`.
+ */
+export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promise<Uint8Array>, missing: string[] = []): Promise<Uint8Array> {
   const entries: Record<string, Uint8Array> = {}
   for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
   for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
-    if (meta.kind === "binary" && meta.hash) entries[path] = await ensureBlob(meta.hash, fetch).catch(() => new Uint8Array())
+    if (meta.kind !== "binary" || !meta.hash) continue
+    const bytes = await ensureBlob(meta.hash, fetch).catch(() => null)
+    if (bytes) entries[path] = bytes
+    else missing.push(path)
   }
   const env = envOf(s)
   if (Object.keys(env.roles).length || Object.keys(env.folders).length || env.protected.length || env.hidden.length) {

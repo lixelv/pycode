@@ -24,6 +24,8 @@ export interface Rules {
 }
 
 export const RESERVED = ".pycode.env"
+/** Roles every session has; custom roles cannot take these names. */
+export const BUILT_IN_ROLES = new Set(["owner", "admin", "write", "read"])
 export const isTest = (path: string) => path.endsWith(".test.py")
 
 export function fileAccess(m: Member, path: string, r: Rules): Access {
@@ -102,10 +104,11 @@ export function parseEnv(text: string): EnvRules {
     const rest = m[2]
     if (m[1] === "role") {
       const [name, level] = rest.split(" ")
-      if (level === "read" || level === "write") e.roles[name] = level
+      if ((level === "read" || level === "write") && !BUILT_IN_ROLES.has(name)) e.roles[name] = level
     } else if (m[1] === "folder") {
+      // A folder given to "write" (say) would open it to everyone with that code.
       const space = rest.indexOf(" ")
-      if (space > 0) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
+      if (space > 0 && !BUILT_IN_ROLES.has(rest.slice(0, space))) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
     } else e[m[1] as "protected" | "hidden"].push(rest)
   }
   return e

@@ -113,3 +113,14 @@ describe("runVisible", () => {
     expect(runVisible("s/ivan/a.py", "s/x/a.py", rules({ folders: { "s/ivan": "ivan", "s/x": "petr" } }))).toBe(false)
   })
 })
+
+describe(".pycode.env built-in names", () => {
+  it("ignores roles and folders named after built-in roles", () => {
+    expect(parseEnv("role write read\nrole ivan write\nfolder admin a\nfolder ivan b\n")).toEqual({
+      roles: { ivan: "write" },
+      folders: { b: "ivan" },
+      protected: [],
+      hidden: [],
+    })
+  })
+})

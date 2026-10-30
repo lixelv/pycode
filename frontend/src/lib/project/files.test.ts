@@ -101,3 +101,14 @@ describe("openArchive", () => {
     expect(seen).toContain("notes.txt:true:alice")
   })
 })
+
+describe("exportZip", () => {
+  it("leaves out (and reports) binary files it cannot get, instead of empty ones", async () => {
+    const s = new ProjectStore(false)
+    metasOf(s).set("gone.png", { id: "g", kind: "binary", size: 10, hash: "f".repeat(64), mime: "image/png" })
+    const missing: string[] = []
+    const zip = importZip(await exportZip(s, undefined, missing))
+    expect(missing).toEqual(["gone.png"])
+    expect(zip.entries.map((e) => e.path)).not.toContain("gone.png")
+  })
+})

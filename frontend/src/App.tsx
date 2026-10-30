@@ -498,9 +498,11 @@ function Workspace() {
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
-    const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined)
+    const missing: string[] = []
+    const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined, missing)
+    if (missing.length) toast.warning(t("toast.zipMissing", { files: missing.join(", ") }))
     downloadBlob(zip, provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
-  }, [store, provider])
+  }, [store, provider, t])
 
   const upload = useCallback(
     async (file: File) => {

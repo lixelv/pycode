@@ -17,6 +17,9 @@ MAX_VARS = 50
 
 def _ours(filename: str) -> bool:
     # The main file is compiled with a relative name; imported ones are absolute.
+    # "<frozen …>", "<string>" and the like are Python's own.
+    if filename.startswith("<"):
+        return False
     return not os.path.isabs(filename) or filename.startswith(PROJECT + "/")
 
 
@@ -62,7 +65,11 @@ class Debugger(bdb.Bdb):
         ]
         variables = _variables(frame.f_locals)
         if frame.f_globals is not frame.f_locals:
-            variables = {**_variables(frame.f_globals), **variables}
+            # The function's own variables first, then globals, MAX_VARS in all.
+            for name, value in _variables(frame.f_globals).items():
+                if len(variables) >= MAX_VARS:
+                    break
+                variables.setdefault(name, value)
         return {"file": _rel(frame.f_code.co_filename), "line": frame.f_lineno, "stack": stack, "vars": variables}
 
     def user_line(self, frame):

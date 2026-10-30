@@ -197,7 +197,7 @@ const en = {
   "viewer.missing": "The file could not be loaded: nobody online has it.",
   "tree.drop": "Drop to add to the project",
   "tree.dropInto": "Drop to add to {folder}",
-  "md.mode": "Markdown view",
+  "md.mode": "View",
   "md.code": "Code",
   "md.split": "Side by side",
   "md.preview": "Preview",
@@ -245,6 +245,7 @@ const en = {
   "share.changeRole": "Change role",
   "share.level": "Level",
   "share.customRoles": "Roles (folders)",
+
 } as const
 
 export type MessageKey = keyof typeof en
@@ -433,7 +434,7 @@ const ru: Record<MessageKey, string> = {
   "viewer.missing": "Не удалось загрузить файл: его нет ни у кого в сети.",
   "tree.drop": "Отпустите, чтобы добавить в проект",
   "tree.dropInto": "Отпустите, чтобы добавить в {folder}",
-  "md.mode": "Вид Markdown",
+  "md.mode": "Вид",
   "md.code": "Код",
   "md.split": "Рядом",
   "md.preview": "Просмотр",

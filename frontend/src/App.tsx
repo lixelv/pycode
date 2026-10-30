@@ -14,7 +14,7 @@ import { docKindOf } from "@/lib/project/project"
 import { CheckResults, type CheckState } from "@/components/check-results"
 import { DebugPanel } from "@/components/debug-panel"
 import { FileViewer } from "@/components/file-viewer"
-import { WebPreview, type WebRun } from "@/components/web-preview"
+import { LivePagePreview, WebPreview, type WebRun } from "@/components/web-preview"
 import { Presentation, type PresentationState } from "@/components/presentation"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
@@ -76,10 +76,11 @@ const LABELS_KEY = "pycode:cursor-labels"
 /** A program is starting, running or waiting for input. */
 const isBusy = (status: RunStatus) => status === "connecting" || status === "running" || status === "waiting"
 const MD_MODE_KEY = "pycode:md-mode"
+const HTML_MODE_KEY = "pycode:html-mode"
 const BREAKPOINTS_KEY = "pycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
-type MarkdownMode = "code" | "split" | "preview"
+type ViewMode = "code" | "split" | "preview"
 
 function loadTheme(): "dark" | "light" {
   try {
@@ -193,8 +194,11 @@ function Workspace() {
   const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
-  const [mdMode, setMdMode] = usePersisted<MarkdownMode>(MD_MODE_KEY, "split")
-  const markdownMode = language === "markdown" && activeExists ? mdMode : null
+  // Markdown and HTML: the code, the result, or both side by side (each remembers its own).
+  const [mdMode, setMdMode] = usePersisted<ViewMode>(MD_MODE_KEY, "split")
+  const [htmlMode, setHtmlMode] = usePersisted<ViewMode>(HTML_MODE_KEY, "split")
+  const viewMode = !activeExists ? null : language === "markdown" ? mdMode : language === "html" ? htmlMode : null
+  const setViewMode = language === "html" ? setHtmlMode : setMdMode
   const follow = useFollow({
     provider,
     editor: editorInstance,
@@ -745,7 +749,7 @@ function Workspace() {
                 </button>
               ))}
             </nav>
-            {markdownMode && view === "editor" && (
+            {viewMode && view === "editor" && (
               <nav role="radiogroup" aria-label={t("md.mode")} className="inline-flex shrink-0 rounded-md border border-border bg-muted p-0.5">
                 {(
                   [
@@ -757,13 +761,13 @@ function Workspace() {
                   <button
                     key={value}
                     role="radio"
-                    aria-checked={mdMode === value}
+                    aria-checked={viewMode === value}
                     title={label}
                     aria-label={label}
-                    onClick={() => setMdMode(value)}
+                    onClick={() => setViewMode(value)}
                     className={cn(
                       "inline-flex items-center rounded-[5px] px-2 py-1 transition-colors [&_svg]:size-3.5",
-                      mdMode === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                      viewMode === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
                     <Icon />
@@ -914,7 +918,7 @@ function Workspace() {
           {/* The editor stays mounted (hidden) so its state survives tab switches. */}
           <main ref={split} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", view !== "editor" && "hidden")}>
             <div className="flex min-h-0 flex-1">
-            <div className={cn("relative min-h-0 min-w-0 flex-1", markdownMode === "preview" && "hidden")}>
+            <div className={cn("relative min-h-0 min-w-0 flex-1", viewMode === "preview" && "hidden")}>
               <CodeEditor
                 store={store}
                 breakpoints={language === "python" ? (breakpoints[active] ?? []) : undefined}
@@ -955,9 +959,13 @@ function Workspace() {
                 </div>
               )}
             </div>
-            {markdownMode && markdownMode !== "code" && (
-              <div className={cn("min-h-0 min-w-0 border-l border-console-border", markdownMode === "split" ? "w-1/2" : "flex-1")}>
-                <MarkdownPreview path={active} source={text} store={store} fetch={fetchBlob} />
+            {viewMode && viewMode !== "code" && (
+              <div className={cn("min-h-0 min-w-0 border-l border-console-border", viewMode === "split" ? "w-1/2" : "flex-1")}>
+                {language === "html" ? (
+                  <LivePagePreview path={active} source={text} files={() => projectFiles(store, provider, active)} />
+                ) : (
+                  <MarkdownPreview path={active} source={text} store={store} fetch={fetchBlob} />
+                )}
               </div>
             )}
             </div>

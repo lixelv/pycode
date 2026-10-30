@@ -92,7 +92,9 @@ sites. Do not set it on a real server.
   - `/preview.html` has its own permissive CSP in `nginx.conf`, and its loader is inline: a sandboxed frame has an opaque origin, so CORP same-origin refuses even our own scripts. A `srcdoc` frame would inherit the app's CSP and block every script.
 - **Documents**: PDF via `pdfjs-dist`, PPTX via `pptx-preview` (`components/doc-viewer.tsx`, one page at a time, page controlled by the parent).
 - **Presentation**: an admin presents a PDF or PPTX to everyone (`state.presentation = {path, page, by}`). Only the presenter turns pages; any admin can end it if the presenter is gone.
-- **Markdown**: Code / Side by side / Preview switch (localStorage `pycode:md-mode`). The preview resolves project pictures.
+- **Markdown and HTML**: Code / Side by side / Preview switch (localStorage `pycode:md-mode`, `pycode:html-mode`).
+  - The Markdown preview resolves project pictures.
+  - The HTML preview (`LivePagePreview`) rebuilds the page 300 ms after each change in the same `SandboxFrame` that Run uses. Its console is shown only by Run.
 - **Whiteboard** (`components/board.tsx`, Excalidraw, lazy):
   - Elements are synced by version via `reconcileElements`. Pictures go into `board.files`.
   - Pointers travel in awareness (`boardPointer`), the visible area in `boardView` (for Follow).

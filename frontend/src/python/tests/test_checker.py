@@ -1,4 +1,5 @@
 import _thread
+import builtins
 import itertools
 import os
 import re
@@ -160,6 +161,84 @@ class Limits(unittest.TestCase):
         self.assertTrue(res[0]["ok"], res)
         self.assertNotIn("time", res[0])
         self.assertNotIn("memory", res[0])
+
+    def late_interrupt(self, fired=False):
+        """A deadline whose interrupt lands while it is being cancelled."""
+        calls = []
+
+        def deadline(ms):
+            calls.append(ms)
+            if ms == 0 and calls.count(0) == 1:
+                raise KeyboardInterrupt
+            return fired
+
+        checker._deadline = deadline
+        return calls
+
+    def test_interrupt_while_cancelling(self):
+        calls = self.late_interrupt()
+        saved = builtins.input
+        with self.assertRaises(checker.TimeLimitExceeded):
+            self.run_direct(QUIET, timeout=5, ram_usage=100)
+        self.assertEqual(calls, [5000, 0, 0])  # cancelled again after the interrupt
+        self.assertIs(builtins.input, saved)
+        self.assertFalse(tracemalloc.is_tracing())
+
+    def test_fired_on_cancel_counts(self):
+        checker._deadline = lambda ms: ms == 0
+        with self.assertRaises(checker.TimeLimitExceeded):
+            self.run_direct(QUIET, timeout=5)
+
+    def test_late_interrupt_does_not_reach_next_test(self):
+        self.late_interrupt()
+        res = self.check(
+            "import polycode_test\n"
+            "def test_a():\n    polycode_test.run('x\\n', timeout=5)\n"
+            "def test_b():\n    assert polycode_test.run('y\\n', timeout=5) == 'y\\n'\n"
+        )
+        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["message"].startswith("time limit 5 s exceeded"), res)
+        self.assertTrue(res[1]["ok"], res)
+
+    def test_deadline_error_cleans_up(self):
+        def deadline(ms):
+            if ms:
+                raise TypeError("no hook")
+
+        checker._deadline = deadline
+        saved = builtins.input
+        with self.assertRaises(TypeError):
+            self.run_direct(QUIET, timeout=1, ram_usage=10)
+        self.assertIs(builtins.input, saved)
+        self.assertFalse(tracemalloc.is_tracing())
+
+    def test_used_and_limit_are_floats(self):
+        with self.assertRaises(checker.MemoryLimitExceeded) as caught:
+            self.run_direct("x = bytearray(30_000_000)\n", ram_usage=10)
+        self.assertIsInstance(caught.exception.used, float)
+        self.assertIsInstance(caught.exception.limit, float)
+
+    def test_crafted_limit_errors(self):
+        tests = "import polycode_test\ndef test_a():\n    polycode_test.run('')\n"
+        res = self.check(tests, "import polycode_test\nraise polycode_test.TimeLimitExceeded(1e300, 1)\n")
+        self.assertLessEqual(len(res[0]["message"]), checker.MAX_MESSAGE)
+        res = self.check(tests, "import polycode_test\nraise polycode_test.MemoryLimitExceeded('leak', 'x')\n")
+        self.assertEqual(res[0]["message"], "MemoryLimitExceeded")
+
+    def test_measures_cannot_override_result(self):
+        solution = "import sys\nm = sys.modules['checker']._measures\nm['message'] = 'LEAK'\nm['ok'] = False\nm['time'] = 'str'\n"
+        res = self.check("import polycode_test\ndef test_a():\n    polycode_test.run('')\n", solution)
+        self.assertEqual(res, [{"name": "test_a", "ok": True, "message": ""}])
+
+    def test_measures_reset_between_tests(self):
+        res = self.check(
+            "import polycode_test\n"
+            "def test_a():\n    polycode_test.run('', timeout=5)\n"
+            "def test_b():\n    pass\n",
+            QUIET,
+        )
+        self.assertIn("time", res[0])
+        self.assertNotIn("time", res[1])
 
 
 if __name__ == "__main__":

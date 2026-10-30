@@ -17,6 +17,7 @@ and shown with the test's result.
 import builtins
 import contextlib
 import io
+import math
 import os
 import runpy
 import secrets
@@ -46,14 +47,26 @@ class MemoryLimitExceeded(MemoryError):
         self.limit = limit
 
 
-def _deadline(ms: int) -> None:
-    """Asks the page to interrupt us after ms (0 cancels)."""
+def _deadline(ms: int) -> bool:
+    """Asks the page to interrupt us after ms. 0 cancels at once (no interrupt
+    can arrive after it returns) and says whether the timer fired."""
     import js  # Pyodide only; the unit tests replace this hook
 
-    js.polycode_deadline(ms)
+    return js.polycode_deadline(ms)
 
 
 _now = time.perf_counter
+
+
+def _cancel_deadline() -> bool:
+    """Cancels the timer; True if it fired. An interrupt that lands while
+    cancelling counts as fired."""
+    fired = False
+    while True:
+        try:
+            return bool(_deadline(0)) or fired
+        except KeyboardInterrupt:
+            fired = True
 
 
 def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
@@ -69,35 +82,40 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
         return line.rstrip("\n")
 
     saved = builtins.input
-    builtins.input = fake_input
-    if ram_usage:
-        tracemalloc.start()
-    if timeout:
-        _deadline(max(1, round(timeout * 1000)))
-    started = _now()
+    started = None
     interrupted = False
+    peak = 0
     try:
-        with contextlib.redirect_stdout(out):
-            runpy.run_path(_solution, run_name="__main__")
+        try:
+            builtins.input = fake_input
+            if ram_usage:
+                tracemalloc.start()
+            if timeout:
+                _deadline(max(1, round(timeout * 1000)))
+            started = _now()
+            with contextlib.redirect_stdout(out):
+                runpy.run_path(_solution, run_name="__main__")
+        finally:
+            # Once cancelled, no interrupt can come: the handler and cleanup below are safe.
+            if timeout and _cancel_deadline():
+                interrupted = True
     except KeyboardInterrupt:
         if not timeout:
             raise
         interrupted = True
     finally:
-        used = _now() - started
-        if timeout:
-            _deadline(0)
+        used = 0.0 if started is None else _now() - started
         builtins.input = saved
-        if ram_usage:
+        if ram_usage and tracemalloc.is_tracing():
             peak = tracemalloc.get_traced_memory()[1]
             tracemalloc.stop()
             _measures["memory"] = max(_measures.get("memory", 0), peak)
         if timeout:
             _measures["time"] = _measures.get("time", 0.0) + used
     if timeout and (interrupted or used > timeout):
-        raise TimeLimitExceeded(max(used, timeout), timeout)
+        raise TimeLimitExceeded(float(max(used, timeout)), float(timeout))
     if ram_usage and peak > ram_usage * 1e6:
-        raise MemoryLimitExceeded(peak, ram_usage * 1e6)
+        raise MemoryLimitExceeded(float(peak), float(ram_usage * 1e6))
     return out.getvalue()
 
 
@@ -122,10 +140,23 @@ def _failure(err: BaseException, tests: str) -> str:
         except BaseException:  # noqa: BLE001
             return type(err).__name__
         if isinstance(err, TimeLimitExceeded):
-            return f"time limit {limit:g} s exceeded: {used:.2f} s"
-        return f"memory limit {limit / 1e6:g} MB exceeded: {used / 1e6:.1f} MB"
+            return _short(f"time limit {limit:g} s exceeded: {used:.2f} s")
+        return _short(f"memory limit {limit / 1e6:g} MB exceeded: {used / 1e6:.1f} MB")
     kind = type(err)
     return kind.__name__ if kind.__module__ == "builtins" else "error"
+
+
+def _measured() -> dict:
+    """The test's measures as plain numbers (the solution can reach _measures)."""
+    measured = {}
+    for key, kind in (("time", float), ("memory", int)):
+        try:
+            value = kind(_measures[key])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            measured[key] = value
+    return measured
 
 
 def run_tests(project: str, solution: str, source: str) -> list:
@@ -165,7 +196,7 @@ def run_tests(project: str, solution: str, source: str) -> list:
                 result = {"name": name, "ok": True, "message": ""}
             except BaseException as err:  # noqa: BLE001
                 result = {"name": name, "ok": False, "message": _failure(err, tests)}
-            results.append({**result, **_measures})
+            results.append({**result, **_measured()})
     finally:
         sys.modules.pop("polycode_test", None)
         sys.modules.pop("pycode_test", None)

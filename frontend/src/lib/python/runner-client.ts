@@ -1,3 +1,4 @@
+import { fire } from "@/lib/python/deadline"
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
   DEBUG_COMMANDS,
@@ -45,7 +46,7 @@ export class RunnerClient {
   /** Starts the worker (once) and resolves with the Python version. */
   ready(): Promise<string> {
     if (this.readyPromise) return this.readyPromise
-    const control = new SharedArrayBuffer(8)
+    const control = new SharedArrayBuffer(12)
     const data = new SharedArrayBuffer(STDIN_MAX_BYTES)
     const interrupt = new SharedArrayBuffer(1)
     this.control = new Int32Array(control)
@@ -64,7 +65,8 @@ export class RunnerClient {
           reject(new Error(event.message))
         } else if (event.type === "deadline") {
           clearTimeout(this.deadline)
-          if (event.ms) this.deadline = setTimeout(() => this.interrupt(), event.ms)
+          const control = this.control
+          this.deadline = setTimeout(() => fire(control, event.gen, () => this.interrupt()), event.ms)
         } else if (event.type === "installed") {
           this.pendingInstalls.get(event.id)?.(event.results)
           this.pendingInstalls.delete(event.id)

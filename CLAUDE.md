@@ -81,10 +81,10 @@ sites. Do not set it on a real server.
   - `name.test.py` holds `test_*` functions; `polycode_test.run(stdin)` (limits below; alias `pycode_test` for old tests) runs the solution and returns its output, without `input()` prompts.
   - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
   - Limits: `run(stdin, timeout=None, ram_usage=None)`, seconds and MB (10⁶ bytes); `None`/`0` turn a limit off.
-    - Time: `run()` calls the worker's JS global `polycode_deadline(ms)` → event `deadline` → `RunnerClient` sets a timer that calls `interrupt()` (`ms` 0 clears it). `KeyboardInterrupt` becomes `TimeLimitExceeded(TimeoutError)`; the elapsed `perf_counter` time is compared too, so a program that swallows the interrupt still fails.
+    - Time: `run()` calls the worker's JS global `polycode_deadline(ms)` → event `deadline {ms, gen}` → `RunnerClient` sets a timer that calls `interrupt()`. Cancelling (`ms` 0) is synchronous through `control[2]` (`lib/python/deadline.ts`): a late timer finds its generation gone, and a written but untaken interrupt is cleared, so nothing reaches code after `run()`; it returns whether the timer fired (fired counts as exceeded). `KeyboardInterrupt` becomes `TimeLimitExceeded(TimeoutError)`; the elapsed `perf_counter` time is compared too, so a program that swallows the interrupt still fails.
     - Memory: `tracemalloc` peak around the program, checked after it ends → `MemoryLimitExceeded(MemoryError)`.
-    - Both carry `used`/`limit` as floats; `_failure` builds their message from `float()` of those only (`time limit 1 s exceeded: 1.43 s`, `memory limit 64 MB exceeded: 81.2 MB`).
-    - Measures: a limit that is on is measured per test (`time` summed, `memory` peak in bytes) into `CheckResult.time`/`memory`, shown at the right of the test's line (`0.12 s · 3.4 MB`).
+    - Both carry `used`/`limit` as floats; `_failure` builds their message from `float()` of those only, capped by `_short` (`time limit 1 s exceeded: 1.43 s`, `memory limit 64 MB exceeded: 81.2 MB`).
+    - Measures: a limit that is on is measured per test (`time` summed, `memory` peak in bytes) into `CheckResult.time`/`memory` (coerced to numbers, never overriding name/ok/message), shown at the right of the test's line (`0.12 s · 3.4 MB`).
     - `_deadline` and `_now` are module hooks the CPython unit tests replace (`python/tests/test_checker.py`).
   - A student sends signal `check` to `provider.checker()` (the acting owner if admin, else the earliest admin) and gets `check-result` back.
   - The admin runs checks one at a time, at most one per student every 3 s.

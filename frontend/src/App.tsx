@@ -28,7 +28,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCollab } from "@/hooks/use-collab"
 import { usePackages } from "@/hooks/use-packages"
-import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
+import { isBusy, RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
@@ -82,7 +82,6 @@ const THEME_KEY = "polycode:theme"
 const LABELS_KEY = "polycode:cursor-labels"
 
 /** A program is starting, running or waiting for input. */
-const isBusy = (status: RunStatus) => status === "connecting" || status === "running" || status === "waiting"
 const MD_MODE_KEY = "polycode:md-mode"
 const HTML_MODE_KEY = "polycode:html-mode"
 const BREAKPOINTS_KEY = "polycode:breakpoints"
@@ -326,7 +325,9 @@ function Workspace() {
     else provider?.signal({ type: "stop", to: executorClient! })
   }, [amExecutor, executorClient, provider, runner])
 
-  const runnable = language === "python" || language === "html" || language === "javascript"
+  // Programs run in the console (C++ headers are not programs); web files in a frame.
+  const consoleProgram = language === "python" || (language === "cpp" && !/\.(h|hpp)$/i.test(active))
+  const runnable = consoleProgram || language === "html" || language === "javascript"
 
   // ---- debugger -------------------------------------------------------------------
   // Breakpoints are this browser's own (not shared): path -> lines.
@@ -397,6 +398,13 @@ function Workspace() {
       const fresh = !!provider && lastEntry.current !== null && lastEntry.current !== active
       lastEntry.current = active
       void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points, fresh))
+      return
+    }
+    if (language === "cpp") {
+      setWebRun(null)
+      void projectFiles(store, provider, active).then((files) =>
+        runner.runCpp(files, active, () => cppClient.compile(files, active, NO_CPP_PACKAGES)),
+      )
       return
     }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
@@ -908,12 +916,12 @@ function Workspace() {
                 <TooltipContent>{t("debug.hint")}</TooltipContent>
               </Tooltip>
             )}
-            {consoleActive && canRun && language === "python" ? (
+            {consoleActive && canRun && consoleProgram ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
               </Button>
             ) : (
-              <Button size="sm" onClick={() => run()} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
+              <Button size="sm" onClick={() => run()} disabled={!runnable || (consoleProgram && !canRun)} className="min-w-24">
                 <Play className="fill-current" /> {t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>

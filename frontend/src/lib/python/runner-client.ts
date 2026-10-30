@@ -10,6 +10,7 @@ import {
   type CheckResult,
   type DebugCommand,
   type InstallResult,
+  type ProgramRunner,
   type ProjectFiles,
   type RunnerEvent,
 } from "@/workers/protocol"
@@ -20,7 +21,7 @@ type Listener = (event: RunnerEvent) => void
  * Owns the Python runner worker: starting it, feeding input(), interrupting,
  * and replacing it when a program cannot be stopped any other way.
  */
-export class RunnerClient {
+export class RunnerClient implements ProgramRunner {
   private worker: Worker | null = null
   private control!: Int32Array
   private data!: Uint8Array

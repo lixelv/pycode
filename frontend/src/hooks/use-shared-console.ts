@@ -3,7 +3,7 @@ import type { Awareness } from "y-protocols/awareness"
 import type * as Y from "yjs"
 
 import { readRun, readTerminal, sharedRun, sharedTerminal, type SharedRunState } from "@/lib/collab/doc"
-import type { Chunk } from "@/hooks/use-runner"
+import { isBusy, type Chunk } from "@/hooks/use-runner"
 import type { DebugState } from "@/workers/protocol"
 
 export interface SharedConsole extends SharedRunState {
@@ -24,7 +24,7 @@ export interface SharedConsole extends SharedRunState {
 export function useSharedConsole(doc: Y.Doc, awareness: Awareness | null): SharedConsole {
   const read = (): SharedConsole => {
     const run = readRun(doc)
-    const active = run.status === "running" || run.status === "waiting" || run.status === "connecting"
+    const active = isBusy(run.status)
     const executorGone =
       !!awareness && active && run.executorClient !== null && run.executorClient !== doc.clientID && !awareness.getStates().has(run.executorClient)
     const shared = sharedRun(doc)

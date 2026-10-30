@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { Chunk, ExitInfo, RunStatus } from "@/hooks/use-runner"
+import { isBusy, type Chunk, type ExitInfo, type RunStatus } from "@/hooks/use-runner"
 import { translate, useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -58,11 +58,11 @@ function StatusPill({ status, exit, timeoutSec, canInput }: { status: RunStatus;
       </span>
     )
   }
-  if (status === "running" || status === "connecting") {
+  if (status === "running" || status === "connecting" || status === "compiling") {
     return (
       <span className="inline-flex items-center gap-2 text-[11px] text-console-muted">
         <span className="size-1.5 animate-pulse rounded-full bg-console-foreground" />
-        {status === "connecting" ? translate("console.starting") : translate("console.running")}
+        {translate(status === "compiling" ? "run.compiling" : status === "connecting" ? "console.starting" : "console.running")}
       </span>
     )
   }
@@ -102,7 +102,7 @@ export function ConsolePanel({
   const inputRef = useRef<HTMLInputElement>(null)
   const waitingForInput = status === "waiting"
   const waiting = waitingForInput && canInput
-  const active = status === "running" || status === "waiting" || status === "connecting"
+  const active = isBusy(status)
 
   // Stick to the bottom while output streams in.
   useEffect(() => {
@@ -234,10 +234,12 @@ function ConsoleButton({ label, onClick, children }: { label: string; onClick: (
 }
 
 /**
- * The line that explains an error ("ZeroDivisionError: division by zero")
- * is red; the rest of the traceback stays in the console's colours.
+ * The line that explains an error ("ZeroDivisionError: division by zero",
+ * clang's "main.cpp:4:3: error: …", an uncaught C++ exception) is red; the
+ * rest of the traceback or the compiler's context stays in the console's colours.
  */
-const ERROR_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Exit|Warning)\b(?::.*)?$/
+const ERROR_LINE =
+  /^(?:[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Exit|Warning)\b(?::.*)?|\S+:\d+:\d+: (?:fatal )?error: .*|terminate called after throwing .*)$/
 
 function StderrText({ text }: { text: string }) {
   const lines = text.split("\n")

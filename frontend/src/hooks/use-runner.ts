@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { cppRunner } from "@/lib/cpp/runner-client"
 import { translate } from "@/lib/i18n"
 import { runner, RunnerClient } from "@/lib/python/runner-client"
-import type { DebugCommand, DebugState, ProjectFiles } from "@/workers/protocol"
+import type { DebugCommand, DebugState, ProgramRunner, ProjectFiles } from "@/workers/protocol"
 
 export type ChunkKind = "stdout" | "stderr" | "stdin" | "system"
 export interface Chunk {
@@ -10,7 +11,8 @@ export interface Chunk {
   text: string
 }
 
-export type RunStatus = "idle" | "connecting" | "running" | "waiting" | "finished"
+export type RunStatus = "idle" | "compiling" | "connecting" | "running" | "waiting" | "finished"
+export const isBusy = (status: RunStatus) => status === "compiling" || status === "connecting" || status === "running" || status === "waiting"
 
 export interface ExitInfo {
   code: number | null
@@ -41,7 +43,10 @@ export interface RunnerOptions {
   warm?: boolean
 }
 
-/** Runs code in the in-browser Python (Pyodide) worker. */
+/** What a C++ compile gave: the program, or null and clang's log. */
+export type CppBuild = { wasm: Uint8Array | null; log: string }
+
+/** Runs programs in the browser: Python (Pyodide worker) or compiled C++ (cpp-run worker). */
 export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions = {}) {
   const [status, setStatusState] = useState<RunStatus>("idle")
   const emit = useRef(onEvent)
@@ -62,6 +67,9 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const [python, setPython] = useState<string | null>(runner.python)
   const [booting, setBooting] = useState(false)
   const current = useRef<number | null>(null)
+  // The runner of the current (or last) run: only its events count, input goes to it.
+  const client = useRef<ProgramRunner>(runner)
+  const generation = useRef(0)
   const timers = useRef<{ timeout?: number; kill?: number }>({})
   const reason = useRef<ExitInfo["reason"]>(null)
   const startedAt = useRef<number[]>([])
@@ -104,14 +112,16 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
     [setStatus],
   )
 
-  useEffect(
-    () =>
-      runner.on((event) => {
+  useEffect(() => {
+    const listen = (source: ProgramRunner) =>
+      source.on((event) => {
+        if (event.type === "ready") {
+          setPython(event.python)
+          setBooting(false)
+          return
+        }
+        if (source !== client.current) return
         switch (event.type) {
-          case "ready":
-            setPython(event.python)
-            setBooting(false)
-            break
           case "status":
             append("system", event.text + "\n")
             break
@@ -140,9 +150,10 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
             }
             break
         }
-      }),
-    [append, finish, setStatus],
-  )
+      })
+    const offs = [listen(runner), listen(cppRunner)]
+    return () => offs.forEach((off) => off())
+  }, [append, finish, setStatus])
 
   // Warm the interpreter up in the background so the first Run is quick.
   useEffect(() => {
@@ -159,46 +170,63 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
     (why: ExitInfo["reason"]) => {
       if (current.current === null) return
       reason.current = why
-      runner.interrupt()
+      const target = client.current
+      if (target === cppRunner && current.current === -1) {
+        finish({ code: null, duration: 0, reason: why }) // still compiling: its result is dropped
+        return
+      }
       window.clearTimeout(timers.current.kill)
       timers.current.kill = window.setTimeout(() => {
-        runner.restart()
-        setPython(null)
+        target.restart()
+        if (target === runner) setPython(null)
         finish({ code: null, duration: 0, reason: why })
       }, KILL_GRACE_MS)
+      // C++ stops at once: its exit comes now and clears the timer above.
+      target.interrupt()
     },
     [finish],
   )
 
-  const run = useCallback(
-    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>, fresh = false) => {
+  /** Starts a run on `next`: the new generation, or null when the browser cannot run it or runs come too fast. */
+  const begin = useCallback(
+    (next: ProgramRunner, what: string): number | null => {
       if (!RunnerClient.supported()) {
-        setChunks([{ kind: "stderr", text: "This browser does not allow the in-browser Python here (the page is not cross-origin isolated).\n" }])
-        setExit({ code: null, duration: 0, reason: "error", message: "Python unavailable" })
+        setChunks([{ kind: "stderr", text: `This browser does not allow the in-browser ${what} here (the page is not cross-origin isolated).\n` }])
+        setExit({ code: null, duration: 0, reason: "error", message: `${what} unavailable` })
         setStatus("finished")
-        return
+        return null
       }
       const now = performance.now()
       startedAt.current = startedAt.current.filter((t) => now - t < 1000)
       if (startedAt.current.length >= MAX_RUNS_PER_SEC) {
         rateLimited.current?.(translate("toast.slowDown", { n: MAX_RUNS_PER_SEC }))
-        return
+        return null
       }
       startedAt.current.push(now)
 
-      // A run still going is replaced by the new one; `fresh` asks for a new
-      // interpreter (nothing a previous program changed survives into this one).
-      if (current.current !== null || fresh) {
+      // A run still going is replaced by the new one.
+      if (current.current !== null) {
         clearTimers()
-        runner.restart()
+        client.current.restart()
       }
+      client.current = next
       reason.current = null
       emit.current?.({ type: "reset" })
       setChunks([])
       setExit(null)
       setRunCount((n) => n + 1)
-      setStatus("connecting")
       current.current = -1
+      return ++generation.current
+    },
+    [setStatus],
+  )
+
+  const run = useCallback(
+    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>, fresh = false) => {
+      if (begin(runner, "Python") === null) return
+      // `fresh` asks for a new interpreter (nothing a previous program changed survives into this one).
+      if (fresh) runner.restart()
+      setStatus("connecting")
       if (!runner.python) setBooting(true)
 
       try {
@@ -211,21 +239,49 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
         finish({ code: null, duration: 0, reason: "error", message: `Python failed to start: ${(err as Error).message}` })
       }
     },
-    [finish, stopWith, setStatus],
+    [begin, finish, stopWith, setStatus],
+  )
+
+  /** Compiles (`compile`, in the clang worker) and runs a C++ program; a failed compile shows clang's log. */
+  const runCpp = useCallback(
+    async (files: ProjectFiles, entry: string, compile: () => Promise<CppBuild>) => {
+      const gen = begin(cppRunner, "C++")
+      if (gen === null) return
+      setStatus("compiling")
+      let build: CppBuild
+      try {
+        build = await compile()
+      } catch (err) {
+        if (gen === generation.current && current.current === -1) {
+          finish({ code: null, duration: 0, reason: "error", message: (err as Error).message })
+        }
+        return
+      }
+      if (gen !== generation.current || current.current !== -1) return // stopped or replaced meanwhile
+      if (!build.wasm) {
+        append("stderr", build.log)
+        finish({ code: 1, duration: 0, reason: null })
+        return
+      }
+      current.current = await cppRunner.run(build.wasm, files, entry)
+      setStatus("running")
+      timers.current.timeout = window.setTimeout(() => stopWith("timeout"), RUN_TIMEOUT_SEC * 1000)
+    },
+    [append, begin, finish, stopWith, setStatus],
   )
 
   const sendInput = useCallback(
     (text: string) => {
       append("stdin", text + "\n")
       setStatus("running")
-      runner.sendLine(text)
+      client.current.sendLine(text)
     },
     [append, setStatus],
   )
 
   const sendEof = useCallback(() => {
     setStatus("running")
-    runner.sendEof()
+    client.current.sendEof()
   }, [setStatus])
 
   const stop = useCallback(() => stopWith("killed"), [stopWith])
@@ -233,8 +289,8 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
 
   useEffect(() => () => clearTimers(), [])
 
-  const active = status === "connecting" || status === "running" || status === "waiting"
+  const active = isBusy(status)
   const debug = useCallback((command: DebugCommand) => runner.debug(command), [])
 
-  return { status, active, chunks, exit, runCount, python, booting, run, stop, sendInput, sendEof, clear, debugState, debug }
+  return { status, active, chunks, exit, runCount, python, booting, run, runCpp, stop, sendInput, sendEof, clear, debugState, debug }
 }

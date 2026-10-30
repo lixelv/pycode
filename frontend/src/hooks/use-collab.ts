@@ -41,6 +41,25 @@ export function useCollab() {
   const [provider, setProvider] = useState<CollabProvider | null>(null)
   const [status, setStatus] = useState<ProviderStatus | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
+  // A session that asks for names waits here for ours (see NameDialog).
+  const [nameAsk, setNameAsk] = useState<{ initial: string | null; resolve: (name: string) => void } | null>(null)
+  const askName = useCallback((sessionId: string) => {
+    const key = `pycode:name:${sessionId}`
+    const saved = storage(key)
+    if (saved) return Promise.resolve(saved)
+    return new Promise<string>((resolve) =>
+      setNameAsk({
+        initial: storage(LAST_NAME),
+        resolve: (name) => {
+          storage(key, name)
+          storage(LAST_NAME, name)
+          setNameAsk(null)
+          resolve(name)
+        },
+      }),
+    )
+  }, [])
+
   // Bumped whenever our role, the links or the acting owner change.
   const [version, force] = useState(0)
 
@@ -67,22 +86,24 @@ export function useCollab() {
       if (session.endedAt) throw new Error("This session has ended.")
       const isOwner = session.ownerId === me
       // The owner rejoining shares their own project again.
+      const name = session.askName ? await askName(session.id) : null
       const store = isOwner ? localStore() : new ProjectStore(false)
       await store.ready
-      attach(new CollabProvider(session, me, store))
+      attach(new CollabProvider(session, me, store, name))
     },
-    [me, attach],
+    [me, attach, askName],
   )
 
   const start = useCallback(
-    async (askName: boolean) => {
+    async (ask: boolean) => {
       if (!me) throw new Error("The collaboration server is not available.")
       const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
-      const { session } = await createSession(askName, roles)
+      const { session } = await createSession(ask, roles)
+      const name = ask ? await askName(session.id) : null
       await localStore().ready
-      attach(new CollabProvider(session, me, localStore()))
+      attach(new CollabProvider(session, me, localStore(), name))
     },
-    [me, attach],
+    [me, attach, askName],
   )
 
   const leave = useCallback(() => {
@@ -148,7 +169,20 @@ export function useCollab() {
     }
   }, [provider, leave])
 
-  return { me, available, provider, status, version, peers, start, join, leave, end }
+  return { me, available, provider, status, version, peers, nameAsk, start, join, leave, end }
+}
+
+const LAST_NAME = "pycode:name"
+
+/** Reads (or with a value, writes) localStorage, ignoring unavailable storage. */
+function storage(key: string, value?: string): string | null {
+  try {
+    if (value === undefined) return localStorage.getItem(key)
+    localStorage.setItem(key, value)
+  } catch {
+    // storage unavailable
+  }
+  return null
 }
 
 function dispose(p: CollabProvider | null) {

@@ -2,9 +2,10 @@ import type { Peer } from "@/hooks/use-collab"
 
 /**
  * y-monaco marks each remote selection with classes ending in the peer's
- * Yjs client id; this stylesheet colours them per person.
+ * Yjs client id; this stylesheet colours them per person. Names next to
+ * the cursors are optional (the colours say who is who).
  */
-export function RemoteCursorStyles({ peers }: { peers: Peer[] }) {
+export function RemoteCursorStyles({ peers, labels }: { peers: Peer[]; labels: boolean }) {
   const css = peers
     .filter((p) => !p.isMe)
     .map(({ clientId: id, user }) => {
@@ -12,7 +13,7 @@ export function RemoteCursorStyles({ peers }: { peers: Peer[] }) {
       return `
 .yRemoteSelection-${id} { background-color: ${user.color}40; }
 .yRemoteSelectionHead-${id} { border-left: 2px solid ${user.color}; }
-.yRemoteSelectionHead-${id}::after { content: ${label}; background: ${user.color}; }`
+${labels ? `.yRemoteSelectionHead-${id}::after { content: ${label}; background: ${user.color}; }` : ""}`
     })
     .join("\n")
   return <style>{BASE + css}</style>

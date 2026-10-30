@@ -286,11 +286,12 @@ export class CollabProvider {
   private readonly detach: (() => void)[] = []
   private readonly onAwareness: (changes: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void
 
-  constructor(session: SessionInfo, me: string, store: ProjectStore) {
+  /** `name`: what the others see (a generated one when the session does not ask). */
+  constructor(session: SessionInfo, me: string, store: ProjectStore, name?: string | null) {
     this.session = session
     this.store = store
     this.awareness = new Awareness(store.structure)
-    this.awareness.setLocalStateField("user", { id: me, name: nameFor(me), color: colorFor(me) } satisfies PeerUser)
+    this.awareness.setLocalStateField("user", { id: me, name: name || nameFor(me), color: colorFor(me) } satisfies PeerUser)
 
     for (const id of store.ids()) this.watch(id, store.doc(id))
     // Documents we may now read (a test shown, a folder given to our role): ask for them.

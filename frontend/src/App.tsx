@@ -1,4 +1,4 @@
-import { FolderTree, Moon, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { FolderTree, Moon, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -9,6 +9,7 @@ import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
+import { NameDialog } from "@/components/name-dialog"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
 import { Button } from "@/components/ui/button"
@@ -49,6 +50,7 @@ import { cn } from "@/lib/utils"
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
 const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "python-coder:theme"
+const LABELS_KEY = "pycode:cursor-labels"
 
 function loadTheme(): "dark" | "light" {
   try {
@@ -87,6 +89,20 @@ function Workspace() {
       // storage unavailable
     }
   }, [theme])
+  const [labels, setLabels] = useState(() => {
+    try {
+      return localStorage.getItem(LABELS_KEY) === "1"
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(LABELS_KEY, labels ? "1" : "0")
+    } catch {
+      // storage unavailable
+    }
+  }, [labels])
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -643,6 +659,20 @@ function Workspace() {
           >
             {lang === "ru" ? "RU" : "EN"}
           </button>
+          {provider && (
+            <button
+              onClick={() => setLabels((v) => !v)}
+              title={t(labels ? "footer.labelsOn" : "footer.labelsOff")}
+              aria-label={t(labels ? "footer.labelsOn" : "footer.labelsOff")}
+              aria-pressed={labels}
+              className={cn(
+                "flex size-[18px] items-center justify-center rounded border border-console-border hover:text-console-foreground",
+                labels && "bg-white/10 text-console-foreground",
+              )}
+            >
+              <Tag className="size-3" />
+            </button>
+          )}
           <button
             onClick={() => setTheme((v) => (v === "dark" ? "light" : "dark"))}
             title={t(theme === "dark" ? "theme.light" : "theme.dark")}
@@ -668,7 +698,8 @@ function Workspace() {
         onEnd={collab.end}
       />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
-      <RemoteCursorStyles peers={collab.peers} />
+      <RemoteCursorStyles peers={collab.peers} labels={labels} />
+      <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>
   )

@@ -177,6 +177,12 @@ const en = {
   "tree.protected": "Protected: only admins edit",
   "tree.hidden": "Hidden from students",
   "tree.err.reserved": "This name is reserved for access rules.",
+  "name.title": "Your name",
+  "name.text": "The others in this session will see it next to your cursor and in the members list.",
+  "name.placeholder": "e.g. Ivan",
+  "name.join": "Join",
+  "footer.labelsOn": "Hide names on cursors",
+  "footer.labelsOff": "Show names on cursors",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -345,6 +351,12 @@ const ru: Record<MessageKey, string> = {
   "tree.protected": "Защищён: правят только админы",
   "tree.hidden": "Скрыт от учеников",
   "tree.err.reserved": "Это имя занято под правила доступа.",
+  "name.title": "Ваше имя",
+  "name.text": "Его увидят остальные участники: рядом с курсором и в списке участников.",
+  "name.placeholder": "например, Иван",
+  "name.join": "Войти",
+  "footer.labelsOn": "Скрыть имена у курсоров",
+  "footer.labelsOff": "Показывать имена у курсоров",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

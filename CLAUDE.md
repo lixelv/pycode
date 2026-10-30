@@ -23,7 +23,7 @@ docker compose up -d --build              # whole stack; port comes from .env (P
 docker compose up -d --build frontend     # after frontend changes
 cd frontend && npx tsc -b                 # type-check (run after every change)
 cd frontend && npx oxlint src             # lint
-cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier)
+cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier, clang diagnostics)
 cd frontend && npm run dev                # dev server, proxies /api to :8090
 cd backend && gofmt -w . && go vet ./... && go test ./...
 ```
@@ -106,11 +106,18 @@ sites. Do not set it on a real server.
   - Follow: `hooks/use-follow.ts`; awareness `view {tab, file, top}`.
   - Freeze: `state.frozen`; `components/frost-overlay.tsx` animates `--frost`, which is registered with `@property`.
   - Drag and drop onto the page: `hooks/use-file-drop.ts` (admins); the tree rows carry `data-path` / `data-kind`.
+- **C++** (`.cpp .cc .cxx .h .hpp`, `languageOf` → `"cpp"`):
+  - Highlighting: Monaco's Monarch `cpp` grammar (`languages/definitions/cpp/register.js` in `monaco-core.ts`). No formatting, hints, tree or debugger.
+  - Clang is `@yowasp/clang` (LLVM 22 built for WebAssembly, sysroot `wasm32-wasip1`) in `src/workers/cpp.worker.ts`, driven by `cppClient` (`lib/cpp/client.ts`). The worker starts on the first lint or compile, never for a project without C++: the toolchain is 105 MB (≈27 MB gzipped), fetched and compiled once per worker. `useCppStatus()` drives the footer ("Loading C++ compiler…").
+  - Requests go one at a time; a lint still queued is replaced by a newer one. The project lies under `/project`, packages under `/packages/<repo>/…` (`CppPackageFiles`, `{files: {}, includes: []}` until C++ packages exist). Paths in the log are made relative (`/project/` cut).
+  - Lint: `clang++ -fsyntax-only -std=c++20 -fno-color-diagnostics -I<entry folder> -I/project [-I packages] /project/<entry>`, 500 ms after edits, on `projectFiles` (what a run sees) with the editor's text. `parseClangDiagnostics` (`lib/cpp/diagnostics.ts`) keeps the open file's problems; errors in a header show at the entry's `#include` line (clang's "In file included from"), notes are dropped. Markers have source `clang`; warnings are Monaco warnings and are not counted in the footer.
+  - Compile: `-std=c++20 -O1 -Wl,--max-memory=1073741824`, linked with `src/cpp/stub.cpp` (built once per worker). The sysroot has no exception runtime, so the stub's `__cxa_throw` prints g++'s "terminate called after throwing…" and aborts (`try/catch` compiles but never catches); its constructor does `chdir(getenv("POLYCODE_CWD"))`.
+  - Vite: `optimizeDeps.exclude` has `@yowasp/clang` (pre-bundling breaks its relative asset URLs), and `build.assetsInlineLimit` never inlines `.wasm`/`.tar` (a `data:` URL is refused by the CSP's `connect-src`). nginx serves `.tar` as `application/x-tar` and gzips it; `/assets/` is cache-first in the service worker.
 - **Analysis**: `src/workers/tools.worker.ts` is a second Pyodide instance for Jedi hints, the flowchart and the syntax tree. It is separate so that hints keep working while a program waits for input. The Python sources are in `src/python/`, the flowchart builder in `flow.py`.
 - **Console mirroring**: the console always renders from the doc. Whoever runs the program mirrors its output into the doc (`mirrorRun` in `App.tsx`). Others send `stdin`/`eof`/`stop` signals to `executorClient`.
 - **Packages**: before every run (and check) the runner loads the Pyodide packages the project's `.py` files import (`loadPackagesFromImports`), so `import numpy` works without the Packages tab. Other packages are installed with micropip from the Packages tab. Packages built for Pyodide come from cdn.jsdelivr.net, everything else from PyPI (both serve CORS). The resolved version is pinned after the first install.
 - **Caching**: `public/sw.js` serves `/pyodide/`, `/assets/`, Pyodide CDN wheels and PyPI wheels cache-first. Real Safari/Chrome only; the in-app preview browser cannot register service workers.
-- **Monaco** is slim (`src/lib/monaco-core.ts`): editor contributions, our Python, and the HTML/CSS/TypeScript services (see Web files); none of the other languages.
+- **Monaco** is slim (`src/lib/monaco-core.ts`): editor contributions, our Python, C++ highlighting, and the HTML/CSS/TypeScript services (see Web files); none of the other languages.
   - The Python tokenizer is our own (`src/lib/python-language.ts`): calls and `def` names → `function`, classes → `type`, brackets → `delimiter.*`.
   - The themes in `src/lib/monaco.ts` set bracket colours by depth (grey, yellow, purple, blue). Empty pairs stay grey via the `bracket-empty` decoration.
   - Models are created per file in `code-editor.tsx`, so model options such as `bracketColorizationOptions` must be set on the model, not only on the editor.

@@ -220,6 +220,20 @@ const en = {
   "check.hint": "Run the hidden tests for this file",
   "check.timeout": "The check took longer than 30 seconds and was stopped.",
   "check.failed": "The check could not run: {error}",
+  "debug.breakpoint": "Breakpoint: the debugger stops here",
+  "debug.btn": "Debug",
+  "debug.hint": "Run step by step: click line numbers to set breakpoints",
+  "debug.tab": "Debugger",
+  "debug.continue": "Continue (F5)",
+  "debug.next": "Step over (F10)",
+  "debug.step": "Step into (F11)",
+  "debug.return": "Step out (Shift+F11)",
+  "debug.stop": "Stop",
+  "debug.vars": "Variables",
+  "debug.stack": "Call stack",
+  "debug.running": "Running… it stops at the next breakpoint.",
+  "debug.none": "No variables yet.",
+  "debug.watching": "{name} is debugging",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -431,6 +445,20 @@ const ru: Record<MessageKey, string> = {
   "check.hint": "Запустить скрытые тесты для этого файла",
   "check.timeout": "Проверка шла дольше 30 секунд и была остановлена.",
   "check.failed": "Проверка не запустилась: {error}",
+  "debug.breakpoint": "Точка останова: отладчик остановится здесь",
+  "debug.btn": "Отладка",
+  "debug.hint": "Пошаговый запуск: щёлкните по номеру строки, чтобы поставить точку останова",
+  "debug.tab": "Отладчик",
+  "debug.continue": "Продолжить (F5)",
+  "debug.next": "Шаг (F10)",
+  "debug.step": "Войти (F11)",
+  "debug.return": "Выйти (Shift+F11)",
+  "debug.stop": "Стоп",
+  "debug.vars": "Переменные",
+  "debug.stack": "Стек вызовов",
+  "debug.running": "Выполняется… остановится на следующей точке останова.",
+  "debug.none": "Пока нет переменных.",
+  "debug.watching": "Отлаживает {name}",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

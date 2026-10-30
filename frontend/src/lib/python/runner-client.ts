@@ -1,10 +1,13 @@
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
+  DEBUG_COMMANDS,
+  DEBUG_GO,
   STDIN_EOF,
   STDIN_INTERRUPT,
   STDIN_MAX_BYTES,
   STDIN_READY,
   type CheckResult,
+  type DebugCommand,
   type InstallResult,
   type ProjectFiles,
   type RunnerEvent,
@@ -73,12 +76,20 @@ export class RunnerClient {
     return this.readyPromise
   }
 
-  async run(files: ProjectFiles, entry: string, specs: string[]): Promise<number> {
+  /** Runs `entry`; with `breakpoints` (path -> lines), under the debugger. */
+  async run(files: ProjectFiles, entry: string, specs: string[], breakpoints?: Record<string, number[]>): Promise<number> {
     await this.ready()
     const id = this.nextId++
     this.interruptFlag[0] = 0
-    this.worker!.postMessage({ type: "run", id, files, entry, specs })
+    this.worker!.postMessage({ type: "run", id, files, entry, specs, breakpoints })
     return id
+  }
+
+  /** Tells the paused debugger how to go on. */
+  debug(command: DebugCommand) {
+    Atomics.store(this.control, 1, DEBUG_COMMANDS.indexOf(command))
+    Atomics.store(this.control, 0, DEBUG_GO)
+    Atomics.notify(this.control, 0)
   }
 
   async install(specs: string[]): Promise<InstallResult[]> {

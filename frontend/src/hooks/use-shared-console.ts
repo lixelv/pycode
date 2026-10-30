@@ -4,6 +4,7 @@ import type * as Y from "yjs"
 
 import { readRun, readTerminal, sharedRun, sharedTerminal, type SharedRunState } from "@/lib/collab/doc"
 import type { Chunk } from "@/hooks/use-runner"
+import type { DebugState } from "@/workers/protocol"
 
 export interface SharedConsole extends SharedRunState {
   chunks: Chunk[]
@@ -11,6 +12,9 @@ export interface SharedConsole extends SharedRunState {
   draft: string
   /** The person running the program left without finishing. */
   executorGone: boolean
+  /** The run is under the debugger; where it stopped (null while it runs). */
+  debugging: boolean
+  debug: DebugState | null
 }
 
 /**
@@ -23,7 +27,15 @@ export function useSharedConsole(doc: Y.Doc, awareness: Awareness | null): Share
     const active = run.status === "running" || run.status === "waiting" || run.status === "connecting"
     const executorGone =
       !!awareness && active && run.executorClient !== null && run.executorClient !== doc.clientID && !awareness.getStates().has(run.executorClient)
-    return { ...run, chunks: readTerminal(doc), draft: (sharedRun(doc).get("draft") as string) ?? "", executorGone }
+    const shared = sharedRun(doc)
+    return {
+      ...run,
+      chunks: readTerminal(doc),
+      draft: (shared.get("draft") as string) ?? "",
+      executorGone,
+      debugging: !!shared.get("debugging"),
+      debug: (shared.get("debug") as DebugState | null) ?? null,
+    }
   }
   const [state, setState] = useState<SharedConsole>(read)
 

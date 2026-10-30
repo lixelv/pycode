@@ -26,7 +26,9 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
-def run_main(path: str = "main.py") -> int:
+def run_main(path: str = "main.py", debugger=None) -> int:
+    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it."""
+    import bdb
     import os
 
     # Like `python path`: the script's folder (and the project root) are importable,
@@ -50,7 +52,13 @@ def run_main(path: str = "main.py") -> int:
     sys.argv = [path]
     namespace = {"__name__": "__main__", "__file__": path, "__builtins__": builtins}
     try:
-        exec(code, namespace)
+        if debugger:
+            debugger.run(code, namespace)
+        else:
+            exec(code, namespace)
+    except bdb.BdbQuit:
+        print("\nStopped", file=sys.stderr)
+        return 130
     except SystemExit as exc:
         code = exc.code
         if code is None:

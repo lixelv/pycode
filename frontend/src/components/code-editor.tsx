@@ -33,6 +33,10 @@ interface CodeEditorProps {
   onRun: () => void
   onSave: () => void
   onMount: (editor: EditorInstance) => void
+  /** Python only: breakpoint lines (click the gutter to toggle) and where the debugger stopped. */
+  breakpoints?: number[]
+  onToggleBreakpoint?: (line: number) => void
+  debugLine?: number | null
 }
 
 let modelCounter = 0
@@ -50,15 +54,44 @@ export function CodeEditor({
   onRun,
   onSave,
   onMount,
+  breakpoints,
+  onToggleBreakpoint,
+  debugLine,
 }: CodeEditorProps) {
   const { t } = useI18n()
   const [editor, setEditor] = useState<EditorInstance | null>(null)
   const [text, setText] = useState("")
   // Keep the latest callbacks without re-registering Monaco commands.
-  const handlers = useRef({ onRun, onCursor, onSave, onText })
+  const handlers = useRef({ onRun, onCursor, onSave, onText, onToggleBreakpoint })
   useEffect(() => {
-    handlers.current = { onRun, onCursor, onSave, onText }
-  }, [onRun, onCursor, onSave, onText])
+    handlers.current = { onRun, onCursor, onSave, onText, onToggleBreakpoint }
+  }, [onRun, onCursor, onSave, onText, onToggleBreakpoint])
+
+  // Breakpoints (red dots in the gutter) and the line the debugger stopped on.
+  useEffect(() => {
+    if (!editor) return
+    const marks = editor.createDecorationsCollection()
+    const apply = () => {
+      if (!editor.getModel()) return
+      marks.set([
+        ...(breakpoints ?? []).map((line) => ({
+          range: new monaco.Range(line, 1, line, 1),
+          options: { glyphMarginClassName: "bp-glyph", glyphMarginHoverMessage: { value: t("debug.breakpoint") } },
+        })),
+        ...(debugLine
+          ? [{ range: new monaco.Range(debugLine, 1, debugLine, 1), options: { isWholeLine: true, className: "debug-line", glyphMarginClassName: "debug-arrow" } }]
+          : []),
+      ])
+      if (debugLine) editor.revealLineInCenterIfOutsideViewport(debugLine)
+    }
+    apply()
+    // Each file has its own model: put the marks back when it changes.
+    const sub = editor.onDidChangeModel(apply)
+    return () => {
+      sub.dispose()
+      marks.clear()
+    }
+  }, [editor, breakpoints, debugLine, t])
 
   // The file's shared text. A reset or an opened archive puts a new file
   // (a new document) under the same path: follow it, or the editor would
@@ -173,6 +206,11 @@ export function CodeEditor({
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => handlers.current.onRun())
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => handlers.current.onSave())
     instance.onDidChangeCursorPosition((e) => handlers.current.onCursor(e.position.lineNumber, e.position.column))
+    instance.onMouseDown((e) => {
+      const kind = e.target.type
+      if (kind !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && kind !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS) return
+      if (e.target.position) handlers.current.onToggleBreakpoint?.(e.target.position.lineNumber)
+    })
     instance.focus()
     setEditor(instance)
     onMount(instance)
@@ -191,6 +229,7 @@ export function CodeEditor({
         lineHeight: 22,
         fontLigatures: true,
         minimap: { enabled: false },
+        glyphMargin: languageOf(path) === "python",
         padding: { top: 16, bottom: 16 },
         scrollBeyondLastLine: false,
         smoothScrolling: true,

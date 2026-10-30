@@ -3,14 +3,19 @@
 // program (waiting for input(), an endless loop) never freezes the page.
 import packagesSrc from "@/python/packages.py?raw"
 import checkerSrc from "@/python/checker.py?raw"
+import debuggerSrc from "@/python/debugger.py?raw"
 import runnerSrc from "@/python/runner.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
 import {
+  DEBUG_COMMANDS,
+  DEBUG_WAITING,
   STDIN_EOF,
   STDIN_INTERRUPT,
   STDIN_WAITING,
   type CheckResult,
+  type DebugCommand,
+  type DebugState,
   type InstallResult,
   type ProjectFiles,
   type RunnerEvent,
@@ -101,7 +106,7 @@ function countOutput(n: number) {
 
 async function boot() {
   py = await bootPyodide()
-  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc })
+  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
@@ -148,7 +153,21 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
 
 // ---- run ------------------------------------------------------------------
 
-async function run(id: number, files: ProjectFiles, entry: string, specs: string[]) {
+/** The debugger stopped: show where, and block until the page says how to go on. */
+function pause(state: string): DebugCommand {
+  if (!buffers) return "continue"
+  stdout.flush()
+  stderr.flush()
+  const { control } = buffers
+  Atomics.store(control, 0, DEBUG_WAITING)
+  post({ type: "paused", state: JSON.parse(state) as DebugState })
+  Atomics.wait(control, 0, DEBUG_WAITING)
+  post({ type: "paused", state: null })
+  if (Atomics.load(control, 0) === STDIN_INTERRUPT) return "stop"
+  return DEBUG_COMMANDS[Atomics.load(control, 1)] ?? "continue"
+}
+
+async function run(id: number, files: ProjectFiles, entry: string, specs: string[], breakpoints?: Record<string, number[]>) {
   if (!py || !buffers) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) {
@@ -165,7 +184,11 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   const started = performance.now()
   let exitCode = 1
   try {
-    exitCode = runner.run_main(entry) as number
+    if (breakpoints) {
+      const points = py.toPy(breakpoints)
+      exitCode = py.pyimport("pycoder.debugger").run_debug(entry, points, pause) as number
+      points.destroy()
+    } else exitCode = runner.run_main(entry) as number
   } catch (err) {
     stderr.flush()
     post({ type: "stderr", data: `\n${String(err)}\n` })
@@ -240,7 +263,7 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
         post({ type: "installed", id: req.id, results: req.specs.map((spec) => ({ spec, error: String(err) })) })
       }
     } else if (req.type === "run") {
-      await run(req.id, req.files, req.entry, req.specs)
+      await run(req.id, req.files, req.entry, req.specs, req.breakpoints)
     } else if (req.type === "check") {
       await check(req.id, req.files, req.solution, req.test, req.specs)
     }

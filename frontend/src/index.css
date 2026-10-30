@@ -334,3 +334,24 @@ body {
 .doc-page .pptx-preview-wrapper {
   background: transparent !important;
 }
+
+/* Debugger: breakpoints in the gutter and the line the program stopped on. */
+.bp-glyph::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 6px 0 0 4px;
+  border-radius: 999px;
+  background: #ff6166;
+}
+.debug-arrow::after {
+  content: "";
+  display: block;
+  margin: 5px 0 0 3px;
+  border: 6px solid transparent;
+  border-left: 10px solid #f5d90a;
+}
+.debug-line {
+  background: rgb(245 217 10 / 0.16);
+}

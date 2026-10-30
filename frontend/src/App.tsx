@@ -1,4 +1,4 @@
-import { Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -11,6 +11,7 @@ import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer, docKindOf } from "@/components/doc-viewer"
 import { CheckResults, type CheckState } from "@/components/check-results"
+import { DebugPanel } from "@/components/debug-panel"
 import { FileViewer } from "@/components/file-viewer"
 import { WebPreview, type WebRun } from "@/components/web-preview"
 import { Presentation, type PresentationState } from "@/components/presentation"
@@ -31,7 +32,7 @@ import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
-import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedTerminal } from "@/lib/collab/doc"
+import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedRun, sharedTerminal } from "@/lib/collab/doc"
 import {
   addFiles,
   createDir,
@@ -59,6 +60,7 @@ import { fileAccess, isTest } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { buildPage, scriptPage } from "@/lib/web-preview"
+import type { DebugCommand } from "@/workers/protocol"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
 import { roleLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
@@ -68,6 +70,7 @@ const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "python-coder:theme"
 const LABELS_KEY = "pycode:cursor-labels"
 const MD_MODE_KEY = "pycode:md-mode"
+const BREAKPOINTS_KEY = "pycode:breakpoints"
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type MarkdownMode = "code" | "split" | "preview"
 
@@ -232,6 +235,7 @@ function Workspace() {
     if (event.type === "output") appendTerminal(d, event.kind, event.text)
     else if (event.type === "status") setRunStatus(d, event.status)
     else if (event.type === "exit") setRunStatus(d, "finished", event.exit)
+    else if (event.type === "debug") sharedRun(d).set("debug", event.state)
   }, [])
 
   const runner = useRunner({ onRateLimited: (message) => toast.warning(message), onEvent: mirrorRun })
@@ -287,7 +291,57 @@ function Workspace() {
 
   const runnable = language === "python" || language === "html" || language === "javascript"
 
-  const run = useCallback(() => {
+  // ---- debugger -------------------------------------------------------------------
+  // Breakpoints are this browser's own (not shared): path -> lines.
+  const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(BREAKPOINTS_KEY) ?? "{}")
+    } catch {
+      return {}
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(BREAKPOINTS_KEY, JSON.stringify(breakpoints))
+    } catch {
+      // storage unavailable
+    }
+  }, [breakpoints])
+  const toggleBreakpoint = useCallback(
+    (line: number) =>
+      setBreakpoints((all) => {
+        const lines = all[active] ?? []
+        return { ...all, [active]: lines.includes(line) ? lines.filter((l) => l !== line) : [...lines, line].sort((a, b) => a - b) }
+      }),
+    [active],
+  )
+  const debugCommand = useCallback(
+    (command: DebugCommand) => {
+      if (command === "stop") stop()
+      else runner.debug(command)
+    },
+    [stop, runner],
+  )
+  // The one debugging follows the program into other files.
+  const pausedAt = sharedConsole.debug
+  useEffect(() => {
+    if (pausedAt && amExecutor && pausedAt.file !== active && files.includes(pausedAt.file)) setActive(pausedAt.file)
+  }, [pausedAt, amExecutor, active, files])
+  // F5 / F10 / F11 / Shift+F11 while stopped.
+  useEffect(() => {
+    if (!pausedAt || !amExecutor) return
+    const onKey = (e: KeyboardEvent) => {
+      const command: DebugCommand | null =
+        e.key === "F5" ? "continue" : e.key === "F10" ? "next" : e.key === "F11" ? (e.shiftKey ? "return" : "step") : null
+      if (!command) return
+      e.preventDefault()
+      debugCommand(command)
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [pausedAt, amExecutor, debugCommand])
+
+  const startRun = useCallback((debug: boolean) => {
     if (!activeExists) return
     setView("editor")
     if (language !== "python" && language !== "html" && language !== "javascript") {
@@ -304,9 +358,13 @@ function Workspace() {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
     resetRun(doc, collab.me ?? "local")
+    sharedRun(doc).set("debugging", debug && language === "python")
     if (language === "python") {
       setWebRun(null)
-      void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs))
+      if (debug) setLowerTab("debug")
+      // Breakpoints of the project's files (an empty set still pauses on line 1).
+      const points = debug ? Object.fromEntries(Object.entries(breakpoints).filter(([p]) => allFiles.includes(p))) : undefined
+      void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs, points))
       return
     }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
@@ -318,10 +376,12 @@ function Workspace() {
       setWebRun({ path: active, page, token, visible: language === "html" })
       setLowerTab(language === "html" ? "web" : "console")
     })
-  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t])
+  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles])
+  const run = useCallback(() => startRun(false), [startRun])
+  const debugRun = useCallback(() => startRun(true), [startRun])
 
   const [webRun, setWebRun] = useState<WebRun | null>(null)
-  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests">("console")
+  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
   const webStarted = useRef(0)
   const webOutput = useCallback(
     (kind: "stdout" | "stderr", text: string) => {
@@ -389,6 +449,7 @@ function Workspace() {
   const lowerTabList = [
     ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),
     ...(check ? [["tests", t("check.tab")] as const] : []),
+    ...(sharedConsole.debugging ? [["debug", t("debug.tab")] as const] : []),
     ["console", t("console.title")] as const,
   ]
   const lowerTabs = lowerTabList.length > 1 ? (
@@ -774,12 +835,22 @@ function Workspace() {
                 <TooltipContent>{canCheck ? t("check.hint") : t("check.noTeacher")}</TooltipContent>
               </Tooltip>
             )}
+            {language === "python" && !(consoleActive && canRun) && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={debugRun} disabled={!canRun || !activeExists}>
+                    <Bug /> <span className="hidden sm:inline">{t("debug.btn")}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("debug.hint")}</TooltipContent>
+              </Tooltip>
+            )}
             {consoleActive && canRun && language === "python" ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
               </Button>
             ) : (
-              <Button size="sm" onClick={run} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
+              <Button size="sm" onClick={() => run()} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
                 <Play className="fill-current" /> {t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>
@@ -838,6 +909,9 @@ function Workspace() {
             <div className={cn("relative min-h-0 min-w-0 flex-1", markdownMode === "preview" && "hidden")}>
               <CodeEditor
                 store={store}
+                breakpoints={language === "python" ? (breakpoints[active] ?? []) : undefined}
+                onToggleBreakpoint={language === "python" ? toggleBreakpoint : undefined}
+                debugLine={sharedConsole.debugging && consoleActive && sharedConsole.debug?.file === active ? sharedConsole.debug.line : null}
                 path={active}
                 available={activeExists}
                 awareness={awareness}
@@ -902,13 +976,32 @@ function Workspace() {
                         tabs={lowerTabs}
                         onOutput={webOutput}
                         onLoad={webLoaded}
-                        onReload={run}
+                        onReload={() => run()}
                         onClose={() => setConsoleOpen(false)}
                       />
                     </div>
                   )}
                   {check && lowerTab === "tests" && <CheckResults check={check} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
-                  <div className={cn("h-full", ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests")) && "hidden")}>
+                  {sharedConsole.debugging && lowerTab === "debug" && (
+                    <DebugPanel
+                      state={consoleActive ? sharedConsole.debug : null}
+                      canControl={amExecutor && consoleActive}
+                      tabs={lowerTabs}
+                      onCommand={debugCommand}
+                      onOpen={(file, line) => {
+                        if (!files.includes(file)) return
+                        setActive(file)
+                        setTimeout(() => editor.current?.revealLineInCenter(line), 80)
+                      }}
+                      onClose={() => setConsoleOpen(false)}
+                    />
+                  )}
+                  <div
+                    className={cn(
+                      "h-full",
+                      ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests") || (sharedConsole.debugging && lowerTab === "debug")) && "hidden",
+                    )}
+                  >
                   <ConsolePanel
                     tabs={lowerTabs}
                     status={consoleView.status}

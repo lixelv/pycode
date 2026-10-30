@@ -2,8 +2,13 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import "./index.css"
-import "./lib/monaco"
-import App from "./App.tsx"
+import { migrateStorage } from "./lib/storage"
+
+// Old browser data must be moved before anything reads or opens it, so the
+// rest of the app (which reads localStorage and IndexedDB at load) comes after.
+await migrateStorage()
+await import("./lib/monaco")
+const { default: App } = await import("./App.tsx")
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

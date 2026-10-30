@@ -54,6 +54,7 @@ sites. Do not set it on a real server.
   - Text docs are created and dropped by following `structure.files`.
   - Persistence: `y-indexeddb`, one database per document (`polycode:<docId>`).
   - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`).
+  - Old browser data is moved by `migrateStorage()` (`lib/storage.ts`), which `main.tsx` awaits before importing the app (i18n reads localStorage at load): `pycode:*` and `python-coder:*` keys (except `python-coder:code`/`packages`, read by the legacy migration) become `polycode:*`, and `pycode:*` IndexedDB databases are copied to `polycode:*` and then deleted. An existing new name is never overwritten.
   - The editor follows the file's document under its path (a reset or an opened archive puts new ids under the same paths).
 - **Binary files** (`lib/project/blobs.ts`):
   - Bytes are kept by sha256 in the IndexedDB database `polycode:blobs`; the project holds only the metadata.

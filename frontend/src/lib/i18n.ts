@@ -210,6 +210,16 @@ const en = {
   "web.title": "Page preview",
   "web.reload": "Run again",
   "web.preview": "Preview",
+  "check.btn": "Check",
+  "check.title": "Check results",
+  "check.tab": "Tests",
+  "check.summary": "{passed} of {total} passed",
+  "check.running": "Checking… (the first time loads Python)",
+  "check.none": "The test file has no test_ functions.",
+  "check.noTeacher": "The tests run at the teacher's: an admin must be online",
+  "check.hint": "Run the hidden tests for this file",
+  "check.timeout": "The check took longer than 30 seconds and was stopped.",
+  "check.failed": "The check could not run: {error}",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -411,6 +421,16 @@ const ru: Record<MessageKey, string> = {
   "web.title": "Просмотр страницы",
   "web.reload": "Запустить заново",
   "web.preview": "Страница",
+  "check.btn": "Проверить",
+  "check.title": "Результаты проверки",
+  "check.tab": "Тесты",
+  "check.summary": "пройдено {passed} из {total}",
+  "check.running": "Проверяем… (в первый раз загружается Python)",
+  "check.none": "В файле тестов нет функций test_.",
+  "check.noTeacher": "Тесты запускаются у учителя: нужен администратор в сети",
+  "check.hint": "Запустить скрытые тесты для этого файла",
+  "check.timeout": "Проверка шла дольше 30 секунд и была остановлена.",
+  "check.failed": "Проверка не запустилась: {error}",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

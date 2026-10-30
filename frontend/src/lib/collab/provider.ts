@@ -13,6 +13,7 @@ import { docAccess, fileAccess, type Level, type Member } from "@/lib/project/ac
 import { getBlob, putBlob, sha256 } from "@/lib/project/blobs"
 import { metasOf, rulesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
+import type { CheckResult } from "@/workers/protocol"
 
 import { colorFor, nameFor } from "./identity"
 
@@ -42,6 +43,9 @@ export type Signal =
   | { type: "stdin"; to: number; text: string }
   | { type: "eof"; to: number }
   | { type: "stop"; to: number }
+  /** Asks an admin to check a solution against its hidden tests. */
+  | { type: "check"; to: number; from: number; path: string }
+  | { type: "check-result"; to: number; path: string; results: CheckResult[]; error?: string }
 
 export type ProviderStatus = "connecting" | "synced" | "offline" | "ended"
 export type LinkMode = "direct" | "relay"
@@ -68,7 +72,8 @@ type Events = {
   status: (status: ProviderStatus) => void
   /** The owner reset the session's project (announced by the server). */
   reset: () => void
-  signal: (signal: Signal) => void
+  /** A signal addressed to us, with who sent it (their role). */
+  signal: (signal: Signal, from: Member) => void
   /** Links, roles or the acting owner changed. */
   links: () => void
 }
@@ -353,6 +358,16 @@ export class CollabProvider {
     return [...(this.links.get(this.owner)?.clients ?? [])]
   }
 
+  /** Whom to ask for a check: ourselves if admin, else the acting owner, else the earliest admin. */
+  checker(): number | null {
+    if (this.isAdmin) return this.clientID
+    const admins = [...this.links.values()]
+      .filter((l) => l.info.level === "admin")
+      .sort((a, b) => Number(b.info.peer === this.owner) - Number(a.info.peer === this.owner) || a.info.peer - b.info.peer)
+    for (const link of admins) for (const client of link.clients) return client
+    return null
+  }
+
   private access(member: Member, docId: string) {
     return docAccess(member, docId, rulesOf(this.store))
   }
@@ -582,7 +597,7 @@ export class CollabProvider {
     } else if (kind === MSG_SIGNAL) {
       if (this.access(link.info, "runtime") !== "write") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
-      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal))
+      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, link.info))
     }
   }
 

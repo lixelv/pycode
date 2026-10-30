@@ -2,6 +2,7 @@
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
 import packagesSrc from "@/python/packages.py?raw"
+import checkerSrc from "@/python/checker.py?raw"
 import runnerSrc from "@/python/runner.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
@@ -9,6 +10,7 @@ import {
   STDIN_EOF,
   STDIN_INTERRUPT,
   STDIN_WAITING,
+  type CheckResult,
   type InstallResult,
   type ProjectFiles,
   type RunnerEvent,
@@ -99,7 +101,7 @@ function countOutput(n: number) {
 
 async function boot() {
   py = await bootPyodide()
-  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc })
+  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
@@ -156,18 +158,7 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   }
 
   const runner = py.pyimport("pycoder.runner")
-  const text: Record<string, string> = {}
-  for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
-  const filesPy = py.toPy(text)
-  runner.write_project(filesPy)
-  filesPy.destroy()
-  // Binary files (images, data) go next to the code as they are.
-  for (const [path, content] of Object.entries(files)) {
-    if (typeof content === "string") continue
-    const full = `/home/pyodide/project/${path}`
-    py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")))
-    py.FS.writeFile(full, content)
-  }
+  writeProject(files)
   outputBytes = 0
   outputLimited = false
   buffers.interrupt[0] = 0
@@ -183,6 +174,45 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   stderr.flush()
   buffers.interrupt[0] = 0
   post({ type: "exit", id, code: exitCode, duration: (performance.now() - started) / 1000, reason: outputLimited ? "output_limit" : null })
+}
+
+/** Lays the project out in /home/pyodide/project (texts and binary files). */
+function writeProject(files: ProjectFiles) {
+  if (!py) return
+  const text: Record<string, string> = {}
+  for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
+  const filesPy = py.toPy(text)
+  py.pyimport("pycoder.runner").write_project(filesPy)
+  filesPy.destroy()
+  // Binary files (images, data) go next to the code as they are.
+  for (const [path, content] of Object.entries(files)) {
+    if (typeof content === "string") continue
+    const full = `/home/pyodide/project/${path}`
+    py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")))
+    py.FS.writeFile(full, content)
+  }
+}
+
+// ---- check ------------------------------------------------------------------
+
+/**
+ * Runs an admin's tests against a student's solution. This worker is made
+ * for one check and thrown away; the student's code gets no network and no
+ * browser storage here (it runs in the admin's browser).
+ */
+async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[]) {
+  if (!py) return
+  const missing = specs.filter((s) => !installed.has(s))
+  if (missing.length) await installPackages(missing)
+  for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts"]) {
+    Object.defineProperty(self, name, { value: undefined, configurable: false, writable: false })
+  }
+  writeProject(files)
+  const checker = py.pyimport("pycoder.checker")
+  const results = checker.run_tests("/home/pyodide/project", solution, test)
+  const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
+  results.destroy()
+  post({ type: "checked", id, results: list })
 }
 
 // ---- messages -------------------------------------------------------------
@@ -211,6 +241,8 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
       }
     } else if (req.type === "run") {
       await run(req.id, req.files, req.entry, req.specs)
+    } else if (req.type === "check") {
+      await check(req.id, req.files, req.solution, req.test, req.specs)
     }
   })
 }

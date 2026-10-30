@@ -30,6 +30,7 @@ export type RunnerRequest =
   | { type: "init"; buffers: RunnerBuffers }
   | { type: "install"; id: number; specs: string[] }
   | { type: "run"; id: number; files: ProjectFiles; entry: string; specs: string[] }
+  | { type: "check"; id: number; files: ProjectFiles; solution: string; test: string; specs: string[] }
 
 export type RunnerEvent =
   | { type: "ready"; python: string }
@@ -39,6 +40,14 @@ export type RunnerEvent =
   | { type: "input_request" }
   | { type: "installed"; id: number; results: InstallResult[] }
   | { type: "exit"; id: number; code: number; duration: number; reason: "output_limit" | null }
+  | { type: "checked"; id: number; results: CheckResult[] }
+
+/** One test of an automatic check (python/checker.py). */
+export interface CheckResult {
+  name: string
+  ok: boolean
+  message: string
+}
 
 // ---- tools worker ---------------------------------------------------------
 

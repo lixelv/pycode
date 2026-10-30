@@ -1,4 +1,4 @@
-import { Code2, Columns2, Eye, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -10,6 +10,7 @@ import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer, docKindOf } from "@/components/doc-viewer"
+import { CheckResults, type CheckState } from "@/components/check-results"
 import { FileViewer } from "@/components/file-viewer"
 import { WebPreview, type WebRun } from "@/components/web-preview"
 import { Presentation, type PresentationState } from "@/components/presentation"
@@ -49,9 +50,13 @@ import {
   openArchive,
   PROJECT_LIMIT,
   projectFiles,
+  rulesOf,
   stateOf,
+  textOf,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
+import { fileAccess, isTest } from "@/lib/project/access"
+import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
@@ -316,7 +321,7 @@ function Workspace() {
   }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t])
 
   const [webRun, setWebRun] = useState<WebRun | null>(null)
-  const [lowerTab, setLowerTab] = useState<"console" | "web">("console")
+  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests">("console")
   const webStarted = useRef(0)
   const webOutput = useCallback(
     (kind: "stdout" | "stderr", text: string) => {
@@ -328,14 +333,67 @@ function Workspace() {
     if (readRun(doc).executorClient !== doc.clientID) return
     setRunStatus(doc, "finished", { code: 0, duration: (performance.now() - webStarted.current) / 1000, reason: null })
   }, [doc])
-  const lowerTabs = webRun?.visible ? (
+  // ---- automatic checks: name.py against name.test.py, run in an admin's browser ----
+  const [check, setCheck] = useState<CheckState | null>(null)
+  const testPath = language === "python" && !isTest(active) ? active.replace(/\.py$/, ".test.py") : null
+  const hasTest = !!testPath && allFiles.includes(testPath)
+  const canCheck = !provider || provider.isAdmin || provider.adminOnline
+
+  /** Runs the tests of `path` here (we are an admin, or alone). */
+  const checkHere = useCallback(
+    async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
+      const test = textOf(store, path.replace(/\.py$/, ".test.py"))?.toString()
+      if (test === undefined) return { results: null, error: t("check.failed", { error: "no tests" }) }
+      try {
+        const files = await projectFiles(store, provider)
+        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+      } catch (err) {
+        const message = (err as Error).message
+        return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }
+      }
+    },
+    [store, provider, pkgs.activeSpecs, t],
+  )
+
+  const startCheck = useCallback(async () => {
+    if (!hasTest || !canRun) return
+    setConsoleOpen(true)
+    setLowerTab("tests")
+    setCheck({ path: active, results: null })
+    const to = provider?.checker()
+    if (provider && to !== provider.clientID) {
+      if (to === null || to === undefined) setCheck({ path: active, results: null, error: t("check.noTeacher") })
+      else provider.signal({ type: "check", to, from: provider.clientID, path: active })
+      return
+    }
+    setCheck({ path: active, ...(await checkHere(active)) })
+  }, [hasTest, canRun, active, provider, checkHere, t])
+
+  // Students' requests reach the admin chosen to check; the result goes back to them only.
+  useEffect(() => {
+    if (!provider) return
+    return provider.on("signal", (signal, from) => {
+      if (signal.type === "check-result") {
+        setCheck({ path: signal.path, results: signal.results, error: signal.error })
+        return
+      }
+      if (signal.type !== "check" || !provider.isAdmin) return
+      // Only for a solution the student may see.
+      if (fileAccess(from, signal.path, rulesOf(store)) === "none") return
+      void checkHere(signal.path).then((r) =>
+        provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error }),
+      )
+    })
+  }, [provider, store, checkHere])
+
+  const lowerTabList = [
+    ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),
+    ...(check ? [["tests", t("check.tab")] as const] : []),
+    ["console", t("console.title")] as const,
+  ]
+  const lowerTabs = lowerTabList.length > 1 ? (
     <nav role="tablist" className="inline-flex rounded-md border border-console-border p-0.5">
-      {(
-        [
-          ["web", t("web.preview")],
-          ["console", t("console.title")],
-        ] as const
-      ).map(([value, label]) => (
+      {lowerTabList.map(([value, label]) => (
         <button
           key={value}
           role="tab"
@@ -704,6 +762,18 @@ function Workspace() {
               />
             )}
             <ShareButton live={!!provider} peers={collab.peers} role={provider?.member.role} onClick={() => setShareOpen(true)} />
+            {hasTest && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button variant="outline" size="sm" onClick={() => void startCheck()} disabled={!canRun || !canCheck || (!!check && !check.results && !check.error)}>
+                      <FlaskConical /> <span className="hidden sm:inline">{t("check.btn")}</span>
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{canCheck ? t("check.hint") : t("check.noTeacher")}</TooltipContent>
+              </Tooltip>
+            )}
             {consoleActive && canRun && language === "python" ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
@@ -837,7 +907,8 @@ function Workspace() {
                       />
                     </div>
                   )}
-                  <div className={cn("h-full", webRun?.visible && lowerTab === "web" && "hidden")}>
+                  {check && lowerTab === "tests" && <CheckResults check={check} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
+                  <div className={cn("h-full", ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests")) && "hidden")}>
                   <ConsolePanel
                     tabs={lowerTabs}
                     status={consoleView.status}

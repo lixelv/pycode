@@ -3,6 +3,7 @@
 // Heavy files are downloaded once and then always served from the cache:
 //   - the Python runtime (/pyodide/v<version>/…) and hashed build assets
 //     (/assets/…, including Ruff's WASM and clang's 105 MB) — their URLs change when they change;
+//   - C++ packages (jsDelivr, a version in the URL);
 //   - Pyodide's packages (cdn.jsdelivr.net/pyodide/v<version>/…) and PyPI
 //     wheels (files.pythonhosted.org) — immutable by URL as well.
 // PyPI's package index is served from the cache and refreshed in the
@@ -13,6 +14,9 @@ const IMMUTABLE = [
   (url) => url.origin === self.location.origin && (url.pathname.startsWith("/pyodide/") || url.pathname.startsWith("/assets/")),
   (url) => url.hostname === "cdn.jsdelivr.net" && url.pathname.startsWith("/pyodide/"),
   (url) => url.hostname === "files.pythonhosted.org",
+  // C++ packages (GitHub through jsDelivr): only a concrete version is immutable.
+  (url) => url.hostname === "cdn.jsdelivr.net" && url.pathname.startsWith("/gh/") && url.pathname.includes("@"),
+  (url) => url.hostname === "data.jsdelivr.com" && url.pathname.startsWith("/v1/packages/gh/") && url.pathname.includes("@"),
 ]
 const REVALIDATE = [(url) => url.hostname === "pypi.org"]
 

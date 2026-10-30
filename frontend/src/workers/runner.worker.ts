@@ -31,8 +31,14 @@ const MAX_OUTPUT_BYTES = 1_000_000
  * program's HTTP requests (requests / urllib3 / pyodide.http) go through the
  * backend's proxy. Package downloads and our own origin stay direct.
  */
-const DIRECT = new Set([self.location.origin, "https://cdn.jsdelivr.net", "https://pypi.org", "https://files.pythonhosted.org"])
+const DIRECT = new Set(["https://cdn.jsdelivr.net", "https://pypi.org", "https://files.pythonhosted.org"])
 
+/*
+ * The program may be someone else's (a teacher runs a student's file), and
+ * this worker shares the app's origin and cookie. So of our own site it
+ * reaches only the Python runtime and the proxy: not the API (codes, roles),
+ * not the session socket, not the browser's storage (the project).
+ */
 function viaProxy(raw: string | URL): string {
   let url: URL
   try {
@@ -40,8 +46,23 @@ function viaProxy(raw: string | URL): string {
   } catch {
     return String(raw)
   }
+  if (url.origin === self.location.origin) {
+    if (url.pathname.startsWith("/pyodide/") || url.pathname === "/api/proxy") return String(raw)
+    throw new TypeError(`Programs cannot request ${url.pathname} of this site.`)
+  }
   if ((url.protocol !== "http:" && url.protocol !== "https:") || DIRECT.has(url.origin)) return String(raw)
   return `${self.location.origin}/api/proxy?url=${encodeURIComponent(url.href)}`
+}
+
+/**
+ * Replaces a global everywhere it can be found (the worker and its
+ * prototypes), so the original is out of reach. (Configurable, so a check
+ * can remove it later; deleting it brings nothing back.)
+ */
+function replaceGlobal(name: string, value: unknown) {
+  for (let o: object | null = self; o; o = Object.getPrototypeOf(o)) {
+    if (Object.getOwnPropertyDescriptor(o, name)) Object.defineProperty(o, name, { value, configurable: true, writable: false })
+  }
 }
 
 // urllib3 (used by requests) starts its own nested Worker for streaming
@@ -50,10 +71,15 @@ function viaProxy(raw: string | URL): string {
 delete (self as { Worker?: unknown }).Worker
 
 const directFetch = self.fetch.bind(self)
-self.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-  if (input instanceof Request) return directFetch(new Request(viaProxy(input.url), input), init)
-  return directFetch(viaProxy(input), init)
-}
+replaceGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+  try {
+    if (input instanceof Request) return directFetch(new Request(viaProxy(input.url), input), init)
+    return directFetch(viaProxy(input), init)
+  } catch (err) {
+    return Promise.reject(err)
+  }
+})
+for (const name of ["indexedDB", "caches", "WebSocket", "EventSource", "WebTransport"]) replaceGlobal(name, undefined)
 const directOpen = XMLHttpRequest.prototype.open as (this: XMLHttpRequest, ...args: unknown[]) => void
 XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
   directOpen.call(this, method, viaProxy(url), ...rest)
@@ -227,9 +253,7 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   if (!py) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) await installPackages(missing)
-  for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts"]) {
-    Object.defineProperty(self, name, { value: undefined, configurable: false, writable: false })
-  }
+  for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
   writeProject(files)
   const checker = py.pyimport("pycoder.checker")
   const results = checker.run_tests("/home/pyodide/project", solution, test)

@@ -351,6 +351,7 @@ function Workspace() {
   const [webRun, setWebRun] = useState<WebRun | null>(null)
   const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
   const webStarted = useRef(0)
+  const lastEntry = useRef<string | null>(null)
   const startRun = useCallback((debug: boolean) => {
     if (!activeExists) return
     setView("editor")
@@ -374,7 +375,10 @@ function Workspace() {
       if (debug) setLowerTab("debug")
       // Breakpoints of the project's files (an empty set still pauses on line 1).
       const points = debug ? Object.fromEntries(Object.entries(breakpoints).filter(([p]) => allFiles.includes(p))) : undefined
-      void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points))
+      // In a session, another file may be someone else's program: it gets its own interpreter.
+      const fresh = !!provider && lastEntry.current !== null && lastEntry.current !== active
+      lastEntry.current = active
+      void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points, fresh))
       return
     }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.

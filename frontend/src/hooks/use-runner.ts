@@ -166,7 +166,7 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
   )
 
   const run = useCallback(
-    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>) => {
+    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>, fresh = false) => {
       if (!RunnerClient.supported()) {
         setChunks([{ kind: "stderr", text: "This browser does not allow the in-browser Python here (the page is not cross-origin isolated).\n" }])
         setExit({ code: null, duration: 0, reason: "error", message: "Python unavailable" })
@@ -181,8 +181,9 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
       }
       startedAt.current.push(now)
 
-      // A run still going is replaced by the new one.
-      if (current.current !== null) {
+      // A run still going is replaced by the new one; `fresh` asks for a new
+      // interpreter (nothing a previous program changed survives into this one).
+      if (current.current !== null || fresh) {
         clearTimers()
         runner.restart()
       }

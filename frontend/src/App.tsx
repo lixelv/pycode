@@ -9,6 +9,7 @@ import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
+import { FollowButton } from "@/components/follow-button"
 import { NameDialog } from "@/components/name-dialog"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
@@ -20,6 +21,7 @@ import { useCollab } from "@/hooks/use-collab"
 import { usePackages } from "@/hooks/use-packages"
 import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useAccess } from "@/hooks/use-access"
+import { useFollow } from "@/hooks/use-follow"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedTerminal } from "@/lib/collab/doc"
@@ -130,6 +132,7 @@ function Workspace() {
   const [preview, setPreview] = useState<string | null>(null) // markdown file shown in the console area
   const [text, setText] = useState("")
   const editor = useRef<EditorInstance | null>(null)
+  const [editorInstance, setEditorInstance] = useState<EditorInstance | null>(null)
   const split = useRef<HTMLDivElement>(null)
 
   // ---- project & session ------------------------------------------------------
@@ -165,6 +168,15 @@ function Workspace() {
   const canWrite = activeExists && access.can(active) === "write"
   const canRun = access.canRun
   const language = languageOf(active)
+  const follow = useFollow({
+    provider,
+    editor: editorInstance,
+    tab: view,
+    file: active,
+    files,
+    setTab: (tab) => setView(tab as View),
+    setFile: setActive,
+  })
 
   useEffect(() => {
     ruffVersion().then(setRuff).catch(() => {})
@@ -477,7 +489,10 @@ function Workspace() {
                   key={value}
                   role="tab"
                   aria-selected={view === value}
-                  onClick={() => setView(value)}
+                  onClick={() => {
+                  follow.stop()
+                  setView(value)
+                }}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors",
                     view === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
@@ -511,6 +526,15 @@ function Workspace() {
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
+            {provider && (
+              <FollowButton
+                peers={collab.peers}
+                leaderId={follow.leaderId}
+                onFollowOwner={() => follow.setTarget(provider.isOwner ? (collab.peers.find((p) => !p.isMe)?.clientId ?? null) : "owner")}
+                onFollow={(id) => follow.setTarget(id)}
+                onStop={follow.stop}
+              />
+            )}
             <ShareButton live={!!provider} peers={collab.peers} role={provider?.member.role} onClick={() => setShareOpen(true)} />
             {consoleActive && canRun && language === "python" ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
@@ -535,6 +559,7 @@ function Workspace() {
                 access={access}
                 peers={collab.peers}
                 onOpen={(path) => {
+                  follow.stop()
                   setActive(path)
                   setView("editor")
                 }}
@@ -582,7 +607,10 @@ function Workspace() {
                 onCursor={(line, column) => setCursor({ line, column })}
                 onRun={run}
                 onSave={download}
-                onMount={(ed) => (editor.current = ed)}
+                onMount={(ed) => {
+                  editor.current = ed
+                  setEditorInstance(ed)
+                }}
               />
               {!activeExists && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background text-sm text-muted-foreground">

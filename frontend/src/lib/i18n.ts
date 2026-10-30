@@ -183,6 +183,11 @@ const en = {
   "name.join": "Join",
   "footer.labelsOn": "Hide names on cursors",
   "footer.labelsOff": "Show names on cursors",
+  "follow.btn": "Follow",
+  "follow.owner": "Follow the owner: see the file and place they look at",
+  "follow.following": "Following {name}",
+  "follow.pick": "Follow",
+  "follow.stop": "Stop following",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -357,6 +362,11 @@ const ru: Record<MessageKey, string> = {
   "name.join": "Войти",
   "footer.labelsOn": "Скрыть имена у курсоров",
   "footer.labelsOff": "Показывать имена у курсоров",
+  "follow.btn": "Следовать",
+  "follow.owner": "Следовать за владельцем: видеть тот же файл и место",
+  "follow.following": "Следую за {name}",
+  "follow.pick": "Следовать за",
+  "follow.stop": "Перестать следовать",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

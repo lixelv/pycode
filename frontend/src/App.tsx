@@ -47,6 +47,7 @@ import {
   languageOf,
   localStore,
   metasOf,
+  packagesKind,
   packagesOf,
   renamePath,
   resetProject,
@@ -186,6 +187,11 @@ function Workspace() {
     if (files.length && !files.includes(active)) setActive(files.includes(DEFAULT_FILE) ? DEFAULT_FILE : files[0])
   }, [files, active])
   const activeExists = files.includes(active)
+  // C++ packages arrive with task 11; until then only Python files have the tab.
+  const hasPackages = packagesKind(active) === "python"
+  useEffect(() => {
+    if (view === "packages" && !hasPackages) setView("editor")
+  }, [view, hasPackages])
   const activeMeta = activeExists ? metasOf(store).get(active) : undefined
   const canWrite = activeExists && activeMeta?.kind === "text" && access.can(active) === "write"
   const docKind = activeMeta?.kind === "binary" ? docKindOf(active) : null
@@ -728,7 +734,9 @@ function Workspace() {
                   ["board", t("tab.board")],
                   ["packages", t("tab.packages")],
                 ] as const
-              ).map(([value, label]) => (
+              )
+                .filter(([value]) => value !== "packages" || hasPackages)
+                .map(([value, label]) => (
                 <button
                   key={value}
                   role="tab"
@@ -1137,6 +1145,7 @@ const LANGUAGE_LABEL = {
   html: "HTML",
   css: "CSS",
   javascript: "JavaScript",
+  cpp: "C++",
   plaintext: "Plain text",
 } as const
 

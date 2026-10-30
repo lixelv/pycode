@@ -42,7 +42,7 @@ export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
 export const DEFAULT_FILE = "main.py"
 
-export type Language = "python" | "json" | "yaml" | "markdown" | "html" | "css" | "javascript" | "plaintext"
+export type Language = "python" | "json" | "yaml" | "markdown" | "html" | "css" | "javascript" | "cpp" | "plaintext"
 
 export function languageOf(path: string): Language {
   const ext = path.toLowerCase().split(".").pop() ?? ""
@@ -53,7 +53,18 @@ export function languageOf(path: string): Language {
   if (ext === "html" || ext === "htm") return "html"
   if (ext === "css") return "css"
   if (ext === "js" || ext === "mjs") return "javascript"
+  if (CPP_EXTENSIONS.includes(ext)) return "cpp"
   return "plaintext"
+}
+
+const CPP_EXTENSIONS = ["cpp", "cc", "cxx", "h", "hpp"]
+
+export const isCpp = (path: string) => languageOf(path) === "cpp"
+
+/** Which packages system a file uses; null when it has none. */
+export function packagesKind(path: string): "python" | "cpp" | null {
+  const language = languageOf(path)
+  return language === "python" ? "python" : language === "cpp" ? "cpp" : null
 }
 
 /** Normalizes a user-typed path: forward slashes, no leading/trailing or empty parts. */

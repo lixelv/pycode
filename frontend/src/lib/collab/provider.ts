@@ -66,14 +66,17 @@ type Control =
   | { type: "error"; error: string }
   | { type: "ended" }
 
+/** Who sent a signal, as the server and the link know it (not as the signal claims). */
+export type Sender = PeerInfo & { clients: ReadonlySet<number> }
+
 type SignalData = { sdp: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateInit }
 
 type Events = {
   status: (status: ProviderStatus) => void
   /** The owner reset the session's project (announced by the server). */
   reset: () => void
-  /** A signal addressed to us, with who sent it (their role). */
-  signal: (signal: Signal, from: Member) => void
+  /** A signal addressed to us, with who sent it (their role and awareness client). */
+  signal: (signal: Signal, from: Sender) => void
   /** Links, roles or the acting owner changed. */
   links: () => void
 }
@@ -399,11 +402,15 @@ export class CollabProvider {
     return out
   }
 
+  /** Sends a signal to the member it is addressed to (to everyone while we do not know who that is). */
   signal(signal: Signal) {
     const enc = encoding.createEncoder()
     encoding.writeVarUint(enc, MSG_SIGNAL)
     encoding.writeVarString(enc, JSON.stringify(signal))
-    this.broadcast(encoding.toUint8Array(enc))
+    const message = encoding.toUint8Array(enc)
+    const target = [...this.links.values()].find((l) => l.clients.has(signal.to))
+    if (target) target.send(message)
+    else this.broadcast(message)
   }
 
   destroy() {
@@ -576,13 +583,21 @@ export class CollabProvider {
       if (encoding.length(enc) > header) link.send(encoding.toUint8Array(enc))
     } else if (kind === MSG_AWARENESS) {
       const update = decoding.readVarUint8Array(dec)
-      // Remember which awareness clients this link speaks for.
+      // A member speaks for one awareness client: the first it names, if that
+      // is not us or someone else's. Updates about any other client are dropped
+      // (no one can pose as another member).
       const d2 = decoding.createDecoder(update)
       const n = decoding.readVarUint(d2)
       for (let i = 0; i < n; i++) {
-        link.clients.add(decoding.readVarUint(d2))
+        const client = decoding.readVarUint(d2)
         decoding.readVarUint(d2) // clock
         decoding.readVarString(d2) // state
+        if (link.clients.size === 0) {
+          const taken = client === this.clientID || [...this.links.values()].some((l) => l !== link && l.clients.has(client))
+          if (taken) return
+          link.clients.add(client)
+        }
+        if (!link.clients.has(client)) return
       }
       applyAwarenessUpdate(this.awareness, update, link)
       this.emitLinks()
@@ -598,7 +613,7 @@ export class CollabProvider {
     } else if (kind === MSG_SIGNAL) {
       if (this.access(link.info, "runtime") !== "write") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
-      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, link.info))
+      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, { ...link.info, clients: link.clients }))
     }
   }
 

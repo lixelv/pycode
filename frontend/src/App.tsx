@@ -446,8 +446,13 @@ function Workspace() {
   useEffect(() => {
     if (!provider) return
     return provider.on("signal", (signal, from) => {
+      // Results count only from an admin; requests answer only their real sender.
+      if (signal.type === "check-result" && from.level !== "admin") return
+      if (signal.type === "check" && !from.clients.has(signal.from)) return
       if (signal.type === "check-result") {
         setCheck({ path: signal.path, results: signal.results, error: signal.error })
+        setConsoleOpen(true)
+        setLowerTab("tests")
         return
       }
       if (signal.type !== "check" || !provider.isAdmin) return

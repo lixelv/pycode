@@ -18,6 +18,10 @@ function load(): Promise<Parser> {
     p.setLanguage(cpp)
     return p
   })()
+  // A failed load (e.g. offline) is retried on the next call.
+  parser.catch(() => {
+    parser = null
+  })
   return parser
 }
 
@@ -31,15 +35,16 @@ export async function parseCpp(code: string): Promise<Tree> {
 /** The first ERROR or MISSING node, as the same error shape Python reports. */
 export function syntaxError(root: Node): { message: string; line: number } | null {
   if (!root.hasError) return null
-  const find = (n: Node): Node | null => {
-    if (n.isError || n.isMissing) return n
-    for (const child of n.children) {
-      const found = child && (child.hasError || child.isMissing) ? find(child) : null
-      if (found) return found
+  // Depth-first, first match in source order; iterative because code may nest deeply.
+  let bad = root
+  const stack = [root]
+  for (let n = stack.pop(); n; n = stack.pop()) {
+    if (n.isError || n.isMissing) {
+      bad = n
+      break
     }
-    return null
+    for (const child of [...n.children].reverse()) if (child && (child.hasError || child.isMissing)) stack.push(child)
   }
-  const bad = find(root) ?? root
   const line = bad.startPosition.row + 1
   if (bad.isMissing) return { message: `Missing “${bad.type}”`, line }
   return { message: "Invalid syntax", line }

@@ -54,6 +54,12 @@ describe("cppFlow", () => {
     expect(m.parent).toBe(p.id)
   })
 
+  it("cuts off very deep nesting instead of overflowing the stack", async () => {
+    const res = await cppFlow(`int main(){${"{".repeat(5000)}f();${"}".repeat(5000)}}`, "en")
+    expect(res.ok).toBe(true)
+    expect(res.truncated).toBe(true)
+  })
+
   it("reports a syntax error with its line", async () => {
     const res = await cppFlow("int main( {", "en")
     expect(res.ok).toBe(false)

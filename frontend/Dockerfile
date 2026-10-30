@@ -1,7 +1,9 @@
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# No install scripts: the only ones are tree-sitter-c/-cpp's native Node
+# bindings (node-gyp, needs Python), and we use just their .wasm.
+RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build
 

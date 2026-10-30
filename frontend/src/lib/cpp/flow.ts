@@ -10,6 +10,8 @@ import { locOf, parseCpp, syntaxError, type Node } from "./parse"
 
 const MAX_NODES = 1500
 const MAX_LABEL = 60
+// Deeper nesting (e.g. thousands of `{{{…}}}`) is cut off like too many nodes.
+const MAX_DEPTH = 200
 
 // A pending connection: (node id, edge label, edge kind).
 type Pred = [string, string | null, FlowEdgeKind]
@@ -95,10 +97,13 @@ const bare = (n: Node | null | undefined) => short(n?.text.replace(/^\(([\s\S]*)
 const named = (n: Node | null | undefined): Node[] =>
   (n?.namedChildren ?? []).filter((c): c is Node => !!c && c.type !== "comment")
 
-/** All named descendants, the node itself included. */
+/** All named descendants, the node itself included (iterative: code may nest deeply). */
 function* walk(n: Node): Generator<Node> {
-  yield n
-  for (const c of n.namedChildren) if (c) yield* walk(c)
+  const stack = [n]
+  for (let next = stack.pop(); next; next = stack.pop()) {
+    yield next
+    for (const c of [...next.namedChildren].reverse()) if (c) stack.push(c)
+  }
 }
 
 class Truncated extends Error {}
@@ -113,6 +118,7 @@ class FlowBuilder {
   sites: [string, Node, string | null, string, boolean][] = []
   groupStart = new Map<string, string>()
   linked = new Set<string>()
+  depth = 0
   private code: string
   private lang: "en" | "ru"
   private lines: string[]
@@ -171,7 +177,22 @@ class FlowBuilder {
   }
 
   /** Top-level code: functions and classes, also inside namespaces and templates. */
+  /** Runs a step of the recursive descent, cut off past MAX_DEPTH. */
+  nested<T>(fn: () => T): T {
+    if (this.depth >= MAX_DEPTH) throw new Truncated()
+    this.depth++
+    try {
+      return fn()
+    } finally {
+      this.depth--
+    }
+  }
+
   declarations(n: Node, cls: string | null) {
+    this.nested(() => this.declarationsIn(n, cls))
+  }
+
+  declarationsIn(n: Node, cls: string | null) {
     for (const d of named(n)) {
       if (d.type === "function_definition") this.function(d, cls)
       else if (CLASSES.has(d.type)) this.klass(d, cls)
@@ -272,6 +293,10 @@ class FlowBuilder {
   }
 
   stmt(s: Node, preds: Pred[], ctx: Ctx): Pred[] {
+    return this.nested(() => this.step(s, preds, ctx))
+  }
+
+  step(s: Node, preds: Pred[], ctx: Ctx): Pred[] {
     const f = (name: string) => s.childForFieldName(name)
     const tr = this.tr.bind(this)
 

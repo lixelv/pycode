@@ -12,8 +12,12 @@ program with that input and returns what it printed (input() prompts are not
 included). ``timeout`` (seconds) and ``ram_usage`` (MB, 10**6 bytes) are
 limits; ``None`` or ``0`` turns one off. A limit that is on is also measured
 and shown with the test's result.
+
+``polycode_test.module`` holds the solution's declarations (imports, defs,
+classes, constants without calls); the program itself is not run.
 """
 
+import ast
 import builtins
 import contextlib
 import io
@@ -159,15 +163,52 @@ def _measured() -> dict:
     return measured
 
 
-def run_tests(project: str, solution: str, source: str) -> list:
-    """Runs every test_* function of ``source`` against ``project/solution``."""
+def _run_cpp(*args, **kwargs):
+    raise NotImplementedError("running C++ solutions comes with the C++ runner")
+
+
+def _missing(name: str):
+    raise AttributeError(f"module 'polycode_test' has no attribute {name!r}")
+
+
+def declarations(source: str, filename: str) -> types.ModuleType:
+    """A module with only the top-level declarations of ``source``: imports,
+    defs, classes and assignments whose value contains no call."""
+    kept = []
+    for node in ast.parse(source, filename).body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            kept.append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            if node.value is None or not any(isinstance(n, ast.Call) for n in ast.walk(node.value)):
+                kept.append(node)
+    code = compile(ast.Module(body=kept, type_ignores=[]), filename, "exec")
+    module = types.ModuleType(os.path.splitext(os.path.basename(filename))[0])
+    exec(code, module.__dict__)
+    return module
+
+
+def run_tests(project: str, solution: str, source: str, kind: str = "python") -> list:
+    """Runs every test_* function of ``source`` against ``project/solution``.
+    ``kind`` is the solution's language: "python" or "cpp"."""
     global _solution
     _solution = os.path.join(project, solution)
     folder = os.path.dirname(_solution)
     helper = types.ModuleType("polycode_test")
-    helper.run = run
+    helper.run = run if kind == "python" else _run_cpp
     helper.TimeLimitExceeded = TimeLimitExceeded
     helper.MemoryLimitExceeded = MemoryLimitExceeded
+    cached = []
+
+    def module_of_solution():
+        if kind != "python":
+            raise TypeError("module is only for Python solutions")
+        if not cached:
+            with open(_solution, encoding="utf-8") as f:
+                cached.append(declarations(f.read(), _solution))
+        return cached[0]
+
+    # Built on first use (PEP 562), once per check.
+    helper.__getattr__ = lambda name: module_of_solution() if name == "module" else _missing(name)
     # The old name keeps working for existing tests.
     sys.modules["polycode_test"] = sys.modules["pycode_test"] = helper
     for path in (folder, project):

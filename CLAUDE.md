@@ -81,6 +81,7 @@ sites. Do not set it on a real server.
 - **Automatic checks** (`python/checker.py`):
   - `name.test.py` holds `test_*` functions; `polycode_test.run(stdin)` (limits below; alias `pycode_test` for old tests) runs the solution and returns its output, without `input()` prompts.
   - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
+  - `polycode_test.module` (lazy, cached per check): the solution's top-level declarations (imports, defs, classes, assignments without a call), compiled under the solution's filename; the program itself does not run. A C++ solution (`run_tests(..., kind="cpp")`) gets `TypeError`.
   - Limits: `run(stdin, timeout=None, ram_usage=None)`, seconds and MB (10⁶ bytes); `None`/`0` turn a limit off.
     - Time: `run()` calls the worker's JS global `polycode_deadline(ms)` → event `deadline {ms, gen}` → `RunnerClient` sets a timer that calls `interrupt()`. Cancelling (`ms` 0) is synchronous through `control[2]` (`lib/python/deadline.ts`): a late timer finds its generation gone, and a written but untaken interrupt is cleared, so nothing reaches code after `run()`; it returns whether the timer fired (fired counts as exceeded). `KeyboardInterrupt` becomes `TimeLimitExceeded(TimeoutError)`; the elapsed `perf_counter` time is compared too, so a program that swallows the interrupt still fails.
     - Memory: `tracemalloc` peak around the program, checked after it ends → `MemoryLimitExceeded(MemoryError)`.

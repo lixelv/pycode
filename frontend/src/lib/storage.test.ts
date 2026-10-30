@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { renameLocalKeys } from "./storage"
+import { renameLocalKeys, withTimeout } from "./storage"
 
 // A Map-backed stand-in for localStorage.
 function fakeStorage(initial: Record<string, string>) {
@@ -59,5 +59,15 @@ describe("renameLocalKeys", () => {
     renameLocalKeys(s)
     expect(s.getItem("polycode:lang")).toBe("en")
     expect(s.getItem("python-coder:lang")).toBeNull()
+  })
+})
+
+describe("withTimeout", () => {
+  it("returns the result when the promise is quick", async () => {
+    expect(await withTimeout(Promise.resolve(5), 1000)).toBe(5)
+  })
+
+  it("gives up on a promise that never settles", async () => {
+    expect(await withTimeout(new Promise(() => {}), 20)).toBeUndefined()
   })
 })

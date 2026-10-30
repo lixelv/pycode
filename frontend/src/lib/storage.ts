@@ -94,18 +94,23 @@ async function copyDatabase(from: string, to: string) {
     src.close()
   }
   await new Promise<void>((resolve, reject) => {
+    let copied = false
     const req = indexedDB.open(to, 1)
     req.onupgradeneeded = () => {
+      copied = true
       for (const s of stores) {
         const store = req.result.createObjectStore(s.name, s.params)
         for (const { name, keyPath, ...options } of s.indexes) store.createIndex(name, keyPath, options)
         s.values.forEach((value, i) => (store.keyPath === null ? store.put(value, s.keys[i]) : store.put(value)))
       }
-      req.transaction!.oncomplete = () => resolve()
-      req.transaction!.onerror = req.transaction!.onabort = () => reject(req.transaction!.error)
     }
-    req.onsuccess = () => req.result.close()
-    req.onerror = () => reject(req.error)
+    req.onsuccess = () => {
+      req.result.close()
+      // No upgrade: the target already existed (another tab got there first), nothing was copied.
+      if (copied) resolve()
+      else reject(new Error("target exists"))
+    }
+    req.onerror = req.onblocked = () => reject(req.error ?? new Error("blocked"))
   })
 }
 
@@ -137,5 +142,18 @@ export async function migrateStorage() {
     }
   } catch {
     // old data stays where it is
+  }
+}
+
+/** The promise's result, or undefined if it takes longer than `ms` (so a stuck migration cannot block the start). */
+export async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer = 0
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    clearTimeout(timer)
   }
 }

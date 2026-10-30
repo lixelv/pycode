@@ -4,6 +4,7 @@ import { Doc as YDoc } from "yjs"
 import type * as Y from "yjs"
 
 import type { PackageEntry } from "@/hooks/use-packages"
+import { cppPackagesOf, type CppPackage } from "@/lib/cpp/packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
 import { isTest, parseEnv, renameRules, isReserved, LEGACY_ENV, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
@@ -233,8 +234,14 @@ export async function projectFiles(s: ProjectStore, provider: { fetchBlob: (hash
   return files
 }
 
-/** Replaces the whole project content (files, folders, packages) and clears the console. */
-export function replaceProject(s: ProjectStore, files: Record<string, string>, dirs: string[] = [], packages: PackageEntry[] = []) {
+/** Replaces the whole project content (files, folders, packages, C++ packages) and clears the console. */
+export function replaceProject(
+  s: ProjectStore,
+  files: Record<string, string>,
+  dirs: string[] = [],
+  packages: PackageEntry[] = [],
+  cppPackages: CppPackage[] = [],
+) {
   const fresh: [string, string][] = []
   s.structure.transact(() => {
     const metas = metasOf(s)
@@ -250,6 +257,9 @@ export function replaceProject(s: ProjectStore, files: Record<string, string>, d
     const pkgs = packagesOf(s)
     pkgs.delete(0, pkgs.length)
     pkgs.push(packages)
+    const cpp = cppPackagesOf(s)
+    cpp.delete(0, cpp.length)
+    cpp.push(cppPackages)
   })
   for (const [id, content] of fresh) if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
   s.runtime.transact(() => {
@@ -501,7 +511,7 @@ export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ adde
   if (zip.size + board > PROJECT_LIMIT) return { error: "limit" }
   // The archive's files decide the languages (none: python); set first, so the empty moment does not ask for one.
   stateOf(s).set("languages", [])
-  replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
+  replaceProject(s, {}, zip.dirs, packagesOf(s).toArray(), cppPackagesOf(s).toArray())
   if (zip.env) applyEnv(s, zip.env)
   return addFiles(s, "", zip.entries, zip.env)
 }

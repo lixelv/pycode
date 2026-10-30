@@ -1,9 +1,12 @@
 import { CornerDownLeft, Eraser, Square, X } from "lucide-react"
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react"
+import type * as Y from "yjs"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { Chunk, ExitInfo, RunStatus } from "@/hooks/use-runner"
+import { isBusy, type Chunk, type ExitInfo, type RunStatus } from "@/hooks/use-runner"
+import { useSharedDraft } from "@/hooks/use-shared-console"
+import { stderrRuns } from "@/lib/console-lines"
 import { translate, useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -14,8 +17,8 @@ interface ConsolePanelProps {
   timeoutSec: number
   /** False for viewers of a read-only session. */
   canInput?: boolean
-  /** The input line being typed: shared, so everyone sees it as it is typed. */
-  draft: string
+  /** Holds the input line being typed: shared, so everyone sees it as it is typed. */
+  doc: Y.Doc
   onDraft: (text: string) => void
   onInput: (text: string) => void
   onEof: () => void
@@ -58,11 +61,11 @@ function StatusPill({ status, exit, timeoutSec, canInput }: { status: RunStatus;
       </span>
     )
   }
-  if (status === "running" || status === "connecting") {
+  if (status === "running" || status === "connecting" || status === "compiling") {
     return (
       <span className="inline-flex items-center gap-2 text-[11px] text-console-muted">
         <span className="size-1.5 animate-pulse rounded-full bg-console-foreground" />
-        {status === "connecting" ? translate("console.starting") : translate("console.running")}
+        {translate(status === "compiling" ? "run.compiling" : status === "connecting" ? "console.starting" : "console.running")}
       </span>
     )
   }
@@ -84,7 +87,7 @@ export function ConsolePanel({
   exit,
   timeoutSec,
   canInput = true,
-  draft: sharedDraft,
+  doc,
   onDraft,
   onInput,
   onEof,
@@ -94,15 +97,12 @@ export function ConsolePanel({
   tabs,
 }: ConsolePanelProps) {
   useI18n() // re-render on language change
-  // The line updates locally at once (the shared copy arrives a frame later,
-  // which would drop keystrokes typed in between) and follows remote edits.
-  const [draft, setDraft] = useState(sharedDraft)
-  useEffect(() => setDraft(sharedDraft), [sharedDraft])
+  const draft = useSharedDraft(doc)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const waitingForInput = status === "waiting"
   const waiting = waitingForInput && canInput
-  const active = status === "running" || status === "waiting" || status === "connecting"
+  const active = isBusy(status)
 
   // Stick to the bottom while output streams in.
   useEffect(() => {
@@ -118,7 +118,6 @@ export function ConsolePanel({
     if (e.key === "Enter") {
       e.preventDefault()
       onInput(draft)
-      setDraft("")
     } else if (e.key === "d" && e.ctrlKey && !draft) {
       e.preventDefault()
       onEof()
@@ -176,10 +175,7 @@ export function ConsolePanel({
                 <input
                   ref={inputRef}
                   value={draft}
-                  onChange={(e) => {
-                    setDraft(e.target.value)
-                    onDraft(e.target.value)
-                  }}
+                  onChange={(e) => onDraft(e.target.value)}
                   onKeyDown={onKeyDown}
                   aria-label={translate("console.input")}
                   spellCheck={false}
@@ -233,20 +229,12 @@ function ConsoleButton({ label, onClick, children }: { label: string; onClick: (
   )
 }
 
-/**
- * The line that explains an error ("ZeroDivisionError: division by zero")
- * is red; the rest of the traceback stays in the console's colours.
- */
-const ERROR_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Exit|Warning)\b(?::.*)?$/
-
 function StderrText({ text }: { text: string }) {
-  const lines = text.split("\n")
   return (
     <>
-      {lines.map((line, i) => (
-        <span key={i}>
-          {ERROR_LINE.test(line) ? <span className="text-[#ff6166]">{line}</span> : line}
-          {i < lines.length - 1 && "\n"}
+      {stderrRuns(text).map((run, i) => (
+        <span key={i} className={run.error ? "text-[#ff6166]" : undefined}>
+          {run.text}
         </span>
       ))}
     </>

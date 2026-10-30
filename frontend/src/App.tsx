@@ -8,6 +8,7 @@ import { ConfirmDialog, type ConfirmRequest } from "@/components/confirm-dialog"
 import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
+import { CppPackagesPanel } from "@/components/cpp-packages-panel"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer } from "@/components/doc-viewer"
 import { docKindOf } from "@/lib/project/project"
@@ -27,8 +28,9 @@ import { Kbd } from "@/components/ui/kbd"
 import { Toaster } from "@/components/ui/sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCollab } from "@/hooks/use-collab"
+import { useCppPackages } from "@/hooks/use-cpp-packages"
 import { usePackages } from "@/hooks/use-packages"
-import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
+import { isBusy, RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
@@ -65,7 +67,8 @@ import {
   type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
-import { cppClient, useCppStatus, type CppPackageFiles } from "@/lib/cpp/client"
+import { cppClient, useCppStatus } from "@/lib/cpp/client"
+import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
 import { fileAccess, isTest } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
@@ -81,14 +84,10 @@ const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "polycode:theme"
 const LABELS_KEY = "polycode:cursor-labels"
 
-/** A program is starting, running or waiting for input. */
-const isBusy = (status: RunStatus) => status === "connecting" || status === "running" || status === "waiting"
 const MD_MODE_KEY = "polycode:md-mode"
 const HTML_MODE_KEY = "polycode:html-mode"
 const BREAKPOINTS_KEY = "polycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
-// C++ packages arrive with task 11; until then clang sees only the project.
-const NO_CPP_PACKAGES: CppPackageFiles = { files: {}, includes: [] }
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type ViewMode = "code" | "split" | "preview"
 
@@ -216,8 +215,8 @@ function Workspace() {
     if (files.length && !files.includes(active)) setActive(files.includes(DEFAULT_FILE) ? DEFAULT_FILE : files[0])
   }, [files, active])
   const activeExists = files.includes(active)
-  // C++ packages arrive with task 11; until then only Python files have the tab.
-  const hasPackages = packagesKind(active) === "python"
+  const packagesTab = packagesKind(active)
+  const hasPackages = packagesTab !== null
   useEffect(() => {
     if (view === "packages" && !hasPackages) setView("editor")
   }, [view, hasPackages])
@@ -236,13 +235,15 @@ function Workspace() {
   const setViewMode = language === "html" ? setHtmlMode : setMdMode
   // Clang checks the open C++ file against the files a run would see.
   const cppStatus = useCppStatus()
+  const cppPkgs = useCppPackages(useMemo(() => cppPackagesOf(store), [store]))
+  const cppPackages = cppPkgs.packages
   const lintCpp = useCallback(
     async (source: string) => {
       const files = await projectFiles(store, provider, active)
       files[active] = source
-      return cppClient.lint(files, active, NO_CPP_PACKAGES)
+      return cppClient.lint(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))
     },
-    [store, provider, active],
+    [store, provider, active, cppPackages, cppPkgs.fail],
   )
   const follow = useFollow({
     provider,
@@ -282,6 +283,7 @@ function Workspace() {
   })
   const packagesArray = useMemo(() => packagesOf(store), [store])
   const pkgs = usePackages(packagesArray)
+  const shownPackages = packagesTab === "cpp" ? cppPackages : pkgs.packages
 
   // Input and Stop from other members reach us when we are the one running.
   useEffect(() => {
@@ -326,7 +328,9 @@ function Workspace() {
     else provider?.signal({ type: "stop", to: executorClient! })
   }, [amExecutor, executorClient, provider, runner])
 
-  const runnable = language === "python" || language === "html" || language === "javascript"
+  // Programs run in the console (C++ headers are not programs); web files in a frame.
+  const consoleProgram = language === "python" || (language === "cpp" && !/\.(h|hpp)$/i.test(active))
+  const runnable = consoleProgram || language === "html" || language === "javascript"
 
   // ---- debugger -------------------------------------------------------------------
   // Breakpoints are this browser's own (not shared): path -> lines.
@@ -399,6 +403,14 @@ function Workspace() {
       void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points, fresh))
       return
     }
+    if (language === "cpp") {
+      setWebRun(null)
+      setRunStatus(doc, "compiling") // resetRun's `connecting` means Python to the console
+      void projectFiles(store, provider, active).then((files) =>
+        runner.runCpp(files, active, async () => cppClient.compile(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))),
+      )
+      return
+    }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
     const token = crypto.randomUUID()
     setRunStatus(doc, "running")
@@ -408,7 +420,7 @@ function Workspace() {
       setWebRun({ path: active, page, token, visible: language === "html" })
       setLowerTab(language === "html" ? "web" : "console")
     })
-  }, [activeExists, language, runnable, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles])
+  }, [activeExists, language, runnable, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles, cppPackages, cppPkgs.fail])
   const run = useCallback(() => startRun(false), [startRun])
   const debugRun = useCallback(() => startRun(true), [startRun])
 
@@ -801,8 +813,8 @@ function Workspace() {
                   )}
                 >
                   {label}
-                  {value === "packages" && pkgs.packages.length > 0 && (
-                    <span className="rounded-full bg-foreground/10 px-1.5 font-mono text-[10px]">{pkgs.packages.length}</span>
+                  {value === "packages" && shownPackages.length > 0 && (
+                    <span className="rounded-full bg-foreground/10 px-1.5 font-mono text-[10px]">{shownPackages.length}</span>
                   )}
                 </button>
               ))}
@@ -908,12 +920,12 @@ function Workspace() {
                 <TooltipContent>{t("debug.hint")}</TooltipContent>
               </Tooltip>
             )}
-            {consoleActive && canRun && language === "python" ? (
+            {consoleActive && canRun && consoleProgram ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
               </Button>
             ) : (
-              <Button size="sm" onClick={() => run()} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
+              <Button size="sm" onClick={() => run()} disabled={!runnable || (consoleProgram && !canRun)} className="min-w-24">
                 <Play className="fill-current" /> {t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>
@@ -970,7 +982,11 @@ function Workspace() {
           )}
           {view === "packages" && (
             <main className="min-h-0 min-w-0 flex-1">
-              <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
+              {packagesTab === "cpp" ? (
+                <CppPackagesPanel packages={cppPackages} readOnly={!access.isAdmin} onAdd={cppPkgs.add} onRemove={cppPkgs.remove} onRetry={cppPkgs.retry} />
+              ) : (
+                <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
+              )}
             </main>
           )}
           {/* The editor stays mounted (hidden) so its state survives tab switches. */}
@@ -1083,7 +1099,7 @@ function Workspace() {
                     chunks={sharedConsole.chunks}
                     exit={consoleView.exit}
                     canInput={canRun}
-                    draft={sharedConsole.draft}
+                    doc={doc}
                     onDraft={(value) => canRun && setDraft(doc, value)}
                     timeoutSec={RUN_TIMEOUT_SEC}
                     onInput={sendInput}

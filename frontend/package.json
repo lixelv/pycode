@@ -29,6 +29,8 @@
     "lucide-react": "^1.60.0",
     "marked": "^18.1.1",
     "monaco-editor": "^0.57.0",
+    "pdfjs-dist": "^6.4.299",
+    "pptx-preview": "^1.0.7",
     "pyodide": "^314.0.7",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",

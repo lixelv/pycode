@@ -13,6 +13,8 @@ describe("isText", () => {
     expect(isText("notes", utf8("hello\n"))).toBe(true)
     expect(isText("logo.png", PNG)).toBe(false)
     expect(isText("data.bin", new Uint8Array([0xff, 0xfe, 0, 1]))).toBe(false)
+    // A PDF can be plain ASCII; its extension still makes it binary.
+    expect(isText("doc.pdf", utf8("%PDF-1.4\n"))).toBe(false)
   })
 })
 

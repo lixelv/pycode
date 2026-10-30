@@ -206,7 +206,9 @@ const TEXT_EXT = new Set(["py", "pyw", "md", "markdown", "txt", "json", "yaml", 
 
 /** Text if it has a known text extension, or is valid UTF-8 without NUL bytes. */
 export function isText(path: string, bytes: Uint8Array): boolean {
-  if (TEXT_EXT.has(path.toLowerCase().split(".").pop() ?? "")) return true
+  const ext = path.toLowerCase().split(".").pop() ?? ""
+  if (TEXT_EXT.has(ext)) return true
+  if (MIME[ext]) return false
   if (bytes.includes(0)) return false
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes)

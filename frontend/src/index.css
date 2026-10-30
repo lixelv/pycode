@@ -324,3 +324,13 @@ body {
     animation: none;
   }
 }
+
+/* pptx-preview draws its own arrows and page counter: the viewer has its own. */
+.doc-page .pptx-preview-wrapper-next,
+.doc-page .pptx-preview-wrapper-pre,
+.doc-page .pptx-preview-wrapper-pagination {
+  display: none !important;
+}
+.doc-page .pptx-preview-wrapper {
+  background: transparent !important;
+}

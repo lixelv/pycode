@@ -9,6 +9,7 @@ import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
+import { DocViewer, docKindOf } from "@/components/doc-viewer"
 import { FileViewer } from "@/components/file-viewer"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
@@ -172,6 +173,9 @@ function Workspace() {
   const activeExists = files.includes(active)
   const activeMeta = activeExists ? metasOf(store).get(active) : undefined
   const canWrite = activeExists && activeMeta?.kind === "text" && access.can(active) === "write"
+  const docKind = activeMeta?.kind === "binary" ? docKindOf(active) : null
+  const [docPos, setDocPos] = useState({ path: "", page: 1 })
+  const docPage = docPos.path === active ? docPos.page : 1
   const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
@@ -698,7 +702,16 @@ function Workspace() {
               />
               {activeExists && activeMeta?.kind === "binary" && (
                 <div className="absolute inset-0">
-                  <FileViewer path={active} meta={activeMeta} fetch={fetchBlob} />
+                  <FileViewer
+                    path={active}
+                    meta={activeMeta}
+                    fetch={fetchBlob}
+                    render={
+                      docKind
+                        ? (bytes) => <DocViewer bytes={bytes} kind={docKind} page={docPage} onPage={(page) => setDocPos({ path: active, page })} />
+                        : undefined
+                    }
+                  />
                 </div>
               )}
               {!activeExists && (

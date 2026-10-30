@@ -44,10 +44,22 @@ export default function Board({
   leaderId: number | null
 }) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  // End-to-end tests read the scene through this (only where the app exposes its own hook).
+  useEffect(() => {
+    const hook = (window as { __pycode?: Record<string, unknown> }).__pycode
+    if (hook && api) hook.board = api
+  }, [api])
   const elements = store.board.getMap<ExcalidrawElement>("elements")
   const files = store.board.getMap<BinaryFileData>("files")
   // Versions we have seen or sent, so onChange only shares real changes.
   const known = useRef(new Map<string, number>())
+  // Excalidraw sets its scene up after mounting, from initialData: start it
+  // from the board document (an update sent before that would be wiped).
+  const [initialData] = useState(() => {
+    const scene = [...elements.values()]
+    scene.forEach((e) => known.current.set(e.id, e.version))
+    return { elements: scene, files: Object.fromEntries([...files.entries()]) as BinaryFiles }
+  })
 
   // Remote changes into the scene.
   useEffect(() => {
@@ -127,6 +139,7 @@ export default function Board({
     <div className="size-full">
       <Excalidraw
         excalidrawAPI={setApi}
+        initialData={initialData}
         theme={theme}
         viewModeEnabled={readOnly}
         isCollaborating={!!awareness}

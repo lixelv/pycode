@@ -1,5 +1,5 @@
 import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
 import { AstDialog } from "@/components/ast-dialog"
@@ -87,7 +87,10 @@ function applyTheme(theme: "dark" | "light") {
   document.documentElement.style.colorScheme = theme
 }
 
-type View = "editor" | "packages"
+type View = "editor" | "board" | "packages"
+
+// The whiteboard is big: loaded the first time its tab opens.
+const Board = lazy(() => import("@/components/board"))
 
 /** Waits for the local project (IndexedDB) before showing the workspace. */
 export default function App() {
@@ -721,6 +724,7 @@ function Workspace() {
               {(
                 [
                   ["editor", t("tab.code")],
+                  ["board", t("tab.board")],
                   ["packages", t("tab.packages")],
                 ] as const
               ).map(([value, label]) => (
@@ -898,6 +902,13 @@ function Workspace() {
             <div className="absolute inset-y-0 -right-2 -left-2 cursor-col-resize" />
           </div>
 
+          {view === "board" && (
+            <main className="min-h-0 min-w-0 flex-1">
+              <Suspense fallback={<div className="size-full bg-background" />}>
+                <Board store={store} awareness={awareness} readOnly={!canRun} theme={theme} labels={labels} leaderId={follow.leaderId} />
+              </Suspense>
+            </main>
+          )}
           {view === "packages" && (
             <main className="min-h-0 min-w-0 flex-1">
               <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />

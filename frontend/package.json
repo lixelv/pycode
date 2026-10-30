@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/copy-pyodide.mjs",
+    "predev": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-pyodide.mjs",
+    "prebuild": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
@@ -15,6 +15,7 @@
   "dependencies": {
     "@astral-sh/ruff-wasm-web": "^0.17.1",
     "@dagrejs/dagre": "^3.1.1",
+    "@excalidraw/excalidraw": "^0.18.1",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@monaco-editor/react": "^4.7.0",

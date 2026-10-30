@@ -51,6 +51,7 @@ import {
   stateOf,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
+import { formatWith } from "@/lib/prettier"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
 import { roleLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
@@ -60,6 +61,7 @@ const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "python-coder:theme"
 const LABELS_KEY = "pycode:cursor-labels"
 const MD_MODE_KEY = "pycode:md-mode"
+const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type MarkdownMode = "code" | "split" | "preview"
 
 function loadTheme(): "dark" | "light" {
@@ -428,7 +430,12 @@ function Workspace() {
     if (!ed || !model) return
     try {
       const current = model.getValue()
-      const formatted = language === "json" ? JSON.stringify(JSON.parse(current), null, 2) + "\n" : await format(current)
+      const formatted =
+        language === "json"
+          ? JSON.stringify(JSON.parse(current), null, 2) + "\n"
+          : language === "python"
+            ? await format(current)
+            : await formatWith(language as "html" | "css" | "javascript" | "markdown", current)
       if (formatted === current) return
       ed.pushUndoStop()
       ed.executeEdits("format", [{ range: model.getFullModelRange(), text: formatted }])
@@ -601,13 +608,13 @@ function Workspace() {
                   variant="ghost"
                   size="sm"
                   onClick={formatCode}
-                  disabled={!canWrite || (language !== "python" && language !== "json")}
+                  disabled={!canWrite || !FORMATTABLE.has(language)}
                   className="hidden text-muted-foreground sm:inline-flex"
                 >
                   <Paintbrush /> {t("btn.format")}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{language === "json" ? t("btn.format.json") : t("btn.format.ruff")}</TooltipContent>
+              <TooltipContent>{language === "json" ? t("btn.format.json") : language === "python" ? t("btn.format.ruff") : t("btn.format.prettier")}</TooltipContent>
             </Tooltip>
             <Button variant="outline" size="sm" onClick={() => setTreeOpen(true)} disabled={language !== "python"}>
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
@@ -875,7 +882,16 @@ function Workspace() {
   )
 }
 
-const LANGUAGE_LABEL = { python: "Python", json: "JSON", yaml: "YAML", markdown: "Markdown", plaintext: "Plain text" } as const
+const LANGUAGE_LABEL = {
+  python: "Python",
+  json: "JSON",
+  yaml: "YAML",
+  markdown: "Markdown",
+  html: "HTML",
+  css: "CSS",
+  javascript: "JavaScript",
+  plaintext: "Plain text",
+} as const
 
 function Breadcrumb({ path }: { path: string }) {
   const parts = path.split("/")

@@ -206,6 +206,7 @@ const en = {
   "present.you": "You are presenting: arrows or click to turn pages, Esc to end",
   "present.by": "{name} is presenting",
   "present.stop": "End",
+  "btn.format.prettier": "Format with Prettier",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -403,6 +404,7 @@ const ru: Record<MessageKey, string> = {
   "present.you": "Вы показываете: стрелки или клик — листать, Esc — завершить",
   "present.by": "Показывает {name}",
   "present.stop": "Завершить",
+  "btn.format.prettier": "Отформатировать Prettier",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

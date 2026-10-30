@@ -10,6 +10,7 @@ import { monaco, type MonacoApi } from "@/lib/monaco"
 import { languageOf, metasOf, textOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 import { lint, type Diagnostic } from "@/lib/ruff"
+import { htmlProblems } from "@/lib/web-lint"
 import type { Theme } from "@/lib/storage"
 
 registerPythonIntellisense()
@@ -76,7 +77,11 @@ export function CodeEditor({
     if (!editor || !ytext || !available) return
     const model = monaco.editor.createModel("", languageOf(path), monaco.Uri.parse(`file:///${++modelCounter}/${path}`))
     // Bracket colours by depth (the theme defines them); our own models need it set here.
-    model.updateOptions({ bracketColorizationOptions: { enabled: true, independentColorPoolPerBracketType: false } })
+    model.updateOptions({
+      bracketColorizationOptions: { enabled: true, independentColorPoolPerBracketType: false },
+      // Python uses 4 spaces; web files are usually indented by 2.
+      tabSize: languageOf(path) === "python" ? 4 : 2,
+    })
     editor.setModel(model)
     const empty = editor.createDecorationsCollection()
     const binding = new MonacoBinding(ytext, model, new Set([editor]), awareness)
@@ -122,6 +127,9 @@ export function CodeEditor({
       let diagnostics: Diagnostic[] = []
       if (language === "python") diagnostics = await lint(text).catch(() => [])
       else if (language === "json") diagnostics = jsonDiagnostics(text)
+      else if (language === "html") diagnostics = htmlProblems(text).map((p) => diagnostic(p.line, p.col, p.message, p.rule))
+      // CSS and JavaScript are checked by Monaco's own workers (see below).
+      else if (language === "css" || language === "javascript") return
       if (cancelled || model.isDisposed()) return
       monaco.editor.setModelMarkers(
         model,
@@ -130,7 +138,7 @@ export function CodeEditor({
           // Warnings are disabled: everything reported here is an error.
           severity: monaco.MarkerSeverity.Error,
           message: d.message,
-          source: language === "python" ? "ruff" : "json",
+          source: language === "python" ? "ruff" : language === "html" ? "htmlhint" : "json",
           code: d.code ?? undefined,
           startLineNumber: d.start_location.row,
           startColumn: d.start_location.column,
@@ -145,6 +153,21 @@ export function CodeEditor({
       clearTimeout(timer)
     }
   }, [text, path, editor, onDiagnostics])
+
+  // CSS and JavaScript: Monaco's language workers set their own markers; report their errors.
+  useEffect(() => {
+    const language = languageOf(path)
+    if (!editor || (language !== "css" && language !== "javascript")) return
+    const report = () => {
+      const model = editor.getModel()
+      if (!model) return
+      const errors = monaco.editor.getModelMarkers({ resource: model.uri }).filter((m) => m.severity === monaco.MarkerSeverity.Error)
+      onDiagnostics(errors.map((m) => diagnostic(m.startLineNumber, m.startColumn, m.message, null)))
+    }
+    report()
+    const sub = monaco.editor.onDidChangeMarkers(report)
+    return () => sub.dispose()
+  }, [editor, path, text, onDiagnostics])
 
   const handleMount: OnMount = (instance) => {
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => handlers.current.onRun())
@@ -220,6 +243,11 @@ function emptyPairs(model: MonacoApi.editor.ITextModel): MonacoApi.editor.IModel
     }
   }
   return out
+}
+
+/** A problem at one place, in Ruff's diagnostic shape (what the footer counts). */
+function diagnostic(row: number, column: number, message: string, code: string | null): Diagnostic {
+  return { code, message, start_location: { row, column }, end_location: { row, column: column + 1 } } as unknown as Diagnostic
 }
 
 /** A JSON syntax error as a diagnostic (V8 reports "... at position N"). */

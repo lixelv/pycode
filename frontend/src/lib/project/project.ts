@@ -42,7 +42,7 @@ export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
 export const DEFAULT_FILE = "main.py"
 
-export type Language = "python" | "json" | "yaml" | "markdown" | "plaintext"
+export type Language = "python" | "json" | "yaml" | "markdown" | "html" | "css" | "javascript" | "plaintext"
 
 export function languageOf(path: string): Language {
   const ext = path.toLowerCase().split(".").pop() ?? ""
@@ -50,6 +50,9 @@ export function languageOf(path: string): Language {
   if (ext === "json") return "json"
   if (ext === "yaml" || ext === "yml") return "yaml"
   if (ext === "md" || ext === "markdown") return "markdown"
+  if (ext === "html" || ext === "htm") return "html"
+  if (ext === "css") return "css"
+  if (ext === "js" || ext === "mjs") return "javascript"
   return "plaintext"
 }
 

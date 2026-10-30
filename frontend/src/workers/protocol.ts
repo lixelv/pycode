@@ -56,12 +56,18 @@ export type RunnerEvent =
   | { type: "checked"; id: number; results: CheckResult[] }
   /** The debugged program stopped (state) or goes on (null). */
   | { type: "paused"; state: DebugState | null }
+  /** polycode_test.run(timeout=…): interrupt the program after ms; 0 cancels. */
+  | { type: "deadline"; ms: number }
 
 /** One test of an automatic check (python/checker.py). */
 export interface CheckResult {
   name: string
   ok: boolean
   message: string
+  /** Seconds the test's run(timeout=…) calls took, summed. */
+  time?: number
+  /** Peak bytes of the test's run(ram_usage=…) calls. */
+  memory?: number
 }
 
 // ---- tools worker ---------------------------------------------------------

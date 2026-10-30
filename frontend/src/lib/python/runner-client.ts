@@ -28,6 +28,7 @@ export class RunnerClient {
   private nextId = 1
   private pendingInstalls = new Map<number, (r: InstallResult[]) => void>()
   private readyPromise: Promise<string> | null = null
+  private deadline: ReturnType<typeof setTimeout> | undefined
   python: string | null = null
 
   static supported() {
@@ -61,6 +62,9 @@ export class RunnerClient {
         } else if (event.type === "boot-error") {
           this.readyPromise = null
           reject(new Error(event.message))
+        } else if (event.type === "deadline") {
+          clearTimeout(this.deadline)
+          if (event.ms) this.deadline = setTimeout(() => this.interrupt(), event.ms)
         } else if (event.type === "installed") {
           this.pendingInstalls.get(event.id)?.(event.results)
           this.pendingInstalls.delete(event.id)
@@ -122,7 +126,6 @@ export class RunnerClient {
     Atomics.notify(this.control, 0)
   }
 
-  /** Throws the interpreter away (endless C-level loop, removed packages). */
   /** Runs tests against a solution, then throws this interpreter away (see check() in the worker). */
   async check(files: ProjectFiles, solution: string, test: string, specs: string[], timeoutMs = 30_000): Promise<CheckResult[]> {
     await this.ready()
@@ -143,7 +146,9 @@ export class RunnerClient {
     }
   }
 
+  /** Throws the interpreter away (endless C-level loop, removed packages). */
   restart() {
+    clearTimeout(this.deadline)
     this.worker?.terminate()
     this.worker = null
     this.readyPromise = null

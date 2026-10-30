@@ -279,6 +279,8 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   await loadImported({ ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
   writeProject(files)
+  // polycode_test.run(timeout=…) asks the page for a timer that interrupts it.
+  ;(self as { polycode_deadline?: (ms: number) => void }).polycode_deadline = (ms) => post({ type: "deadline", ms })
   const checker = py.pyimport("polycode.checker")
   const results = checker.run_tests("/home/pyodide/project", solution, test)
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]

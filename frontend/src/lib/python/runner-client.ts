@@ -1,4 +1,6 @@
 import { fire } from "@/lib/python/deadline"
+import { cwdOf } from "@/lib/cpp/wasi"
+import CppRunWorker from "@/workers/cpp-run.worker?worker"
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
   DEBUG_COMMANDS,
@@ -31,6 +33,7 @@ export class RunnerClient implements ProgramRunner {
   private pendingInstalls = new Map<number, (r: InstallResult[]) => void>()
   private readyPromise: Promise<string> | null = null
   private deadline: ReturnType<typeof setTimeout> | undefined
+  private wasmWorker: Worker | null = null
   python: string | null = null
 
   static supported() {
@@ -129,20 +132,45 @@ export class RunnerClient implements ProgramRunner {
     Atomics.notify(this.control, 0)
   }
 
-  /** Runs tests against a solution, then throws this interpreter away (see check() in the worker). */
-  async check(files: ProjectFiles, solution: string, test: string, specs: string[], timeoutMs = 30_000): Promise<CheckResult[]> {
+  /** A check's C++ run: batch mode in its own worker, the answer goes straight into `result`. */
+  private runWasm(wasm: Uint8Array, files: ProjectFiles, cwd: string, stdin: string, result: SharedArrayBuffer) {
+    this.killWasm()
+    const worker = new CppRunWorker()
+    this.wasmWorker = worker
+    worker.onerror = () => {
+      // Never started: the check goes on with an empty output and exit code 1.
+      const header = new Int32Array(result, 0, 4)
+      header[3] = 1
+      Atomics.store(header, 0, 1)
+      Atomics.notify(header, 0)
+    }
+    worker.postMessage({ type: "batch", wasm, files, cwd, stdin, result })
+  }
+
+  private killWasm() {
+    this.wasmWorker?.terminate()
+    this.wasmWorker = null
+  }
+
+  /**
+   * Runs tests against a solution, then throws this interpreter away (see
+   * check() in the worker). With `wasm` the solution is that C++ program.
+   */
+  async check(files: ProjectFiles, solution: string, test: string, specs: string[], wasm?: Uint8Array, timeoutMs = 30_000): Promise<CheckResult[]> {
     await this.ready()
     const id = this.nextId++
     try {
       return await new Promise<CheckResult[]>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs)
         const off = this.on((event) => {
+          if (event.type === "run_wasm" && wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
+          if (event.type === "kill_wasm") this.killWasm()
           if (event.type !== "checked" || event.id !== id) return
           clearTimeout(timer)
           off()
           resolve(event.results)
         })
-        this.worker!.postMessage({ type: "check", id, files, solution, test, specs })
+        this.worker!.postMessage({ type: "check", id, files, solution, test, specs, cpp: !!wasm })
       })
     } finally {
       this.restart()
@@ -152,6 +180,7 @@ export class RunnerClient implements ProgramRunner {
   /** Throws the interpreter away (endless C-level loop, removed packages). */
   restart() {
     clearTimeout(this.deadline)
+    this.killWasm()
     this.worker?.terminate()
     this.worker = null
     this.readyPromise = null

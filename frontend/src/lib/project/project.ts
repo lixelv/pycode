@@ -62,6 +62,13 @@ const CPP_EXTENSIONS = ["cpp", "cc", "cxx", "h", "hpp"]
 
 export const isCpp = (path: string) => languageOf(path) === "cpp"
 
+/** The test file of a solution (`a/b.py`, `a/b.cpp` → `a/b.test.py`); null for anything else, headers included. */
+export function testPathOf(path: string): string | null {
+  if (isTest(path)) return null
+  const match = /\.(py|cpp|cc|cxx)$/i.exec(path)
+  return match ? `${path.slice(0, match.index)}.test.py` : null
+}
+
 /** Which packages system a file uses; null when it has none. */
 export function packagesKind(path: string): "python" | "cpp" | null {
   const language = languageOf(path)

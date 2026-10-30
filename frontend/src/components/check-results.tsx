@@ -37,7 +37,7 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
             <Loader2 className="size-4 animate-spin" /> {t("check.running")}
           </div>
         )}
-        {check.error && <div className="p-2 text-[#ff6166]">{check.error}</div>}
+        {check.error && <div className="whitespace-pre-wrap p-2 text-[#ff6166]">{check.error}</div>}
         {check.results?.length === 0 && <div className="p-2 text-console-muted">{t("check.none")}</div>}
         <ul>
           {check.results?.map((r) => (

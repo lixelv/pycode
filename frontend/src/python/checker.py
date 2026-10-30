@@ -13,6 +13,11 @@ included). ``timeout`` (seconds) and ``ram_usage`` (MB, 10**6 bytes) are
 limits; ``None`` or ``0`` turns one off. A limit that is on is also measured
 and shown with the test's result.
 
+A C++ solution (``kind="cpp"``) is already compiled: its ``run()`` has the same
+limits and runs the program through the page (``_run_wasm``). Its output
+includes prompts, since they are ordinary ``cout``; input past the end of
+``stdin`` is EOF.
+
 ``polycode_test.module`` holds the solution's declarations (imports, defs,
 classes, constants without calls); the program itself is not run.
 """
@@ -31,8 +36,10 @@ import tracemalloc
 import types
 
 MAX_MESSAGE = 200
+CHECK_LIMIT = 30  # seconds; the page stops a whole check after this
 
 _solution = ""
+_check_started = 0.0
 # What the current test's run() calls measured: "time" (sum), "memory" (peak).
 _measures: dict = {}
 
@@ -163,8 +170,32 @@ def _measured() -> dict:
     return measured
 
 
-def _run_cpp(*args, **kwargs):
-    raise NotImplementedError("running C++ solutions comes with the C++ runner")
+def _run_wasm(stdin: str, timeout_ms: int) -> dict:
+    """Runs the C++ solution on the page, blocking: {stdout, memory, timedOut}."""
+    import js  # Pyodide only; the unit tests replace this hook
+
+    result = js.polycode_run_wasm(stdin, timeout_ms)
+    return {"stdout": result.stdout, "memory": result.memory, "timedOut": result.timedOut}
+
+
+def _run_cpp(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
+    """run() for a C++ solution. Without ``timeout`` it may use what is left of the check."""
+    ms = round(timeout * 1000) if timeout else round((CHECK_LIMIT - (_now() - _check_started)) * 1000)
+    ms = max(1, ms)
+    started = _now()
+    result = _run_wasm(stdin, ms)
+    used = _now() - started
+    memory = result["memory"]
+    if timeout:
+        _measures["time"] = _measures.get("time", 0.0) + used
+    if ram_usage:
+        _measures["memory"] = max(_measures.get("memory", 0), memory)
+    if result["timedOut"] or (timeout and used > timeout):
+        limit = timeout or ms / 1000
+        raise TimeLimitExceeded(float(max(used, limit)), float(limit))
+    if ram_usage and memory > ram_usage * 1e6:
+        raise MemoryLimitExceeded(float(memory), float(ram_usage * 1e6))
+    return result["stdout"]
 
 
 def _missing(name: str):
@@ -190,7 +221,8 @@ def declarations(source: str, filename: str) -> types.ModuleType:
 def run_tests(project: str, solution: str, source: str, kind: str = "python") -> list:
     """Runs every test_* function of ``source`` against ``project/solution``.
     ``kind`` is the solution's language: "python" or "cpp"."""
-    global _solution
+    global _solution, _check_started
+    _check_started = _now()
     _solution = os.path.join(project, solution)
     folder = os.path.dirname(_solution)
     helper = types.ModuleType("polycode_test")

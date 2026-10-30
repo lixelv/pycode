@@ -9,6 +9,8 @@ import runnerSrc from "@/python/runner.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
 import {
+  BATCH_HEADER_BYTES,
+  BATCH_RESULT_BYTES,
   DEBUG_COMMANDS,
   DEBUG_WAITING,
   STDIN_EOF,
@@ -268,12 +270,26 @@ function writeProject(files: ProjectFiles) {
 
 // ---- check ------------------------------------------------------------------
 
+/** Runs the C++ solution through the page and blocks until it ends or its time is up. */
+function runWasmOnPage(stdin: string, timeoutMs: number) {
+  const result = new SharedArrayBuffer(BATCH_RESULT_BYTES)
+  const header = new Int32Array(result, 0, 4)
+  post({ type: "run_wasm", stdin, timeoutMs, result })
+  if (Atomics.wait(header, 0, 0, timeoutMs) === "timed-out") {
+    post({ type: "kill_wasm" })
+    return { stdout: "", memory: 0, timedOut: true }
+  }
+  // TextDecoder refuses a view of shared memory: slice() copies it out.
+  const stdout = new TextDecoder().decode(new Uint8Array(result, BATCH_HEADER_BYTES, header[1]).slice())
+  return { stdout, memory: header[2], timedOut: false }
+}
+
 /**
  * Runs an admin's tests against a student's solution. This worker is made
  * for one check and thrown away; the student's code gets no network and no
  * browser storage here (it runs in the admin's browser).
  */
-async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[]) {
+async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[], cpp = false) {
   if (!py) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) await installPackages(missing)
@@ -291,8 +307,9 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
     }
     return fired
   }
+  if (cpp) (self as { polycode_run_wasm?: typeof runWasmOnPage }).polycode_run_wasm = runWasmOnPage
   const checker = py.pyimport("polycode.checker")
-  const results = checker.run_tests("/home/pyodide/project", solution, test)
+  const results = checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()
   post({ type: "checked", id, results: list })
@@ -325,7 +342,7 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
     } else if (req.type === "run") {
       await run(req.id, req.files, req.entry, req.specs, req.breakpoints)
     } else if (req.type === "check") {
-      await check(req.id, req.files, req.solution, req.test, req.specs)
+      await check(req.id, req.files, req.solution, req.test, req.specs, req.cpp)
     }
   })
 }

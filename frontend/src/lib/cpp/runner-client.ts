@@ -15,6 +15,8 @@ type Listener = (event: RunnerEvent) => void
 type OutputEvent = Extract<RunnerEvent, { type: "stdout" | "stderr" }>
 
 const BATCH_MS = 16
+/** Past this, writes join the last event whatever their kind: alternating streams would freeze the page with one event per write. */
+const MAX_BATCH_EVENTS = 64
 
 /**
  * Runs compiled C++ programs in cpp-run.worker, with input() on the same
@@ -66,7 +68,7 @@ export class CppRunnerClient implements ProgramRunner {
   private receive(event: RunnerEvent) {
     if (event.type === "stdout" || event.type === "stderr") {
       const last = this.batch.at(-1)
-      if (last?.type === event.type) last.data += event.data
+      if (last && (last.type === event.type || this.batch.length >= MAX_BATCH_EVENTS)) last.data += event.data
       else this.batch.push({ ...event })
       this.batchTimer ??= setTimeout(() => this.flush(), BATCH_MS)
       return

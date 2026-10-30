@@ -1091,7 +1091,7 @@ function Workspace() {
                     chunks={sharedConsole.chunks}
                     exit={consoleView.exit}
                     canInput={canRun}
-                    draft={sharedConsole.draft}
+                    doc={doc}
                     onDraft={(value) => canRun && setDraft(doc, value)}
                     timeoutSec={RUN_TIMEOUT_SEC}
                     onInput={sendInput}

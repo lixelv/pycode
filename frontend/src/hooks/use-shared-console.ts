@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import type { Awareness } from "y-protocols/awareness"
 import type * as Y from "yjs"
 
@@ -8,8 +8,6 @@ import type { DebugState } from "@/workers/protocol"
 
 export interface SharedConsole extends SharedRunState {
   chunks: Chunk[]
-  /** The line being typed for input(), visible to everyone. */
-  draft: string
   /** The person running the program left without finishing. */
   executorGone: boolean
   /** The run is under the debugger; where it stopped (null while it runs). */
@@ -31,7 +29,6 @@ export function useSharedConsole(doc: Y.Doc, awareness: Awareness | null): Share
     return {
       ...run,
       chunks: readTerminal(doc),
-      draft: (shared.get("draft") as string) ?? "",
       executorGone,
       debugging: !!shared.get("debugging"),
       debug: (shared.get("debug") as DebugState | null) ?? null,
@@ -61,4 +58,21 @@ export function useSharedConsole(doc: Y.Doc, awareness: Awareness | null): Share
   }, [doc, awareness])
 
   return state
+}
+
+/**
+ * The line being typed for input(), visible to everyone. Read straight from the
+ * doc, never through a frame-late copy: an older copy put back over the input
+ * loses the last keystrokes when Enter follows quickly.
+ */
+export function useSharedDraft(doc: Y.Doc) {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const run = sharedRun(doc)
+      run.observe(onChange)
+      return () => run.unobserve(onChange)
+    },
+    [doc],
+  )
+  return useSyncExternalStore(subscribe, () => (sharedRun(doc).get("draft") as string) ?? "")
 }

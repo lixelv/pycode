@@ -499,8 +499,8 @@ export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ adde
   let board = 0
   s.board.getMap<{ dataURL?: string }>("files").forEach((f) => (board += f.dataURL?.length ?? 0))
   if (zip.size + board > PROJECT_LIMIT) return { error: "limit" }
-  // The languages stay (the archive's are added), so the empty moment does not ask for one.
-  stateOf(s).set("languages", languagesOf(s))
+  // The archive's files decide the languages (none: python); set first, so the empty moment does not ask for one.
+  stateOf(s).set("languages", [])
   replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
   if (zip.env) applyEnv(s, zip.env)
   return addFiles(s, "", zip.entries, zip.env)

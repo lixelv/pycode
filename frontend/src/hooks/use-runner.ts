@@ -146,9 +146,12 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
 
   // Warm the interpreter up in the background so the first Run is quick.
   useEffect(() => {
-    if (!warm || !RunnerClient.supported()) return
+    if (!warm || !RunnerClient.supported() || runner.python) return
     setBooting(true)
-    runner.ready().catch(() => setBooting(false))
+    runner.ready().then(
+      () => setBooting(false),
+      () => setBooting(false),
+    )
   }, [warm])
 
   /** Interrupts the program; replaces the interpreter if it does not stop. */

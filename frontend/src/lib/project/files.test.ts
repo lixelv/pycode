@@ -195,4 +195,18 @@ describe("project languages", () => {
     addLanguagesFor(t, ["b.py"])
     expect(languagesOf(t)).toEqual(["python", "cpp"])
   })
+
+  it("an opened archive replaces the languages with its own", async () => {
+    const s = new ProjectStore(false)
+    startProject(s, "python")
+    const zip = importZip(zipSync({ "main.cpp": strToU8("int main() {}\n"), "lib.h": strToU8("") }))
+    await openArchive(s, zip)
+    expect(languagesOf(s)).toEqual(["cpp"])
+    expect(needsLanguage(s)).toBe(false)
+    const t = new ProjectStore(false)
+    startProject(t, "cpp")
+    await openArchive(t, importZip(zipSync({ "notes.md": strToU8("# hi\n") })))
+    expect(languagesOf(t)).toEqual(["python"])
+    expect(needsLanguage(t)).toBe(false)
+  })
 })

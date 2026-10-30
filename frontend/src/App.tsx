@@ -600,7 +600,7 @@ function Workspace() {
     })
   }, [canReset, provider, store, t])
 
-  // A new project's language: only its owner chooses (a session guest waits for the owner's files).
+  // A new project's language: only in our own store (a guest, even an admin standing in, waits for the owner's files).
   const chooseLanguage = useCallback(
     (lang: ProjectLanguage) => {
       if (!needsLanguage(store)) return
@@ -1170,7 +1170,7 @@ function Workspace() {
         />
       )}
       <FrostOverlay frozen={!!provider && access.frozen} admin={access.isAdmin} />
-      <LanguageDialog open={askLanguage && (!provider || provider.isOwner)} onChoose={chooseLanguage} />
+      <LanguageDialog open={askLanguage && !isGuest} onChoose={chooseLanguage} />
       <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>

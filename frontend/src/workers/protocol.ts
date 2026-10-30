@@ -59,6 +59,28 @@ export type RunnerEvent =
   /** polycode_test.run(timeout=…): interrupt the program after ms if timer gen is still armed (lib/python/deadline.ts). */
   | { type: "deadline"; ms: number; gen: number }
 
+/** A client that runs one program at a time in the console (Python's RunnerClient, CppRunnerClient). */
+export interface ProgramRunner {
+  on(listener: (event: RunnerEvent) => void): () => void
+  sendLine(text: string): void
+  sendEof(): void
+  /** Stops the program; it ends with an `exit` event (or is replaced, see use-runner). */
+  interrupt(): void
+  /** Throws the program away without an `exit` event. */
+  restart(): void
+}
+
+// ---- C++ run worker (cpp-run.worker.ts) -----------------------------------
+
+/**
+ * `run`: interactive, events like the Python runner's (stdout/stderr/input_request/exit).
+ * `batch`: for checks, input is a fixed text and the result goes into `result` (Task 12).
+ * `cwd` is the program's folder in the virtual FS (`/project/<entry folder>`).
+ */
+export type CppRunRequest =
+  | { type: "run"; id: number; wasm: Uint8Array; files: ProjectFiles; cwd: string; buffers: RunnerBuffers }
+  | { type: "batch"; wasm: Uint8Array; files: ProjectFiles; cwd: string; stdin: string; result: SharedArrayBuffer }
+
 /** One test of an automatic check (python/checker.py). */
 export interface CheckResult {
   name: string

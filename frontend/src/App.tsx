@@ -70,14 +70,14 @@ import { cn } from "@/lib/utils"
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
 const MOD = IS_MAC ? "⌘" : "Ctrl"
-const THEME_KEY = "python-coder:theme"
-const LABELS_KEY = "pycode:cursor-labels"
+const THEME_KEY = "polycode:theme"
+const LABELS_KEY = "polycode:cursor-labels"
 
 /** A program is starting, running or waiting for input. */
 const isBusy = (status: RunStatus) => status === "connecting" || status === "running" || status === "waiting"
-const MD_MODE_KEY = "pycode:md-mode"
-const HTML_MODE_KEY = "pycode:html-mode"
-const BREAKPOINTS_KEY = "pycode:breakpoints"
+const MD_MODE_KEY = "polycode:md-mode"
+const HTML_MODE_KEY = "polycode:html-mode"
+const BREAKPOINTS_KEY = "polycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type ViewMode = "code" | "split" | "preview"
@@ -131,14 +131,14 @@ function Workspace() {
   const [filesOpen, setFilesOpen] = useState(true)
   const [filesWidth, setFilesWidth] = useState(() => {
     try {
-      return Number(localStorage.getItem("python-coder:files-width")) || 240
+      return Number(localStorage.getItem("polycode:files-width")) || 240
     } catch {
       return 240
     }
   })
   useEffect(() => {
     try {
-      localStorage.setItem("python-coder:files-width", String(filesWidth))
+      localStorage.setItem("polycode:files-width", String(filesWidth))
     } catch {
       // storage unavailable
     }
@@ -162,7 +162,7 @@ function Workspace() {
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
     try {
-      if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
+      if (localStorage.getItem("polycode:e2e")) Object.assign(window, { __polycode: { store, provider } })
     } catch {
       // storage unavailable
     }
@@ -474,7 +474,7 @@ function Workspace() {
     const missing: string[] = []
     const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined, missing)
     if (missing.length) toast.warning(t("toast.zipMissing", { files: missing.join(", ") }))
-    downloadBlob(zip, provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
+    downloadBlob(zip, provider ? `polycode-${provider.code}.zip` : "polycode-project.zip")
   }, [store, provider, t])
 
   const upload = useCallback(

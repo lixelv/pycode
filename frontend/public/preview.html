@@ -5,11 +5,11 @@
   // origin of its own (sandbox), so even same-site scripts would be refused:
   // the loader is inline. The app sends the page once this frame is ready.
   addEventListener("message", function show(e) {
-    if (e.source !== parent || typeof (e.data && e.data.pycodePage) !== "string") return
+    if (e.source !== parent || typeof (e.data && e.data.polycodePage) !== "string") return
     removeEventListener("message", show)
     document.open()
-    document.write(e.data.pycodePage)
+    document.write(e.data.polycodePage)
     document.close()
   })
-  parent.postMessage({ pycodeReady: true }, "*")
+  parent.postMessage({ polycodeReady: true }, "*")
 </script>

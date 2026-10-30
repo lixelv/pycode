@@ -44,7 +44,7 @@ export function useCollab() {
   // A session that asks for names waits here for ours (see NameDialog).
   const [nameAsk, setNameAsk] = useState<{ initial: string | null; resolve: (name: string) => void } | null>(null)
   const askName = useCallback((sessionId: string) => {
-    const key = `pycode:name:${sessionId}`
+    const key = `polycode:name:${sessionId}`
     const saved = storage(key)
     if (saved) return Promise.resolve(saved)
     return new Promise<string>((resolve) =>
@@ -173,7 +173,7 @@ export function useCollab() {
   return { me, available, provider, status, version, peers, nameAsk, start, join, leave, end }
 }
 
-const LAST_NAME = "pycode:name"
+const LAST_NAME = "polycode:name"
 
 /** Reads (or with a value, writes) localStorage, ignoring unavailable storage. */
 function storage(key: string, value?: string): string | null {

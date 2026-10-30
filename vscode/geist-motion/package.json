@@ -1,7 +1,7 @@
 {
   "name": "geist-motion",
   "displayName": "Geist Motion",
-  "description": "Smooth caret physics like the python-coder editor: the cursor glides between positions, fades instead of blinking, and scrolling is smooth.",
+  "description": "Smooth caret physics like the polycode editor: the cursor glides between positions, fades instead of blinking, and scrolling is smooth.",
   "version": "1.0.0",
   "publisher": "lixelv",
   "license": "MIT",

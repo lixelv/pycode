@@ -43,10 +43,10 @@ export function SandboxFrame({
   useEffect(() => {
     const listen = (e: MessageEvent) => {
       if (e.source !== frame.current?.contentWindow) return
-      const data = e.data as { pycodeReady?: boolean; pycode?: string; kind?: "stdout" | "stderr" | "loaded"; text?: string } | null
+      const data = e.data as { polycodeReady?: boolean; polycode?: string; kind?: "stdout" | "stderr" | "loaded"; text?: string } | null
       // The frame is ready: give it the page.
-      if (data?.pycodeReady) frame.current?.contentWindow?.postMessage({ pycodePage: page }, "*")
-      if (data?.pycode !== token) return
+      if (data?.polycodeReady) frame.current?.contentWindow?.postMessage({ polycodePage: page }, "*")
+      if (data?.polycode !== token) return
       handler.current?.(data.kind ?? "stdout", String(data.text ?? ""))
     }
     window.addEventListener("message", listen)

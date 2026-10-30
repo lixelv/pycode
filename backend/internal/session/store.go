@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/lixelv/python-coder/backend/internal/identity"
+	"github.com/lixelv/polycode/backend/internal/identity"
 )
 
 // Session is one row of the sessions table. Code is the code it was looked

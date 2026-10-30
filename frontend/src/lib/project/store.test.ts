@@ -39,7 +39,7 @@ describe("ProjectStore", () => {
     setFolderRole(s, "s/ivan", "ivan")
     setFlag(s, "s/ivan/a.py", "protected", true)
     const zip = importZip(await exportZip(s))
-    expect(zip.entries.map((e) => e.path)).not.toContain(".pycode.env")
+    expect(zip.entries.map((e) => e.path)).not.toContain(".polycode.env")
     const t = new ProjectStore(false)
     await openArchive(t, zip)
     expect(foldersOf(t).toJSON()).toEqual({ "s/ivan": "ivan" })

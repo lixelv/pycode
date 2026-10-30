@@ -1,6 +1,6 @@
-# python-coder
+# polycode
 
-![python-coder: editor, file tree and console after running a program](docs/screenshot.png)
+![polycode: editor, file tree and console after running a program](docs/screenshot.png)
 
 A small web IDE for learning Python. Python (Pyodide, CPython 3.14 compiled
 to WebAssembly) and Ruff run in the browser, so no user code ever runs on a
@@ -31,8 +31,8 @@ Open http://localhost:8080. Use `PORT=9000 docker compose up -d --build` for ano
 Development:
 
 ```bash
-docker run -d --name pycoder-db -p 5432:5432 -e POSTGRES_USER=pycoder -e POSTGRES_PASSWORD=pycoder -e POSTGRES_DB=pycoder postgres:17-alpine
-cd backend && DATABASE_URL=postgres://pycoder:pycoder@localhost:5432/pycoder?sslmode=disable go run ./cmd/server
+docker run -d --name polycode-db -p 5432:5432 -e POSTGRES_USER=polycode -e POSTGRES_PASSWORD=polycode -e POSTGRES_DB=polycode postgres:17-alpine
+cd backend && DATABASE_URL=postgres://polycode:polycode@localhost:5432/polycode?sslmode=disable go run ./cmd/server
 cd frontend && npm install && npm run dev   # proxies /api to :8090
 ```
 

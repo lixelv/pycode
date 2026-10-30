@@ -1,6 +1,6 @@
 # Geist Motion
 
-Turns on the caret physics used by the python-coder editor (VS Code and Monaco
+Turns on the caret physics used by the polycode editor (VS Code and Monaco
 share the same editor engine):
 
 | Setting | Value | Effect |

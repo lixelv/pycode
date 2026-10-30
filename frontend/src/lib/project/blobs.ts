@@ -1,10 +1,10 @@
 /*
  * Binary files (images, PDFs, …) are kept by content: sha256 -> bytes, in
- * the IndexedDB database "pycode:blobs". Peers fetch missing ones from each
+ * the IndexedDB database "polycode:blobs". Peers fetch missing ones from each
  * other (CollabProvider.fetchBlob); the project only stores the hash.
  */
 
-const DB = "pycode:blobs"
+const DB = "polycode:blobs"
 const memory = new Map<string, Uint8Array>() // where IndexedDB is not available (tests)
 
 export async function sha256(bytes: Uint8Array): Promise<string> {

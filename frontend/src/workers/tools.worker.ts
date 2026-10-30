@@ -16,7 +16,7 @@ const installed = new Set<string>()
 
 function python() {
   pyReady ??= bootPyodide().then((py) => {
-    installSources(py, "pycoder", {
+    installSources(py, "polycode", {
       "ast_tree.py": astTreeSrc,
       "flow.py": flowSrc,
       "intellisense.py": intellisenseSrc,
@@ -45,12 +45,12 @@ async function handle(req: ToolRequest): Promise<unknown> {
   switch (req.kind) {
     case "flow":
     case "ast":
-      return toJs(py.pyimport("pycoder.views").view(req.kind, code, req.lang ?? "en"))
+      return toJs(py.pyimport("polycode.views").view(req.kind, code, req.lang ?? "en"))
     case "install": {
       await py.loadPackage(["micropip", "packaging"], { messageCallback: () => {} })
       const todo = (req.specs ?? []).filter((s) => !installed.has(s))
       if (todo.length) {
-        await py.pyimport("pycoder.packages").install(py.toPy(todo))
+        await py.pyimport("polycode.packages").install(py.toPy(todo))
         todo.forEach((s) => installed.add(s))
       }
       return true
@@ -58,7 +58,7 @@ async function handle(req: ToolRequest): Promise<unknown> {
     default: {
       jediReady ??= py.loadPackage("jedi", { messageCallback: () => {} }).then(() => undefined)
       await jediReady
-      const mod = py.pyimport("pycoder.intellisense")
+      const mod = py.pyimport("polycode.intellisense")
       const fn = req.kind === "complete" ? mod.complete : req.kind === "signature" ? mod.signatures : mod.hover
       return toJs(fn(code, req.line, req.column)) ?? null
     }

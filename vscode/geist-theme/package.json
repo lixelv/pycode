@@ -1,7 +1,7 @@
 {
   "name": "geist-theme",
   "displayName": "Geist Theme",
-  "description": "Monochrome Vercel/Geist inspired color themes (dark and light), matching the python-coder editor.",
+  "description": "Monochrome Vercel/Geist inspired color themes (dark and light), matching the polycode editor.",
   "version": "1.0.0",
   "publisher": "lixelv",
   "license": "MIT",

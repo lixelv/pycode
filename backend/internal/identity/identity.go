@@ -21,7 +21,7 @@ type ctxKey struct{}
 // Public is what others may see of a user: the cookie id itself is the
 // credential (whoever sends it is that user), so it never leaves the server.
 func Public(id uuid.UUID) string {
-	sum := sha256.Sum256([]byte("pycode-public:" + id.String()))
+	sum := sha256.Sum256([]byte("polycode-public:" + id.String()))
 	return hex.EncodeToString(sum[:16])
 }
 

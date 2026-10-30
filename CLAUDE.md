@@ -1,4 +1,4 @@
-# pycode
+# polycode
 
 A web IDE for teaching Python to beginners: a Monaco editor, a console
 with interactive `input()`, a step-by-step flowchart of the program, a
@@ -52,14 +52,14 @@ sites. Do not set it on a real server.
   - All documents share one client id (`store.clientID`).
   - A rename only moves metadata, so open editors stay bound.
   - Text docs are created and dropped by following `structure.files`.
-  - Persistence: `y-indexeddb`, one database per document (`pycode:<docId>`).
+  - Persistence: `y-indexeddb`, one database per document (`polycode:<docId>`).
   - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`).
   - The editor follows the file's document under its path (a reset or an opened archive puts new ids under the same paths).
 - **Binary files** (`lib/project/blobs.ts`):
-  - Bytes are kept by sha256 in the IndexedDB database `pycode:blobs`; the project holds only the metadata.
+  - Bytes are kept by sha256 in the IndexedDB database `polycode:blobs`; the project holds only the metadata.
   - Text or binary is decided by `isText()`: known text extensions win, then known binary extensions, then a UTF-8 check.
   - The project is limited to 64 MB (`PROJECT_LIMIT`; texts plus each distinct binary file plus board pictures).
-  - Archives keep binary files and the access rules (`.pycode.env`, line format, see `access.ts`). That name is reserved at the root.
+  - Archives keep binary files and the access rules (`.polycode.env`, line format, see `access.ts`). That name is reserved at the root, as is the old `.pycode.env` (still read when `.polycode.env` is absent).
 - **Access** (`lib/project/access.ts`, pure, unit-tested):
   - A member is `{level, roles[], owner?}`: a level (read < write < admin; the owner is an admin) plus any number of custom roles.
   - `fileAccess` applies, in order: hidden → none; every role folder on the path must be one of the member's roles; protected or frozen → read.
@@ -72,13 +72,13 @@ sites. Do not set it on a real server.
   - The whole project is written to `/home/pyodide/project`, and the open `.py` file runs as `__main__`.
   - HTTP from user code (`fetch`/XHR) is rewritten to `/api/proxy?url=`. `self.Worker` is deleted so urllib3 cannot start its own nested streaming worker, which would bypass the proxy.
 - **Debugger** (`python/debugger.py`, a `bdb.Bdb`):
-  - Started with `run(files, entry, specs, breakpoints)`. Breakpoints belong to the browser (localStorage `pycode:breakpoints`).
+  - Started with `run(files, entry, specs, breakpoints)`. Breakpoints belong to the browser (localStorage `polycode:breakpoints`).
   - On a stop the worker posts `paused` and waits on the stdin slot (`DEBUG_WAITING` → `DEBUG_GO` with the command in `[1]`). Stop wakes it with `STDIN_INTERRUPT`.
   - Debug runs have no time limit.
   - In a session the executor mirrors the stop into `run.debug`, so everyone sees the line.
   - bdb keeps breakpoints globally and loads them in `__init__`: clear them before `super().__init__()`.
 - **Automatic checks** (`python/checker.py`):
-  - `name.test.py` holds `test_*` functions; `pycode_test.run(stdin)` runs the solution and returns its output, without `input()` prompts.
+  - `name.test.py` holds `test_*` functions; `polycode_test.run(stdin)` (alias `pycode_test` for old tests) runs the solution and returns its output, without `input()` prompts.
   - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
   - A student sends signal `check` to `provider.checker()` (the acting owner if admin, else the earliest admin) and gets `check-result` back.
   - The admin runs checks one at a time, at most one per student every 3 s.
@@ -92,7 +92,7 @@ sites. Do not set it on a real server.
   - `/preview.html` has its own permissive CSP in `nginx.conf`, and its loader is inline: a sandboxed frame has an opaque origin, so CORP same-origin refuses even our own scripts. A `srcdoc` frame would inherit the app's CSP and block every script.
 - **Documents**: PDF via `pdfjs-dist`, PPTX via `pptx-preview` (`components/doc-viewer.tsx`, one page at a time, page controlled by the parent).
 - **Presentation**: an admin presents a PDF or PPTX to everyone (`state.presentation = {path, page, by}`). Only the presenter turns pages; any admin can end it if the presenter is gone.
-- **Markdown and HTML**: Code / Side by side / Preview switch (localStorage `pycode:md-mode`, `pycode:html-mode`).
+- **Markdown and HTML**: Code / Side by side / Preview switch (localStorage `polycode:md-mode`, `polycode:html-mode`).
   - The Markdown preview resolves project pictures.
   - The HTML preview (`LivePagePreview`) rebuilds the page 300 ms after each change in the same `SandboxFrame` that Run uses. Its console is shown only by Run.
 - **Whiteboard** (`components/board.tsx`, Excalidraw, lazy):
@@ -101,7 +101,7 @@ sites. Do not set it on a real server.
   - Fonts are served from `/excalidraw/` (`EXCALIDRAW_ASSET_PATH`).
 - **Session UX**:
   - Names: asked on joining when the session's `askName` is set; kept per session id.
-  - Cursor name labels: footer toggle (`pycode:cursor-labels`).
+  - Cursor name labels: footer toggle (`polycode:cursor-labels`).
   - Follow: `hooks/use-follow.ts`; awareness `view {tab, file, top}`.
   - Freeze: `state.frozen`; `components/frost-overlay.tsx` animates `--frost`, which is registered with `@property`.
   - Drag and drop onto the page: `hooks/use-file-drop.ts` (admins); the tree rows carry `data-path` / `data-kind`.
@@ -170,8 +170,8 @@ sites. Do not set it on a real server.
 - **Dropdown and context-menu inputs**: Radix menus hold focus while open. Inline inputs opened from a menu must focus after it closes (`useFocusAfterMenu` in `file-tree.tsx`), and menus use `onCloseAutoFocus={e => e.preventDefault()}`.
 - **Puppeteer headless hides scrollbars**: pass `ignoreDefaultArgs: ["--hide-scrollbars"]`. On macOS, Cmd shortcuts do not reach Monaco in headless Chrome. For WebKit (Safari engine), Playwright's webkit is installed in the scratchpad.
 - **WebRTC cannot connect P2P on this Mac**: the VPN's TUN interface is the only host candidate, so tests always end up on the relay. That is expected.
-- **Nested Python modules** in `src/python/` are bundled with `?raw` and written into the workers' virtual FS as the package `pycoder`.
-- **The e2e hook**: with `localStorage["pycode:e2e"]` set, the app exposes `window.__pycode = {store, provider}`. In tests:
+- **Nested Python modules** in `src/python/` are bundled with `?raw` and written into the workers' virtual FS as the package `polycode`.
+- **The e2e hook**: with `localStorage["polycode:e2e"]` set, the app exposes `window.__polycode = {store, provider}`. In tests:
   - fetch `/api/me` once before the app loads: parallel first requests get different identity cookies;
   - wait a moment after writing before reloading: y-indexeddb flushes asynchronously.
 - **htmlhint** has no types for its browser build: see `src/htmlhint.d.ts`.

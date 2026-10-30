@@ -9,7 +9,7 @@ import bdb
 import json
 import os
 
-from pycoder.runner import PROJECT, run_main
+from polycode.runner import PROJECT, run_main
 
 MAX_REPR = 200
 MAX_VARS = 50

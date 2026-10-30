@@ -1,4 +1,4 @@
-// Command server is the python-coder backend: user identity, the network
+// Command server is the polycode backend: user identity, the network
 // proxy for in-browser Python, and live-share sessions.
 package main
 
@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lixelv/python-coder/backend/internal/db"
-	"github.com/lixelv/python-coder/backend/internal/identity"
-	"github.com/lixelv/python-coder/backend/internal/proxy"
-	"github.com/lixelv/python-coder/backend/internal/ratelimit"
-	"github.com/lixelv/python-coder/backend/internal/session"
+	"github.com/lixelv/polycode/backend/internal/db"
+	"github.com/lixelv/polycode/backend/internal/identity"
+	"github.com/lixelv/polycode/backend/internal/proxy"
+	"github.com/lixelv/polycode/backend/internal/ratelimit"
+	"github.com/lixelv/polycode/backend/internal/session"
 )
 
 func env(key, fallback string) string {
@@ -33,7 +33,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Open(ctx, env("DATABASE_URL", "postgres://pycoder:pycoder@localhost:5432/pycoder?sslmode=disable"))
+	pool, err := db.Open(ctx, env("DATABASE_URL", "postgres://polycode:polycode@localhost:5432/polycode?sslmode=disable"))
 	if err != nil {
 		slog.Error("database", "err", err)
 		os.Exit(1)

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react"
 
 export type Lang = "en" | "ru"
 
-const KEY = "python-coder:lang"
+const KEY = "polycode:lang"
 
 const en = {
   // header

@@ -20,8 +20,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lixelv/python-coder/backend/internal/identity"
-	"github.com/lixelv/python-coder/backend/internal/ratelimit"
+	"github.com/lixelv/polycode/backend/internal/identity"
+	"github.com/lixelv/polycode/backend/internal/ratelimit"
 )
 
 const (
@@ -196,7 +196,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if out.Header.Get("User-Agent") == "" {
-		out.Header.Set("User-Agent", "python-coder-proxy/1.0")
+		out.Header.Set("User-Agent", "polycode-proxy/1.0")
 	}
 
 	resp, err := h.client.Do(out)

@@ -132,7 +132,7 @@ function countOutput(n: number) {
 
 async function boot() {
   py = await bootPyodide()
-  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
+  installSources(py, "polycode", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
@@ -169,7 +169,7 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
   if (!todo.length) return specs.map((spec) => ({ spec }))
   if (!py) throw new Error("Python is not ready")
   await py.loadPackage(["micropip", "packaging"], { messageCallback: () => {} })
-  const install = py.pyimport("pycoder.packages").install
+  const install = py.pyimport("polycode.packages").install
   const proxy = await install(py.toPy(todo))
   const results = proxy.toJs({ dict_converter: Object.fromEntries }) as InstallResult[]
   proxy.destroy()
@@ -224,7 +224,7 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   }
 
   await loadImported(files)
-  const runner = py.pyimport("pycoder.runner")
+  const runner = py.pyimport("polycode.runner")
   writeProject(files)
   outputBytes = 0
   outputLimited = false
@@ -234,7 +234,7 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   try {
     if (breakpoints) {
       const points = py.toPy(breakpoints)
-      exitCode = py.pyimport("pycoder.debugger").run_debug(entry, points, pause) as number
+      exitCode = py.pyimport("polycode.debugger").run_debug(entry, points, pause) as number
       points.destroy()
     } else exitCode = runner.run_main(entry) as number
   } catch (err) {
@@ -253,7 +253,7 @@ function writeProject(files: ProjectFiles) {
   const text: Record<string, string> = {}
   for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
   const filesPy = py.toPy(text)
-  py.pyimport("pycoder.runner").write_project(filesPy)
+  py.pyimport("polycode.runner").write_project(filesPy)
   filesPy.destroy()
   // Binary files (images, data) go next to the code as they are.
   for (const [path, content] of Object.entries(files)) {
@@ -279,7 +279,7 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   await loadImported({ ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
   writeProject(files)
-  const checker = py.pyimport("pycoder.checker")
+  const checker = py.pyimport("polycode.checker")
   const results = checker.run_tests("/home/pyodide/project", solution, test)
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()

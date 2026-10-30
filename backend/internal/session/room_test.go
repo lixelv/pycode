@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lixelv/python-coder/backend/internal/identity"
+	"github.com/lixelv/polycode/backend/internal/identity"
 )
 
 func newMember(user uuid.UUID, role, level string) *member {

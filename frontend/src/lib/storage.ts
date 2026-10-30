@@ -1,7 +1,7 @@
 const CODE_KEY = "python-coder:code"
-const THEME_KEY = "python-coder:theme"
+const THEME_KEY = "polycode:theme"
 
-export const DEFAULT_CODE = `# Welcome to python-coder!
+export const DEFAULT_CODE = `# Welcome to polycode!
 # Press Run (⌘/Ctrl + Enter) to execute, or Show tree to see the AST.
 
 def greet(name: str) -> str:

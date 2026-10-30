@@ -1,4 +1,4 @@
-// python-coder service worker.
+// polycode service worker.
 //
 // Heavy files are downloaded once and then always served from the cache:
 //   - the Python runtime (/pyodide/v<version>/…) and hashed build assets
@@ -7,7 +7,7 @@
 //     wheels (files.pythonhosted.org) — immutable by URL as well.
 // PyPI's package index is served from the cache and refreshed in the
 // background. The page itself is network-first so updates arrive.
-const CACHE = "python-coder-v1"
+const CACHE = "polycode-v1"
 
 const IMMUTABLE = [
   (url) => url.origin === self.location.origin && (url.pathname.startsWith("/pyodide/") || url.pathname.startsWith("/assets/")),

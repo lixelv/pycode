@@ -6,7 +6,7 @@ import type * as Y from "yjs"
 import type { PackageEntry } from "@/hooks/use-packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
-import { isTest, parseEnv, renameRules, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
+import { isTest, parseEnv, renameRules, isReserved, LEGACY_ENV, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
 import { ensureBlob, putBlob, sha256 } from "./blobs"
 import { ProjectStore, type FileMeta } from "./store"
 
@@ -195,7 +195,7 @@ export async function setUp(s: ProjectStore, fill: (s: ProjectStore) => Promise<
   stateOf(s).set("setUp", true)
 }
 
-/** The project's access rules, as written to .pycode.env. */
+/** The project's access rules, as written to .polycode.env. */
 export function envOf(s: ProjectStore): EnvRules {
   const metas = metasOf(s).toJSON() as Record<string, FileMeta>
   return {
@@ -287,7 +287,7 @@ export async function addFiles(
   let grow = 0
   for (const { path, bytes } of entries) {
     const full = cleanPath(dir ? `${dir}/${path}` : path)
-    if (!full || full === RESERVED) continue
+    if (!full || isReserved(full)) continue
     if (isText(full, bytes)) {
       const text = new TextDecoder().decode(bytes)
       grow += text.length
@@ -380,6 +380,7 @@ export function importZip(data: Uint8Array): Archive {
   const entries: Archive["entries"] = []
   const dirs: string[] = []
   let env: EnvRules | null = null
+  let legacy: EnvRules | null = null
   const paths = Object.keys(raw).filter((p) => !p.startsWith("__MACOSX/") && !p.split("/").some((part) => part === ".DS_Store"))
   // A zip of one folder ("project/…") is opened as that folder's content.
   const top = new Set(paths.map((p) => p.split("/")[0]))
@@ -395,9 +396,10 @@ export function importZip(data: Uint8Array): Archive {
     const path = cleanPath(rel)
     if (!path) continue
     if (path === RESERVED) env = parseEnv(strFromU8(raw[original]))
+    else if (path === LEGACY_ENV) legacy = parseEnv(strFromU8(raw[original]))
     else entries.push({ path, bytes: raw[original] })
   }
-  return { entries, dirs, env, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
+  return { entries, dirs, env: env ?? legacy, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
 }
 
 /**

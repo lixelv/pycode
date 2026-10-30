@@ -7,7 +7,7 @@ names, pass/fail and the tests' own assert messages go back to the student
 solution shares the interpreter with the tests, so results are a learning
 aid, not a grade: deliberate code can still fake them.
 
-``pycode_test.run(stdin)`` runs the solution as a program with that input
+``polycode_test.run(stdin)`` runs the solution as a program with that input
 and returns what it printed (input() prompts are not included).
 """
 
@@ -69,13 +69,14 @@ def run_tests(project: str, solution: str, source: str) -> list:
     global _solution
     _solution = os.path.join(project, solution)
     folder = os.path.dirname(_solution)
-    helper = types.ModuleType("pycode_test")
+    helper = types.ModuleType("polycode_test")
     helper.run = run
-    sys.modules["pycode_test"] = helper
+    # The old name keeps working for existing tests.
+    sys.modules["polycode_test"] = sys.modules["pycode_test"] = helper
     for path in (folder, project):
         if path not in sys.path:
             sys.path.insert(0, path)
-    module = types.ModuleType("pycode_check")
+    module = types.ModuleType("polycode_check")
     # A name the solution cannot know, to tell the tests' frames from its own.
     tests = f"<tests-{secrets.token_hex(8)}>"
     try:
@@ -98,6 +99,7 @@ def run_tests(project: str, solution: str, source: str) -> list:
             except BaseException as err:  # noqa: BLE001
                 results.append({"name": name, "ok": False, "message": _failure(err, tests)})
     finally:
+        sys.modules.pop("polycode_test", None)
         sys.modules.pop("pycode_test", None)
         module.__dict__.clear()
     return results

@@ -46,7 +46,7 @@ export default function Board({
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   // End-to-end tests read the scene through this (only where the app exposes its own hook).
   useEffect(() => {
-    const hook = (window as { __pycode?: Record<string, unknown> }).__pycode
+    const hook = (window as { __polycode?: Record<string, unknown> }).__polycode
     if (hook && api) hook.board = api
   }, [api])
   const elements = store.board.getMap<ExcalidrawElement>("elements")

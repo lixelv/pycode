@@ -102,3 +102,21 @@ func TestValidRole(t *testing.T) {
 		}
 	}
 }
+
+func TestWelcomeCarriesOwnCode(t *testing.T) {
+	ownerID := uuid.New()
+	r := newRoom(ownerID)
+	r.session.Code = "WRITECODE"
+	owner := newMember(ownerID, RoleOwner, LevelAdmin)
+	owner.code = "WRITECODE"
+	r.join(owner)
+	student := newMember(uuid.New(), RoleRead, LevelRead)
+	student.code = "READCODE"
+	r.join(student)
+	if c := last(student, "welcome"); c == nil || c.Session == nil || c.Session.Code != "READCODE" {
+		t.Fatalf("a member must be welcomed with the code they joined with, got %+v", c.Session)
+	}
+	if r.session.Code != "WRITECODE" {
+		t.Fatal("the room's session must not change")
+	}
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, exportZip, importZip, isText, metasOf, openArchive, projectSize, PROJECT_LIMIT, textOf } from "./project"
+import { addFiles, createFile, exportZip, importZip, isText, metasOf, openArchive, projectSize, PROJECT_LIMIT, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -65,5 +65,39 @@ describe("addFiles", () => {
     await addFiles(s, "", [{ path: "big.bin", bytes: big }])
     expect(await addFiles(s, "", [{ path: "copy.bin", bytes: big }])).toEqual({ added: ["copy.bin"] })
     expect(projectSize(s)).toBe(PROJECT_LIMIT - 10)
+  })
+})
+
+describe("openArchive", () => {
+  it("refuses an archive over the limit without touching the project", async () => {
+    const s = new ProjectStore(false)
+    createFile(s, "main.py", "keep")
+    const result = await openArchive(s, { entries: [{ path: "big.bin", bytes: new Uint8Array(1) }], dirs: [], env: null, size: PROJECT_LIMIT + 1 })
+    expect(result).toEqual({ error: "limit" })
+    expect(textOf(s, "main.py")!.toString()).toBe("keep")
+  })
+
+  it("applies the access rules before any content exists", async () => {
+    const s = new ProjectStore(false)
+    const seen: string[] = []
+    s.onDoc((id, doc) =>
+      doc.on("update", () => {
+        const path = [...metasOf(s).entries()].find(([, m]) => `f:${m.id}` === id)?.[0]
+        const meta = path ? metasOf(s).get(path) : undefined
+        seen.push(`${path}:${!!meta?.hidden}:${s.structure.getMap("folders").get("alice") ?? "-"}`)
+      }),
+    )
+    const utf8 = (t: string) => new TextEncoder().encode(t)
+    await openArchive(s, {
+      entries: [
+        { path: "alice/a.py", bytes: utf8("A") },
+        { path: "notes.txt", bytes: utf8("N") },
+      ],
+      dirs: [],
+      env: { roles: { alice: "write" }, folders: { alice: "alice" }, protected: [], hidden: ["notes.txt"] },
+      size: 2,
+    })
+    expect(seen).toContain("alice/a.py:false:alice")
+    expect(seen).toContain("notes.txt:true:alice")
   })
 })

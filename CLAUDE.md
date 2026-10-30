@@ -80,6 +80,9 @@ sites. Do not set it on a real server.
   - `name.test.py` holds `test_*` functions; `pycode_test.run(stdin)` runs the solution and returns its output, without `input()` prompts.
   - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
   - A student sends signal `check` to `provider.checker()` (the acting owner if admin, else the earliest admin) and gets `check-result` back.
+  - The admin runs checks one at a time, at most one per student every 3 s.
+  - Only the tests' own failed asserts carry a message. Errors raised by the solution report only a built-in type name, so the solution cannot send anything back. Results come from code the student controls: they help learning, they are not grades.
+- **What a run sees** (`runVisible` in `access.ts`, used by `projectFiles`): every run, check and preview gets public files plus the role folders the entry file is in, never hidden files. A teacher running a student's program therefore does not expose tests or other students' work.
 - **Web files**:
   - Monaco's HTML, CSS and TypeScript services are registered in `monaco-core.ts`. `MonacoEnvironment.getWorker` must route by label (css/html/typescript); otherwise the services fail silently.
   - HTMLHint checks HTML (`lib/web-lint.ts`). Prettier formats HTML/CSS/JS/Markdown (`lib/prettier.ts`, loaded on demand).

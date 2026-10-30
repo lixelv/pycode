@@ -6,7 +6,7 @@ import type * as Y from "yjs"
 import type { PackageEntry } from "@/hooks/use-packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
-import { isTest, parseEnv, renameRules, RESERVED, serializeEnv, type EnvRules, type Rules } from "./access"
+import { isTest, parseEnv, renameRules, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
 import { ensureBlob, putBlob, sha256 } from "./blobs"
 import { ProjectStore, type FileMeta } from "./store"
 
@@ -66,12 +66,13 @@ export function cleanPath(raw: string): string | null {
 export const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "")
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1)
 
-export function createFile(s: ProjectStore, path: string, content = "") {
+/** `flags` overrides the default (tests are created hidden). */
+export function createFile(s: ProjectStore, path: string, content = "", flags?: Pick<FileMeta, "protected" | "hidden">) {
   const metas = metasOf(s)
   if (metas.has(path)) return
   const id = newId()
   // Tests are hidden from students until an admin shows them.
-  metas.set(path, { id, kind: "text", size: content.length, ...(isTest(path) ? { hidden: true as const } : {}) })
+  metas.set(path, { id, kind: "text", size: content.length, ...(flags ?? (isTest(path) ? { hidden: true as const } : {})) })
   if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
 }
 
@@ -132,11 +133,16 @@ export function snapshotFiles(s: ProjectStore): Record<string, string> {
   return out
 }
 
-/** Everything a run needs: texts, and binary files (fetched from the session if missing). */
-export async function projectFiles(s: ProjectStore, provider?: { fetchBlob: (hash: string) => Promise<Uint8Array> } | null) {
-  const files: Record<string, string | Uint8Array> = snapshotFiles(s)
-  for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
-    if (meta.kind !== "binary" || !meta.hash) continue
+/**
+ * What a run of `entry` gets on its disk: texts and binary files (fetched
+ * from the session if missing), only those `runVisible` allows.
+ */
+export async function projectFiles(s: ProjectStore, provider: { fetchBlob: (hash: string) => Promise<Uint8Array> } | null | undefined, entry: string) {
+  const rules = rulesOf(s)
+  const files: Record<string, string | Uint8Array> = {}
+  for (const [path, text] of Object.entries(snapshotFiles(s))) if (runVisible(entry, path, rules)) files[path] = text
+  for (const [path, meta] of Object.entries(rules.files)) {
+    if (meta.kind !== "binary" || !meta.hash || !runVisible(entry, path, rules)) continue
     const bytes = await ensureBlob(meta.hash, provider ? (h) => provider.fetchBlob(h) : undefined).catch(() => null)
     if (bytes) files[path] = bytes
   }
@@ -254,7 +260,11 @@ export async function addFiles(
   s: ProjectStore,
   dir: string,
   entries: { path: string; bytes: Uint8Array }[],
+  env?: EnvRules | null,
 ): Promise<{ added: string[] } | { error: "limit" }> {
+  // An archive's flags are part of each file from the start (see openArchive).
+  const flags = (path: string): Pick<FileMeta, "protected" | "hidden"> | undefined =>
+    env ? { ...(env.protected.includes(path) ? { protected: true } : {}), ...(env.hidden.includes(path) ? { hidden: true } : {}) } : undefined
   const known = new Set<string>()
   metasOf(s).forEach((m) => m.hash && known.add(m.hash))
   const prepared: { path: string; text?: string; meta?: FileMeta; bytes?: Uint8Array }[] = []
@@ -272,7 +282,7 @@ export async function addFiles(
         known.add(hash)
         grow += bytes.length
       }
-      prepared.push({ path: full, bytes, meta: { id: newId(), kind: "binary", size: bytes.length, hash, mime: mimeOf(full) } })
+      prepared.push({ path: full, bytes, meta: { id: newId(), kind: "binary", size: bytes.length, hash, mime: mimeOf(full), ...flags(full) } })
     }
   }
   if (projectSize(s) + grow > PROJECT_LIMIT) return { error: "limit" }
@@ -281,7 +291,7 @@ export async function addFiles(
   for (const p of prepared) {
     const path = freePath(s, p.path)
     if (p.meta) metasOf(s).set(path, p.meta)
-    else createFile(s, path, p.text)
+    else createFile(s, path, p.text, flags(p.path))
     added.push(path)
   }
   return { added }
@@ -368,12 +378,18 @@ export function importZip(data: Uint8Array): Archive {
   return { entries, dirs, env, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
 }
 
-/** Replaces the project with an archive's content (keeps the packages). */
-export async function openArchive(s: ProjectStore, zip: Archive) {
+/**
+ * Replaces the project with an archive's content (keeps the packages). Too
+ * big: nothing changes. The access rules come first, so in a session no
+ * file is ever sent to someone the archive's rules keep it from.
+ */
+export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ added: string[] } | { error: "limit" }> {
+  let board = 0
+  s.board.getMap<{ dataURL?: string }>("files").forEach((f) => (board += f.dataURL?.length ?? 0))
+  if (zip.size + board > PROJECT_LIMIT) return { error: "limit" }
   replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
-  const result = await addFiles(s, "", zip.entries)
   if (zip.env) applyEnv(s, zip.env)
-  return result
+  return addFiles(s, "", zip.entries, zip.env)
 }
 
 // ---- the local project -------------------------------------------------------

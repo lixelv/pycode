@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { docAccess, fileAccess, parseEnv, renameRules, serializeEnv, type Member, type Rules } from "./access"
+import { docAccess, fileAccess, parseEnv, renameRules, runVisible, serializeEnv, type Member, type Rules } from "./access"
 import type { FileMeta } from "./store"
 
 const meta = (id: string, extra: Partial<FileMeta> = {}): FileMeta => ({ id, kind: "text", size: 0, ...extra })
@@ -99,5 +99,17 @@ describe(".pycode.env", () => {
 
   it("ignores comments and unknown lines", () => {
     expect(parseEnv("# hi\n\nwhatever x\nprotected a.py\n")).toEqual({ roles: {}, folders: {}, protected: ["a.py"], hidden: [] })
+  })
+})
+
+describe("runVisible", () => {
+  it("gives a run public files and its own role folders, never hidden ones", () => {
+    const r = rules()
+    expect(runVisible("main.py", "main.py", r)).toBe(true)
+    expect(runVisible("main.py", "task.test.py", r)).toBe(false)
+    expect(runVisible("main.py", "s/ivan/a.py", r)).toBe(false)
+    expect(runVisible("s/ivan/a.py", "s/ivan/a.py", r)).toBe(true)
+    expect(runVisible("s/ivan/a.py", "main.py", r)).toBe(true)
+    expect(runVisible("s/ivan/a.py", "s/x/a.py", rules({ folders: { "s/ivan": "ivan", "s/x": "petr" } }))).toBe(false)
   })
 })

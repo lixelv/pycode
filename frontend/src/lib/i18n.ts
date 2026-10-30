@@ -235,6 +235,7 @@ const en = {
   "debug.none": "No variables yet.",
   "debug.watching": "{name} is debugging",
   "tab.board": "Board",
+  "check.tooSoon": "Checked a moment ago: try again in a few seconds.",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -461,6 +462,7 @@ const ru: Record<MessageKey, string> = {
   "debug.none": "Пока нет переменных.",
   "debug.watching": "Отлаживает {name}",
   "tab.board": "Доска",
+  "check.tooSoon": "Проверка была только что: попробуйте через пару секунд.",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

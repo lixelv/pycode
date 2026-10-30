@@ -13,6 +13,7 @@ import (
 type member struct {
 	info peerInfo
 	user uuid.UUID
+	code string // the code this member joined with
 	conn *websocket.Conn
 	send chan outFrame
 }
@@ -76,7 +77,10 @@ func (r *room) join(m *member) {
 	r.members[m.info.Peer] = m
 	owner := r.pickOwner()
 	r.owner = owner
-	m.enqueueJSON(control{Type: "welcome", You: &m.info, Session: r.session, Peers: peers, Owner: &owner})
+	// Each member gets the session with their own code (codes differ by role).
+	own := *r.session
+	own.Code = m.code
+	m.enqueueJSON(control{Type: "welcome", You: &m.info, Session: &own, Peers: peers, Owner: &owner})
 	for _, other := range r.members {
 		if other != m {
 			other.enqueueJSON(control{Type: "owner", Owner: &owner})

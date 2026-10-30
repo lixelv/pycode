@@ -60,6 +60,7 @@ import { setLang, translate, useI18n } from "@/lib/i18n"
 import { fileAccess, isTest } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
+import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import type { DebugCommand } from "@/workers/protocol"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
@@ -72,6 +73,7 @@ const THEME_KEY = "python-coder:theme"
 const LABELS_KEY = "pycode:cursor-labels"
 const MD_MODE_KEY = "pycode:md-mode"
 const BREAKPOINTS_KEY = "pycode:breakpoints"
+const CHECK_COOLDOWN_MS = 3000
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type MarkdownMode = "code" | "split" | "preview"
 
@@ -372,14 +374,14 @@ function Workspace() {
       if (debug) setLowerTab("debug")
       // Breakpoints of the project's files (an empty set still pauses on line 1).
       const points = debug ? Object.fromEntries(Object.entries(breakpoints).filter(([p]) => allFiles.includes(p))) : undefined
-      void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs, points))
+      void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points))
       return
     }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
     const token = crypto.randomUUID()
     setRunStatus(doc, "running")
     webStarted.current = performance.now()
-    void projectFiles(store, provider).then((files) => {
+    void projectFiles(store, provider, active).then((files) => {
       const page = language === "html" ? buildPage(files, active, token) : scriptPage(String(files[active] ?? ""), token)
       setWebRun({ path: active, page, token, visible: language === "html" })
       setLowerTab(language === "html" ? "web" : "console")
@@ -410,7 +412,7 @@ function Workspace() {
       const test = textOf(store, path.replace(/\.py$/, ".test.py"))?.toString()
       if (test === undefined) return { results: null, error: t("check.failed", { error: "no tests" }) }
       try {
-        const files = await projectFiles(store, provider)
+        const files = await projectFiles(store, provider, path)
         return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
       } catch (err) {
         const message = (err as Error).message
@@ -434,6 +436,8 @@ function Workspace() {
     setCheck({ path: active, ...(await checkHere(active)) })
   }, [hasTest, canRun, active, provider, checkHere, t])
 
+  const checks = useRef(serial())
+  const lastCheck = useRef(new Map<number, number>())
   // Students' requests reach the admin chosen to check; the result goes back to them only.
   useEffect(() => {
     if (!provider) return
@@ -445,11 +449,18 @@ function Workspace() {
       if (signal.type !== "check" || !provider.isAdmin) return
       // Only for a solution the student may see.
       if (fileAccess(from, signal.path, rulesOf(store)) === "none") return
-      void checkHere(signal.path).then((r) =>
-        provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error }),
-      )
+      // Each check starts a whole Python: one at a time, and at most one per student every few seconds.
+      const now = Date.now()
+      if (now - (lastCheck.current.get(signal.from) ?? 0) < CHECK_COOLDOWN_MS) {
+        provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: [], error: t("check.tooSoon") })
+        return
+      }
+      lastCheck.current.set(signal.from, now)
+      void checks
+        .current(() => checkHere(signal.path))
+        .then((r) => provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error }))
     })
-  }, [provider, store, checkHere])
+  }, [provider, store, checkHere, t])
 
   const lowerTabList = [
     ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),
@@ -502,7 +513,11 @@ function Workspace() {
         action: t("confirm.zip.action"),
         destructive: true,
         onConfirm: async () => {
-          await openArchive(store, content)
+          const opened = await openArchive(store, content)
+          if ("error" in opened) {
+            toast.error(t("toast.tooBig", { mb: PROJECT_LIMIT >> 20 }))
+            return
+          }
           const paths = content.entries.map((e) => e.path)
           const first = paths.sort((a, b) => Number(b.endsWith(".py")) - Number(a.endsWith(".py")) || a.localeCompare(b))[0]
           setActive(paths.includes(DEFAULT_FILE) ? DEFAULT_FILE : first ?? DEFAULT_FILE)

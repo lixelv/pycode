@@ -52,6 +52,20 @@ export function docAccess(m: Member, docId: string, r: Rules): Access {
   return "none"
 }
 
+/**
+ * Which files a run of `entry` gets on its disk. Whoever runs it, a program
+ * sees public files and the role folders `entry` itself is in, never hidden
+ * files: a student's program run by the teacher cannot read tests or other
+ * students' folders.
+ */
+export function runVisible(entry: string, path: string, r: Rules): boolean {
+  if (r.files[path]?.hidden) return false
+  for (const folder of Object.keys(r.folders)) {
+    if (path.startsWith(folder + "/") && !entry.startsWith(folder + "/")) return false
+  }
+  return true
+}
+
 /** Folder roles follow a renamed folder. */
 export function renameRules(folders: Record<string, string>, from: string, to: string): Record<string, string> {
   const out: Record<string, string> = {}

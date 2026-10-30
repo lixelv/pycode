@@ -250,6 +250,7 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 	m := &member{
 		info: peerInfo{UserID: user.String()},
 		user: user,
+		code: code.Code,
 		conn: conn,
 		send: make(chan outFrame, sendQueueLen),
 	}

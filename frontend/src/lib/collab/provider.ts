@@ -457,7 +457,8 @@ export class CollabProvider {
         this.member = { role: msg.you.role, level: msg.you.level }
         this.peerId = msg.you.peer
         this.owner = msg.owner ?? 0
-        this.session = msg.session
+        // Keep our own code: it is what we reconnect with (each role has its own).
+        this.session = { ...msg.session, code: this.session.code }
         this.retry = 0
         // The newcomer opens a connection to everyone already here.
         for (const info of msg.peers ?? []) this.addLink(info, true)

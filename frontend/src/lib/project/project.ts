@@ -77,13 +77,86 @@ export function cleanPath(raw: string): string | null {
 export const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "")
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1)
 
+// ---- project languages -------------------------------------------------------
+
+export type ProjectLanguage = "python" | "cpp"
+
+/** The language a file brings into the project, if any. */
+function projectLanguageOf(path: string): ProjectLanguage | null {
+  const language = languageOf(path)
+  return language === "python" || language === "cpp" ? language : null
+}
+
+/** Languages found in the files (an old project has no `languages`). */
+function inferLanguages(s: ProjectStore): ProjectLanguage[] {
+  const found = new Set<ProjectLanguage>()
+  for (const path of metasOf(s).keys()) {
+    const language = projectLanguageOf(path)
+    if (language) found.add(language)
+  }
+  return (["python", "cpp"] as const).filter((l) => found.has(l))
+}
+
+const storedLanguages = (s: ProjectStore) => stateOf(s).get("languages") as ProjectLanguage[] | undefined
+
+/** The project's languages: as chosen and added, else from its files; python when empty. */
+export function languagesOf(s: ProjectStore): ProjectLanguage[] {
+  const languages = storedLanguages(s) ?? inferLanguages(s)
+  return languages.length ? languages : ["python"]
+}
+
+/** Adds the languages these files bring (in order). Deleting a file never removes one. */
+export function addLanguagesFor(s: ProjectStore, paths: string[]) {
+  const languages = storedLanguages(s) ?? inferLanguages(s)
+  const next = [...languages]
+  for (const path of paths) {
+    const language = projectLanguageOf(path)
+    if (language && !next.includes(language)) next.push(language)
+  }
+  if (next.length > languages.length) stateOf(s).set("languages", next)
+}
+
+/** A new project without files: its owner chooses the language first. */
+export const needsLanguage = (s: ProjectStore) => metasOf(s).size === 0 && !stateOf(s).has("languages")
+
+export const STARTERS: Record<ProjectLanguage, { path: string; code: string }> = {
+  python: { path: DEFAULT_FILE, code: DEFAULT_CODE },
+  cpp: {
+    path: "main.cpp",
+    code: `// Welcome to polycode!
+// Press Run (⌘/Ctrl + Enter) to compile and run.
+
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string name;
+    std::cout << "What is your name? ";
+    std::getline(std::cin, name);
+    std::cout << "Hello, " << name << "!" << std::endl;
+}
+`,
+  },
+}
+
+/** Starts an empty project in a language: its starting file. */
+export function startProject(s: ProjectStore, lang: ProjectLanguage) {
+  s.structure.transact(() => {
+    stateOf(s).set("languages", [lang])
+    createFile(s, STARTERS[lang].path, STARTERS[lang].code)
+  })
+}
+
 /** `flags` overrides the default (tests are created hidden). */
 export function createFile(s: ProjectStore, path: string, content = "", flags?: Pick<FileMeta, "protected" | "hidden">) {
   const metas = metasOf(s)
   if (metas.has(path)) return
   const id = newId()
-  // Tests are hidden from students until an admin shows them.
-  metas.set(path, { id, kind: "text", size: content.length, ...(flags ?? (isTest(path) ? { hidden: true as const } : {})) })
+  s.structure.transact(() => {
+    // Tests are hidden from students until an admin shows them.
+    metas.set(path, { id, kind: "text", size: content.length, ...(flags ?? (isTest(path) ? { hidden: true as const } : {})) })
+    addLanguagesFor(s, [path])
+  })
   if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
 }
 
@@ -186,19 +259,20 @@ export function replaceProject(s: ProjectStore, files: Record<string, string>, d
   })
 }
 
-/** A fresh project: the starting file, and no folder rules, freeze or presentation (roles stay). */
+/** A fresh project: no files (the language is chosen again), folder rules, freeze or presentation (roles stay). */
 export function resetProject(s: ProjectStore) {
-  replaceProject(s, { [DEFAULT_FILE]: DEFAULT_CODE })
+  replaceProject(s, {})
   s.structure.transact(() => {
     foldersOf(s).clear()
     stateOf(s).delete("frozen")
     stateOf(s).delete("presentation")
+    stateOf(s).delete("languages")
   })
 }
 
 /**
- * First start of a local project: `fill` it (from an older version's data,
- * or with the starting file) once. Afterwards an empty project stays empty.
+ * First start of a local project: `fill` it from an older version's data
+ * once. Without such data it stays empty, so its language is asked for.
  */
 export async function setUp(s: ProjectStore, fill: (s: ProjectStore) => Promise<void>) {
   if (stateOf(s).get("setUp")) return
@@ -315,12 +389,15 @@ export async function addFiles(
   if (projectSize(s) + grow > PROJECT_LIMIT) return { error: "limit" }
   for (const p of prepared) if (p.bytes) await putBlob(p.bytes, p.meta!.hash)
   const added: string[] = []
-  for (const p of prepared) {
-    const path = freePath(s, p.path)
-    if (p.meta) metasOf(s).set(path, p.meta)
-    else createFile(s, path, p.text, flags(p.path))
-    added.push(path)
-  }
+  s.structure.transact(() => {
+    for (const p of prepared) {
+      const path = freePath(s, p.path)
+      if (p.meta) metasOf(s).set(path, p.meta)
+      else createFile(s, path, p.text, flags(p.path))
+      added.push(path)
+    }
+    addLanguagesFor(s, added)
+  })
   return { added }
 }
 
@@ -422,6 +499,8 @@ export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ adde
   let board = 0
   s.board.getMap<{ dataURL?: string }>("files").forEach((f) => (board += f.dataURL?.length ?? 0))
   if (zip.size + board > PROJECT_LIMIT) return { error: "limit" }
+  // The languages stay (the archive's are added), so the empty moment does not ask for one.
+  stateOf(s).set("languages", languagesOf(s))
   replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
   if (zip.env) applyEnv(s, zip.env)
   return addFiles(s, "", zip.entries, zip.env)
@@ -468,7 +547,7 @@ async function migrate(s: ProjectStore) {
     } catch {
       // storage unavailable
     }
-    replaceProject(s, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
+    if (legacyCode !== null || legacyPackages.length) replaceProject(s, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
   }
   await persistence.clearData()
   old.destroy()

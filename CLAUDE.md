@@ -44,7 +44,7 @@ sites. Do not set it on a real server.
 
   | Document | Contents |
   |---|---|
-  | `structure` | `files` (path → `FileMeta {id, kind, size, hash?, mime?, protected?, hidden?}`), `dirs`, `packages`, `roles` (custom role → read/write), `folders` (folder → role), `state` (`frozen`, `presentation`) |
+  | `structure` | `files` (path → `FileMeta {id, kind, size, hash?, mime?, protected?, hidden?}`), `dirs`, `packages`, `roles` (custom role → read/write), `folders` (folder → role), `state` (`frozen`, `presentation`, `languages`) |
   | `runtime` | `terminal` (`Y.Text`, runs tagged with `k`), `run` (status, exit, `executorClient`, `draft`, `debugging`, `debug`) |
   | `board` | whiteboard `elements` and `files` |
   | `f:<id>` | one text file (`getText("t")`) |
@@ -53,9 +53,14 @@ sites. Do not set it on a real server.
   - A rename only moves metadata, so open editors stay bound.
   - Text docs are created and dropped by following `structure.files`.
   - Persistence: `y-indexeddb`, one database per document (`polycode:<docId>`).
-  - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`).
+  - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`). Without old data a new project starts empty, so its language is asked for.
   - Old browser data is moved by `migrateStorage()` (`lib/storage.ts`), which `main.tsx` awaits before importing the app (i18n reads localStorage at load): `pycode:*` and `python-coder:*` keys (except `python-coder:code`/`packages`, read by the legacy migration) become `polycode:*`, and `pycode:*` IndexedDB databases are copied to `polycode:*` and then deleted. An existing new name is never overwritten.
   - The editor follows the file's document under its path (a reset or an opened archive puts new ids under the same paths).
+- **Languages** (`project.ts`): `state.languages` is `("python" | "cpp")[]`.
+  - `languagesOf` reads it; an old project without it gets them from its files (`.py`; `.cpp .cc .cxx .h .hpp`), an empty one is python.
+  - `addLanguagesFor` adds a file's language in `createFile`, `addFiles` and `openArchive` (which keeps the old ones). Deleting a file never removes one.
+  - An empty project without `languages` (`needsLanguage`: first start, Reset) shows `LanguageDialog` (Python or C++ card) to its owner, never to a session guest (`!provider || provider.isOwner`). `startProject` writes `languages` and the starter (`STARTERS`: `main.py`, `main.cpp`). Closing the dialog = Python. Reset deletes every file and `languages`, so it asks again.
+  - The Python runtimes (runner warm-up via `useRunner({warm})`, Ruff) load only when the project is ready, has its language and includes python (`hasPython` in `App.tsx`, read on `structure` updates). A C++-only project makes no `/pyodide/` request until a `.py` file adds python. The tools worker is lazy (Python hints, flowchart).
 - **Binary files** (`lib/project/blobs.ts`):
   - Bytes are kept by sha256 in the IndexedDB database `polycode:blobs`; the project holds only the metadata.
   - Text or binary is decided by `isText()`: known text extensions win, then known binary extensions, then a UTF-8 check.

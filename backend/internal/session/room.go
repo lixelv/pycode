@@ -29,6 +29,38 @@ type room struct {
 	mu       sync.Mutex
 	members  map[uint32]*member
 	nextPeer uint32
+	// owner is who acts as the owner: the real one while connected, else
+	// the admin who joined first, else 0.
+	owner uint32
+}
+
+// pickOwner chooses the acting owner. Call with r.mu held.
+func (r *room) pickOwner() uint32 {
+	var best, bestAdmin uint32
+	for id, m := range r.members {
+		if m.user == r.session.OwnerID && (best == 0 || id < best) {
+			best = id
+		}
+		if m.info.Level == LevelAdmin && (bestAdmin == 0 || id < bestAdmin) {
+			bestAdmin = id
+		}
+	}
+	if best != 0 {
+		return best
+	}
+	return bestAdmin
+}
+
+// updateOwner tells everyone when the acting owner changes. Call with r.mu held.
+func (r *room) updateOwner() {
+	next := r.pickOwner()
+	if next == r.owner {
+		return
+	}
+	r.owner = next
+	for _, m := range r.members {
+		m.enqueueJSON(control{Type: "owner", Owner: &next})
+	}
 }
 
 func (r *room) join(m *member) {
@@ -41,8 +73,15 @@ func (r *room) join(m *member) {
 		peers = append(peers, other.info)
 		other.enqueueJSON(control{Type: "join", Peer: &m.info})
 	}
-	m.enqueueJSON(control{Type: "welcome", You: &m.info, Session: r.session, Peers: peers})
 	r.members[m.info.Peer] = m
+	owner := r.pickOwner()
+	r.owner = owner
+	m.enqueueJSON(control{Type: "welcome", You: &m.info, Session: r.session, Peers: peers, Owner: &owner})
+	for _, other := range r.members {
+		if other != m {
+			other.enqueueJSON(control{Type: "owner", Owner: &owner})
+		}
+	}
 }
 
 func (r *room) leave(m *member) (empty bool) {
@@ -55,6 +94,7 @@ func (r *room) leave(m *member) (empty bool) {
 	for _, other := range r.members {
 		other.enqueueJSON(control{Type: "leave", Peer: &m.info})
 	}
+	r.updateOwner()
 	return len(r.members) == 0
 }
 
@@ -67,14 +107,14 @@ func (r *room) signal(from *member, msg control) {
 	}
 }
 
-// reset tells everyone the owner reset the project. Only the owner may.
+// reset tells everyone the owner reset the project. Only the acting owner may.
 func (r *room) reset(from *member) {
-	if from.info.Role != RoleOwner {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if from.info.Peer != r.owner {
 		from.enqueueJSON(control{Type: "error", Error: "Only the owner can reset the session's project."})
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	for _, m := range r.members {
 		if m != from {
 			m.enqueueJSON(control{Type: "reset", From: from.info.Peer})
@@ -98,6 +138,18 @@ func (r *room) relay(from *member, frame []byte) {
 	}
 }
 
+// hasAdmin reports whether this user is connected with admin rights.
+func (r *room) hasAdmin(user uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range r.members {
+		if m.user == user && m.info.Level == LevelAdmin {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *room) end() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,6 +171,8 @@ func (m *member) enqueue(f outFrame) {
 	case m.send <- f:
 	default:
 		// Too slow to keep up: drop the connection; the client reconnects.
-		_ = m.conn.Close(websocket.StatusPolicyViolation, "too slow")
+		if m.conn != nil {
+			_ = m.conn.Close(websocket.StatusPolicyViolation, "too slow")
+		}
 	}
 }

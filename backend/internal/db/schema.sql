@@ -19,3 +19,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 DROP TABLE IF EXISTS session_updates;
 
 CREATE INDEX IF NOT EXISTS sessions_last_active ON sessions (last_active);
+
+-- Asked for a name on joining (set when the session starts).
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ask_name boolean NOT NULL DEFAULT false;
+
+-- One join code per role: the built-in read/write/admin and custom roles.
+-- sessions.code is the write code (kept for the unique session link).
+CREATE TABLE IF NOT EXISTS session_codes (
+    code        text PRIMARY KEY,
+    session_id  uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    role        text NOT NULL,
+    level       text NOT NULL CHECK (level IN ('read', 'write', 'admin')),
+    UNIQUE (session_id, role)
+);

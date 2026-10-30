@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -38,6 +39,8 @@ func NewHub(pool *pgxpool.Pool, originPatterns []string) *Hub {
 func (h *Hub) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions", h.create)
 	mux.HandleFunc("GET /api/sessions/{code}", h.get)
+	mux.HandleFunc("GET /api/sessions/{code}/codes", h.codes)
+	mux.HandleFunc("POST /api/sessions/{code}/roles", h.addRole)
 	mux.HandleFunc("POST /api/sessions/{code}/end", h.end)
 	mux.HandleFunc("GET /api/sessions/{code}/ws", h.ws)
 }
@@ -69,63 +72,144 @@ func (h *Hub) Janitor(ctx context.Context) {
 	}
 }
 
-func (h *Hub) roleOf(s *Session, user uuid.UUID) string {
-	switch {
-	case user == s.OwnerID:
-		return RoleOwner
-	case s.Mode == ModeReadWrite:
-		return RoleEditor
-	default:
-		return RoleViewer
+// roleOf is the role a user gets with a code: the owner is always the owner.
+func roleOf(s *Session, code Code, user uuid.UUID) (role, level string) {
+	if user == s.OwnerID {
+		return RoleOwner, LevelAdmin
 	}
+	return code.Role, code.Level
+}
+
+var roleName = regexp.MustCompile(`^[\p{L}\p{N}_-]{1,32}$`)
+
+// validRole accepts a custom role name (not one of the built-in ones).
+func validRole(name string) bool {
+	switch name {
+	case RoleOwner, RoleAdmin, RoleWrite, RoleRead:
+		return false
+	}
+	return roleName.MatchString(name)
+}
+
+func validCustom(c Code) bool {
+	return validRole(c.Role) && (c.Level == LevelRead || c.Level == LevelWrite)
 }
 
 func (h *Hub) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Mode string `json:"mode"`
+		AskName bool `json:"askName"`
+		Roles   []struct {
+			Name  string `json:"name"`
+			Level string `json:"level"`
+		} `json:"roles"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxFrame*2)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.Mode != ModeReadOnly && body.Mode != ModeReadWrite {
-		writeError(w, http.StatusBadRequest, "mode must be read_only or read_write")
-		return
+	roles := make([]Code, 0, len(body.Roles))
+	for _, ro := range body.Roles {
+		c := Code{Role: ro.Name, Level: ro.Level}
+		if !validCustom(c) {
+			writeError(w, http.StatusBadRequest, "invalid role: "+ro.Name)
+			return
+		}
+		roles = append(roles, c)
 	}
-	sess, err := h.store.Create(r.Context(), identity.FromContext(r.Context()), body.Mode)
+	user := identity.FromContext(r.Context())
+	sess, codes, err := h.store.Create(r.Context(), user, body.AskName, roles)
 	if err != nil {
 		slog.Error("create session", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not create the session")
 		return
 	}
-	writeJSON(w, http.StatusCreated, h.view(sess, identity.FromContext(r.Context())))
+	role, level := roleOf(sess, Code{}, user)
+	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "role": role, "level": level, "codes": codes})
 }
 
-func (h *Hub) view(s *Session, user uuid.UUID) map[string]any {
-	return map[string]any{"session": s, "role": h.roleOf(s, user)}
-}
-
-func (h *Hub) lookup(w http.ResponseWriter, r *http.Request) *Session {
-	sess, err := h.store.ByCode(r.Context(), r.PathValue("code"))
+func (h *Hub) lookup(w http.ResponseWriter, r *http.Request) (*Session, Code) {
+	sess, code, err := h.store.ByCode(r.Context(), r.PathValue("code"))
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "No session with this code.")
-		return nil
+		return nil, code
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "lookup failed")
-		return nil
+		return nil, code
 	}
-	return sess
+	return sess, code
 }
 
 func (h *Hub) get(w http.ResponseWriter, r *http.Request) {
-	if sess := h.lookup(w, r); sess != nil {
-		writeJSON(w, http.StatusOK, h.view(sess, identity.FromContext(r.Context())))
+	sess, code := h.lookup(w, r)
+	if sess == nil {
+		return
 	}
+	role, level := roleOf(sess, code, identity.FromContext(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "role": role, "level": level})
+}
+
+// manager reports whether the user may manage the session's roles: the
+// owner, or someone connected to it as an admin.
+func (h *Hub) manager(sess *Session, user uuid.UUID) bool {
+	if user == sess.OwnerID {
+		return true
+	}
+	h.mu.Lock()
+	rm := h.rooms[sess.ID]
+	h.mu.Unlock()
+	return rm != nil && rm.hasAdmin(user)
+}
+
+func (h *Hub) codes(w http.ResponseWriter, r *http.Request) {
+	sess, _ := h.lookup(w, r)
+	if sess == nil {
+		return
+	}
+	if !h.manager(sess, identity.FromContext(r.Context())) {
+		writeError(w, http.StatusForbidden, "Only the owner or an admin can see the codes.")
+		return
+	}
+	codes, err := h.store.Codes(r.Context(), sess.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list the codes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
+}
+
+func (h *Hub) addRole(w http.ResponseWriter, r *http.Request) {
+	sess, _ := h.lookup(w, r)
+	if sess == nil {
+		return
+	}
+	if !h.manager(sess, identity.FromContext(r.Context())) {
+		writeError(w, http.StatusForbidden, "Only the owner or an admin can add roles.")
+		return
+	}
+	var body struct {
+		Name  string `json:"name"`
+		Level string `json:"level"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	c := Code{Role: body.Name, Level: body.Level}
+	if !validCustom(c) {
+		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	c, err := h.store.AddRole(r.Context(), sess.ID, c)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not add the role")
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }
 
 func (h *Hub) end(w http.ResponseWriter, r *http.Request) {
-	sess := h.lookup(w, r)
+	sess, _ := h.lookup(w, r)
 	if sess == nil {
 		return
 	}
@@ -148,7 +232,7 @@ func (h *Hub) end(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
-	sess := h.lookup(w, r)
+	sess, code := h.lookup(w, r)
 	if sess == nil {
 		return
 	}
@@ -162,12 +246,14 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(maxFrame)
+	role, level := roleOf(sess, code, user)
 	m := &member{
-		info: peerInfo{UserID: user.String(), Role: h.roleOf(sess, user)},
+		info: peerInfo{UserID: user.String()},
 		user: user,
 		conn: conn,
 		send: make(chan outFrame, sendQueueLen),
 	}
+	m.info.Role, m.info.Level = role, level
 
 	h.mu.Lock()
 	rm := h.rooms[sess.ID]

@@ -6,21 +6,25 @@
 //   - forwards WebRTC signaling (offers, answers, ICE candidates),
 //   - relays binary data for pairs that cannot connect directly.
 //
-// It stores no document content.
+// It stores no document content. Each role has its own join code; the
+// member's role (and level) comes from the code they joined with.
 package session
 
 // Text frames are JSON control messages; binary frames are relayed data:
 // client -> server [to u32 big endian][payload], server -> client [from u32][payload].
 
+// Built-in roles; any other role name is a custom one (with level read or write).
 const (
-	RoleOwner  = "owner"
-	RoleEditor = "editor"
-	RoleViewer = "viewer"
+	RoleOwner = "owner"
+	RoleAdmin = "admin"
+	RoleWrite = "write"
+	RoleRead  = "read"
 )
 
 const (
-	ModeReadOnly  = "read_only"
-	ModeReadWrite = "read_write"
+	LevelRead  = "read"
+	LevelWrite = "write"
+	LevelAdmin = "admin"
 )
 
 // peerInfo describes one connected member to the others.
@@ -28,11 +32,12 @@ type peerInfo struct {
 	Peer   uint32 `json:"peer"`
 	UserID string `json:"userId"`
 	Role   string `json:"role"`
+	Level  string `json:"level"`
 }
 
 // control is every JSON message in either direction.
 type control struct {
-	Type    string     `json:"type"`              // welcome | join | leave | signal | ended
+	Type    string     `json:"type"`              // welcome | join | leave | signal | owner | reset | error | ended
 	You     *peerInfo  `json:"you,omitempty"`     // welcome
 	Session *Session   `json:"session,omitempty"` // welcome
 	Peers   []peerInfo `json:"peers,omitempty"`   // welcome
@@ -41,4 +46,5 @@ type control struct {
 	From    uint32     `json:"from,omitempty"`    // signal (server -> client)
 	Data    jsonRaw    `json:"data,omitempty"`    // signal payload (SDP / ICE), opaque
 	Error   string     `json:"error,omitempty"`   // error
+	Owner   *uint32    `json:"owner,omitempty"`   // welcome / owner: who acts as the owner (0: nobody)
 }

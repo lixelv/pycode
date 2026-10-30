@@ -446,14 +446,18 @@ fallback из пункта 4):
   3. В `checker.py` решение-C++ запускается в `run()` через JS-хук
      `polycode_run_wasm(stdin, timeoutMs) → {stdout, memory, timedOut}`,
      синхронно.
-- **Хук `polycode_run_wasm`** (в `runner.worker.ts`, только для проверок):
-  1. Создаёт вложенный воркер `cpp-run.worker.ts` в режиме `batch`: stdin
-     целиком, без SAB-ввода, EOF в конце.
-  2. Ждёт `Atomics.wait` на своём SAB с таймаутом: `timeoutMs` или
-     остаток 30 с проверки.
-  3. При таймауте делает `terminate()` и возвращает `timedOut`.
-  4. Вывод приходит через SharedArrayBuffer (до лимита вывода).
-  5. Если spike покажет, что так нельзя, используется fallback из раздела 4.
+- **Хук `polycode_run_wasm`** (в `runner.worker.ts`, только для проверок).
+  По итогам spike вложенный воркер не работает, поэтому запуск идёт через
+  страницу:
+  1. Воркер проверки шлёт странице `{type: "run_wasm", stdin, timeoutMs}` и
+     ждёт `Atomics.wait` на SAB результата (передан в `check`).
+  2. `RunnerClient` на странице запускает `cpp-run.worker.ts` в режиме
+     `batch` (stdin целиком, EOF в конце), wasm передан ему при `check`.
+  3. Результат (stdout до лимита вывода, `memory`, код) пишется в SAB, затем
+     `Atomics.notify`.
+  4. Если за `timeoutMs` (или за остаток 30 с проверки) ответа нет, воркер
+     проверки возвращает `timedOut` и шлёт `{type: "kill_wasm"}`. Страница
+     делает `terminate()` воркеру C++.
 - **Вывод C++.** Подсказки ввода остаются частью вывода (`cout` перед
   `cin`). Это отмечается в справке по тестам.
 - **Лимиты.** `timeout` и `ram_usage` работают так же: время меряется

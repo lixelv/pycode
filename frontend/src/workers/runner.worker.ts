@@ -177,6 +177,27 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
   return results
 }
 
+/**
+ * Loads the packages Pyodide builds itself (numpy, pandas, matplotlib…) that
+ * the project's Python files import, so `import numpy` works without adding
+ * it on the Packages tab first.
+ */
+async function loadImported(files: ProjectFiles) {
+  if (!py) return
+  const sources = Object.entries(files)
+    .filter(([path, content]) => path.endsWith(".py") && typeof content === "string")
+    .map(([, content]) => content as string)
+    .join("\n")
+  try {
+    await py.loadPackagesFromImports(sources, {
+      messageCallback: (msg: string) => /^Loading /.test(msg) && post({ type: "status", text: msg }),
+      errorCallback: () => {},
+    })
+  } catch {
+    // An import that is not a Pyodide package fails later with a clear ModuleNotFoundError.
+  }
+}
+
 // ---- run ------------------------------------------------------------------
 
 /** The debugger stopped: show where, and block until the page says how to go on. */
@@ -202,6 +223,7 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
     for (const f of failed) post({ type: "stderr", data: `Could not install ${f.spec}: ${f.error}\n` })
   }
 
+  await loadImported(files)
   const runner = py.pyimport("pycoder.runner")
   writeProject(files)
   outputBytes = 0
@@ -253,6 +275,8 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   if (!py) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) await installPackages(missing)
+  // The tests may import Pyodide's packages too (before the network goes away).
+  await loadImported({ ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
   writeProject(files)
   const checker = py.pyimport("pycoder.checker")

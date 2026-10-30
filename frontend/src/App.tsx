@@ -800,7 +800,7 @@ function Workspace() {
               </TooltipTrigger>
               <TooltipContent>{language === "json" ? t("btn.format.json") : language === "python" ? t("btn.format.ruff") : t("btn.format.prettier")}</TooltipContent>
             </Tooltip>
-            <Button variant="outline" size="sm" onClick={() => setTreeOpen(true)} disabled={language !== "python"}>
+            <Button variant="outline" size="sm" onClick={() => setTreeOpen(true)} disabled={language !== "python" && language !== "cpp"}>
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
@@ -1102,7 +1102,14 @@ function Workspace() {
         </footer>
       </div>
 
-      <AstDialog open={treeOpen} onOpenChange={setTreeOpen} code={text} theme={theme} onReveal={reveal} />
+      <AstDialog
+        open={treeOpen}
+        onOpenChange={setTreeOpen}
+        code={text}
+        theme={theme}
+        onReveal={reveal}
+        language={language === "cpp" ? "cpp" : "python"}
+      />
       <ShareDialog
         open={shareOpen}
         onOpenChange={setShareOpen}

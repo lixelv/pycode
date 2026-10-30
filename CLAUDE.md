@@ -23,15 +23,16 @@ docker compose up -d --build              # whole stack; port comes from .env (P
 docker compose up -d --build frontend     # after frontend changes
 cd frontend && npx tsc -b                 # type-check (run after every change)
 cd frontend && npx oxlint src             # lint
-cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier)
+cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier, C++ tree/flowchart)
 cd frontend && npm run dev                # dev server, proxies /api to :8090
 cd backend && gofmt -w . && go vet ./... && go test ./...
 ```
 
-`npm run dev` and `npm run build` first run `scripts/copy-pyodide.mjs` and
-`scripts/copy-excalidraw.mjs`:
+`npm run dev` and `npm run build` first run `scripts/copy-pyodide.mjs`,
+`scripts/copy-excalidraw.mjs` and `scripts/copy-tree-sitter.mjs`:
 - the Pyodide runtime goes into `public/pyodide/v<version>/` (gitignored), and `src/generated/pyodide.ts` is written;
-- the whiteboard fonts go into `public/excalidraw/fonts/` (gitignored).
+- the whiteboard fonts go into `public/excalidraw/fonts/` (gitignored);
+- tree-sitter's runtime (`tree-sitter.wasm`) and the C++ grammar (`tree-sitter-cpp.wasm`) go into `public/tree-sitter/` (gitignored).
 
 `.env` is gitignored. It holds `PORT` and, on this Mac only,
 `PROXY_ALLOW_CIDRS=198.18.0.0/15`: the user's VPN uses fake-IP DNS, which
@@ -106,6 +107,11 @@ sites. Do not set it on a real server.
   - Freeze: `state.frozen`; `components/frost-overlay.tsx` animates `--frost`, which is registered with `@property`.
   - Drag and drop onto the page: `hooks/use-file-drop.ts` (admins); the tree rows carry `data-path` / `data-kind`.
 - **Analysis**: `src/workers/tools.worker.ts` is a second Pyodide instance for Jedi hints, the flowchart and the syntax tree. It is separate so that hints keep working while a program waits for input. The Python sources are in `src/python/`, the flowchart builder in `flow.py`.
+- **C++ syntax tree and flowchart** (`src/lib/cpp/`): parsed on the page by `web-tree-sitter` + `tree-sitter-cpp` (`parse.ts`, lazy; in vitest the wasm is read from `node_modules`). The versions are pinned exactly: the runtime must accept the grammar's ABI.
+  - `cppTree` (`tree.ts`) returns the same `AstResponse` as `ast_tree.py`: named nodes, leaves carry `value`, edges are labelled with grammar field names; `categorize(type, "cpp")` colours them.
+  - `cppFlow` (`flow.ts`) mirrors `flow.py` (same `FlowResponse`, `MAX_NODES`, call links resolved after building, en/ru captions in its own `RU` table). Every function, class and method is a frame; `main` gets Program start/end. A `switch` is a chain of conditions, one per `case`.
+  - A syntax error is the first `ERROR`/`MISSING` node. Columns are converted to UTF-8 bytes, like Python's, so `sourceSegment` and reveal work the same.
+  - `AstDialog` takes `language` and calls these instead of the tools worker.
 - **Console mirroring**: the console always renders from the doc. Whoever runs the program mirrors its output into the doc (`mirrorRun` in `App.tsx`). Others send `stdin`/`eof`/`stop` signals to `executorClient`.
 - **Packages**: before every run (and check) the runner loads the Pyodide packages the project's `.py` files import (`loadPackagesFromImports`), so `import numpy` works without the Packages tab. Other packages are installed with micropip from the Packages tab. Packages built for Pyodide come from cdn.jsdelivr.net, everything else from PyPI (both serve CORS). The resolved version is pinned after the first install.
 - **Caching**: `public/sw.js` serves `/pyodide/`, `/assets/`, Pyodide CDN wheels and PyPI wheels cache-first. Real Safari/Chrome only; the in-app preview browser cannot register service workers.
@@ -116,7 +122,7 @@ sites. Do not set it on a real server.
   - The editor is **uncontrolled** (`defaultValue`). A controlled `value` overwrites remote Yjs edits with a stale copy.
 - **i18n**: `src/lib/i18n.ts` (EN/RU, default from the browser).
   - Every UI string goes through `t()` / `translate()`, with both `en` and `ru` entries.
-  - Flowchart captions are translated in Python (`tr()` and `_RU` in `flow.py`); the language reaches the worker as `lang`.
+  - Flowchart captions are translated in Python (`tr()` and `_RU` in `flow.py`); the language reaches the worker as `lang`. C++ captions: `RU` in `lib/cpp/flow.ts`.
   - Kind tags are translated in `kindTag()` in `lib/flow.ts`.
 - **Flowchart layout**: ELK (`elkjs`, lazy-loaded) in `src/lib/flow.ts`, hierarchical and orthogonal. Do not go back to dagre: it crashes on compound graphs and routes edges through cards.
 - **Theme**: dark by default, toggle in the footer. The footer and console are always black (the `--console*` tokens). The palette is Vercel/Geist: tokens in `src/index.css`, Monaco themes in `lib/monaco.ts`.

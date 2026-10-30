@@ -61,8 +61,8 @@ sites. Do not set it on a real server.
   - The project is limited to 64 MB (`PROJECT_LIMIT`; texts plus each distinct binary file plus board pictures).
   - Archives keep binary files and the access rules (`.pycode.env`, line format, see `access.ts`). That name is reserved at the root.
 - **Access** (`lib/project/access.ts`, pure, unit-tested):
-  - Levels are read < write < admin; owner is an admin.
-  - `fileAccess` applies, in order: hidden → none; every role folder on the path must be the member's own role; protected or frozen → read.
+  - A member is `{level, roles[], owner?}`: a level (read < write < admin; the owner is an admin) plus any number of custom roles.
+  - `fileAccess` applies, in order: hidden → none; every role folder on the path must be one of the member's roles; protected or frozen → read.
   - `docAccess` maps documents to access: `structure` is written by admins only; `runtime` and `board` by write.
   - `useAccess` (hook) gives the UI the same answers. Tree changes, packages, freeze and presentation are admin-only. `*.test.py` files are created hidden.
 - **Running code**: `src/workers/runner.worker.ts` (Pyodide). Binary files are written next to the texts.
@@ -135,7 +135,11 @@ sites. Do not set it on a real server.
   - Step 1 is answered only to readers; step 2 and updates are applied only from writers (rules read from our own `structure`).
   - When a document becomes readable, we ask for it.
   - Consequence: `structure` and protected or hidden files come only from admins, so a newcomer with no admin online sees "waiting for the teacher".
-- **Roles** come from the code a member joined with: `read`, `write`, `admin`, or a custom role (level read/write). The owner (by cookie) is always owner.
+- **Roles** come from the code a member joined with (`read`, `write`, `admin`, or a custom role, which gives its level plus that role). The owner (by cookie) is always owner.
+  - The owner or an admin changes a connected member's level and roles from the share dialog (`provider.setRole` → WS `setRole`); the server checks `canSetRole`:
+    - an admin changes members below admin and cannot make admins;
+    - the owner changes anyone but themself.
+  - Everyone gets `{"type":"role"}` and access follows at once. The change is kept in `session_members` and wins over the join code on reconnect.
 - **Acting owner**: the server picks `room.owner` (the owner while connected, else the admin who joined first) and broadcasts `{"type":"owner"}`. Reset is accepted only from the acting owner.
 - **The project lives with the owner**: the owner shares their local store, and a guest gets a fresh in-memory store that is dropped on leaving.
 - **Cursor colour** (`lib/collab/identity.ts`): hue = `id % 256` scaled to 360°, saturation = `255 − (id >> 8) % 128`, lightness 60%. Names next to cursors are off unless toggled.
@@ -146,13 +150,13 @@ sites. Do not set it on a real server.
 - **`proxy`**: `/api/proxy?url=`.
   - Public IPs only. The check runs in the dialer `Control` hook on every connection (redirects included). Literal IPs and `localhost`/`.local`/`.internal` are refused up front.
   - 256 requests per minute per user.
-- **`session`**: Postgres stores session rows (owner, `ask_name`) and `session_codes` (code → role, level). `sessions.code` is the write code. REST:
+- **`session`**: Postgres stores session rows (owner, `ask_name`), `session_codes` (code → role, level) and `session_members` (level and roles given during the session). `sessions.code` is the write code. REST:
   - `POST /api/sessions {askName, roles}` creates a session and returns every code;
   - `GET /api/sessions/{code}`;
   - `GET …/codes` and `POST …/roles` (owner or a connected admin).
 
   Rooms live in memory. WebSocket protocol:
-  - text frames: JSON control (`welcome` with `owner`, `join`, `leave`, `owner`, `signal`, `reset`, `error`, `ended`); peers carry `role` and `level`;
+  - text frames: JSON control (`welcome` with `owner`, `join`, `leave`, `owner`, `role`, `setRole`, `signal`, `reset`, `error`, `ended`); peers carry `level`, `roles` and `owner`;
   - binary frames: relay, `[to u32][payload]` from the client and `[from u32][payload]` to it.
 
   Idle sessions expire after 24 h.

@@ -1,14 +1,25 @@
-import { Check, Copy, Link2, Loader2, LogOut, Plus, Power, Radio, X } from "lucide-react"
+import { Check, ChevronDown, Copy, Link2, Loader2, LogOut, Plus, Power, Radio, X } from "lucide-react"
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { Peer } from "@/hooks/use-collab"
 import { addRole, formatCode, listCodes, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
 import { useI18n } from "@/lib/i18n"
-import { BUILT_IN, roleLabel } from "@/lib/roles"
+import type { Level, Member } from "@/lib/project/access"
+import { BUILT_IN, memberLabel, roleLabel } from "@/lib/roles"
 import { rolesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
@@ -203,6 +214,7 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
   const [ending, setEnding] = useState(false)
   const [codes, setCodes] = useState<RoleCode[] | null>(null)
   const admin = provider.isAdmin
+  const customRoles = (codes ?? []).map((c) => c.role).filter((r) => !BUILT_IN[r])
 
   const refresh = useCallback(() => {
     if (admin) listCodes(provider.code).then((r) => setCodes(r.codes)).catch((err: Error) => toast.error(err.message))
@@ -226,7 +238,7 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
           </span>
           {t("share.title")}
           <Badge variant="outline" className="ml-1 font-normal">
-            {roleLabel(provider.member.role)}
+            {memberLabel(provider.member)}
           </Badge>
         </DialogTitle>
         <DialogDescription>{admin ? t("share.rolesText") : t("share.linkText")}</DialogDescription>
@@ -277,8 +289,8 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
                   {p.link === "direct" ? "P2P" : "relay"}
                 </span>
               )}
-              <span className="ml-auto text-xs text-muted-foreground">
-                {p.owner && p.role !== "owner" ? t("share.role.acting") : p.role ? roleLabel(p.role) : ""}
+              <span className="ml-auto">
+                {p.member && <MemberRoles me={provider.member} member={p.member} isMe={p.isMe} roles={customRoles} onSet={(level, roles) => provider.setRole(p.member!.peer, level, roles)} />}
               </span>
             </li>
           ))}
@@ -295,7 +307,7 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
         >
           <LogOut /> {t("share.leave")}
         </Button>
-        {provider.member.role === "owner" && (
+        {provider.member.owner && (
           <Button
             variant="destructive"
             disabled={ending}
@@ -316,6 +328,67 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * A member's level and custom roles. An admin changes them for members
+ * below admin (but cannot make admins); the owner for anyone but themself.
+ */
+function MemberRoles({
+  me,
+  member,
+  isMe,
+  roles,
+  onSet,
+}: {
+  me: Member
+  member: Member & { acting: boolean }
+  isMe: boolean
+  roles: string[]
+  onSet: (level: Level, roles: string[]) => void
+}) {
+  const { t } = useI18n()
+  const label = memberLabel(member, member.acting && !member.owner)
+  const canEdit = !isMe && me.level === "admin" && !member.owner && (!!me.owner || member.level !== "admin")
+  if (!canEdit) return <span className="text-xs text-muted-foreground">{label}</span>
+  const levels: Level[] = me.owner ? ["read", "write", "admin"] : ["read", "write"]
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="xs" className="max-w-56 text-muted-foreground" aria-label={t("share.changeRole")}>
+          <span className="truncate">{label}</span>
+          <ChevronDown className="opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+        <DropdownMenuLabel>{t("share.level")}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={member.level} onValueChange={(v) => onSet(v as Level, [...member.roles])}>
+          {levels.map((l) => (
+            <DropdownMenuRadioItem key={l} value={l}>
+              {roleLabel(l)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {roles.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{t("share.customRoles")}</DropdownMenuLabel>
+            {roles.map((r) => (
+              <DropdownMenuCheckboxItem
+                key={r}
+                checked={member.roles.includes(r)}
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={(on) => onSet(member.level, on ? [...member.roles, r] : member.roles.filter((x) => x !== r))}
+                className="font-mono text-xs"
+              >
+                {r}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

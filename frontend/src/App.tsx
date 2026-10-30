@@ -65,7 +65,7 @@ import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import type { DebugCommand } from "@/workers/protocol"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
-import { roleLabel } from "@/lib/roles"
+import { memberLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -823,7 +823,7 @@ function Workspace() {
                 onStop={follow.stop}
               />
             )}
-            <ShareButton live={!!provider} peers={collab.peers} role={provider?.member.role} onClick={() => setShareOpen(true)} />
+            <ShareButton live={!!provider} peers={collab.peers} role={provider ? memberLabel(provider.member) : undefined} onClick={() => setShareOpen(true)} />
             {hasTest && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1179,7 +1179,7 @@ function ShareButton({
         ))}
       </span>
       <span className="font-mono text-xs">{peers.length > 4 ? `+${peers.length - 4}` : peers.length}</span>
-      <span className="hidden text-xs sm:inline">{role ? roleLabel(role) : translate("btn.live")}</span>
+      <span className="hidden text-xs sm:inline">{role ?? translate("btn.live")}</span>
     </Button>
   )
 }

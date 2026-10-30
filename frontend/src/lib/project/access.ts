@@ -9,10 +9,14 @@ import type { FileMeta } from "./store"
 export type Level = "read" | "write" | "admin"
 export type Access = "none" | "read" | "write"
 
-/** A member of a session: role is owner | admin | write | read | <custom role>. */
+/**
+ * A member of a session: a level (read < write < admin) and any number of
+ * custom roles, each opening the folders given to it. The owner is an admin.
+ */
 export interface Member {
-  role: string
   level: Level
+  roles: readonly string[]
+  owner?: boolean
 }
 
 /** What the rules are read from: the project's structure document. */
@@ -33,10 +37,10 @@ export function fileAccess(m: Member, path: string, r: Rules): Access {
   const meta = r.files[path]
   if (meta?.hidden) return "none"
   let result: Access = m.level === "write" ? "write" : "read"
-  // Every role folder on the way must be the member's own.
+  // Every role folder on the way must be one of the member's roles.
   for (const [folder, role] of Object.entries(r.folders)) {
     if (!path.startsWith(folder + "/")) continue
-    if (role !== m.role) return "none"
+    if (!m.roles.includes(role)) return "none"
     result = "write"
   }
   return r.frozen || meta?.protected ? "read" : result

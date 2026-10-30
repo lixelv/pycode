@@ -159,6 +159,23 @@ func (s *Store) Codes(ctx context.Context, session uuid.UUID) ([]Code, error) {
 	})
 }
 
+// SetMemberGrant records the level and roles given to a user in a session.
+func (s *Store) SetMemberGrant(ctx context.Context, session, user uuid.UUID, g grant) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO session_members (session_id, user_id, level, roles) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (session_id, user_id) DO UPDATE SET level = EXCLUDED.level, roles = EXCLUDED.roles`,
+		session, user, g.Level, g.Roles)
+	return err
+}
+
+// MemberGrant is what was given to a user in a session, if anything.
+func (s *Store) MemberGrant(ctx context.Context, session, user uuid.UUID) (grant, bool) {
+	var g grant
+	err := s.pool.QueryRow(ctx, `SELECT level, roles FROM session_members WHERE session_id = $1 AND user_id = $2`, session, user).
+		Scan(&g.Level, &g.Roles)
+	return g, err == nil
+}
+
 // ByCode finds a session by any of its codes, with the role that code gives.
 func (s *Store) ByCode(ctx context.Context, code string) (*Session, Code, error) {
 	var sess Session

@@ -11,3 +11,10 @@ export const BUILT_IN: Record<string, MessageKey> = {
 export function roleLabel(role: string) {
   return BUILT_IN[role] ? translate(BUILT_IN[role]) : role
 }
+
+/** How a member is shown: Owner, or their level and custom roles ("Write · ivan, olga"). */
+export function memberLabel(m: { level: string; roles: readonly string[]; owner?: boolean }, acting = false) {
+  if (m.owner) return translate("share.role.owner")
+  const level = acting ? translate("share.role.acting") : roleLabel(m.level)
+  return m.roles.length ? `${level} · ${m.roles.join(", ")}` : level
+}

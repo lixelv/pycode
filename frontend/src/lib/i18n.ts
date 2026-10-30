@@ -242,6 +242,9 @@ const en = {
   "doc.prev": "Previous page",
   "doc.next": "Next page",
   "md.previewLabel": "Markdown preview",
+  "share.changeRole": "Change role",
+  "share.level": "Level",
+  "share.customRoles": "Roles (folders)",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -475,6 +478,9 @@ const ru: Record<MessageKey, string> = {
   "doc.prev": "Предыдущая страница",
   "doc.next": "Следующая страница",
   "md.previewLabel": "Просмотр Markdown",
+  "share.changeRole": "Изменить роль",
+  "share.level": "Уровень",
+  "share.customRoles": "Роли (папки)",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

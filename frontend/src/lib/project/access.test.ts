@@ -19,11 +19,12 @@ const rules = (over: Partial<Rules> = {}): Rules => ({
   ...over,
 })
 
-const admin: Member = { role: "admin", level: "admin" }
-const writer: Member = { role: "write", level: "write" }
-const reader: Member = { role: "read", level: "read" }
-const ivan: Member = { role: "ivan", level: "read" }
-const petr: Member = { role: "petr", level: "write" }
+const admin: Member = { level: "admin", roles: [] }
+const writer: Member = { level: "write", roles: [] }
+const reader: Member = { level: "read", roles: [] }
+const ivan: Member = { level: "read", roles: ["ivan"] }
+const petr: Member = { level: "write", roles: ["petr"] }
+const both: Member = { level: "read", roles: ["ivan", "petr"] }
 
 describe("fileAccess", () => {
   it("lets admin write everything", () => {
@@ -39,6 +40,17 @@ describe("fileAccess", () => {
     expect(fileAccess(ivan, "s/ivan/a.py", rules())).toBe("write")
     expect(fileAccess(petr, "s/ivan/a.py", rules())).toBe("none")
     expect(fileAccess(writer, "s/ivan/a.py", rules())).toBe("none")
+  })
+
+  it("gives a member with several roles each of their folders", () => {
+    expect(fileAccess(both, "s/ivan/a.py", rules())).toBe("write")
+    const r = rules({ folders: { "s/ivan": "ivan", "s/x": "petr" } })
+    expect(fileAccess(both, "s/x/a.py", r)).toBe("write")
+  })
+
+  it("lets nested role folders open only to members with all their roles", () => {
+    const r = rules({ folders: { s: "ivan", "s/x": "petr" } })
+    expect(fileAccess(both, "s/x/a.py", r)).toBe("write")
   })
 
   it("needs access to every role folder on the path", () => {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -72,12 +73,26 @@ func (h *Hub) Janitor(ctx context.Context) {
 	}
 }
 
-// roleOf is the role a user gets with a code: the owner is always the owner.
-func roleOf(s *Session, code Code, user uuid.UUID) (role, level string) {
+// grant is what a member may do: a level and custom roles.
+type grant struct {
+	Level string
+	Roles []string
+}
+
+// grantOf is what a user gets in a session: the owner is always an admin;
+// a role given during the session wins over the join code.
+func (h *Hub) grantOf(ctx context.Context, s *Session, code Code, user uuid.UUID) (g grant, owner bool) {
 	if user == s.OwnerID {
-		return RoleOwner, LevelAdmin
+		return grant{Level: LevelAdmin, Roles: []string{}}, true
 	}
-	return code.Role, code.Level
+	if given, ok := h.store.MemberGrant(ctx, s.ID, user); ok {
+		return given, false
+	}
+	g = grant{Level: code.Level, Roles: []string{}}
+	if validRole(code.Role) {
+		g.Roles = []string{code.Role}
+	}
+	return g, false
 }
 
 var roleName = regexp.MustCompile(`^[\p{L}\p{N}_-]{1,32}$`)
@@ -123,8 +138,7 @@ func (h *Hub) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create the session")
 		return
 	}
-	role, level := roleOf(sess, Code{}, user)
-	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "role": role, "level": level, "codes": codes})
+	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "level": LevelAdmin, "roles": []string{}, "owner": true, "codes": codes})
 }
 
 func (h *Hub) lookup(w http.ResponseWriter, r *http.Request) (*Session, Code) {
@@ -145,8 +159,54 @@ func (h *Hub) get(w http.ResponseWriter, r *http.Request) {
 	if sess == nil {
 		return
 	}
-	role, level := roleOf(sess, code, identity.FromContext(r.Context()))
-	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "role": role, "level": level})
+	g, owner := h.grantOf(r.Context(), sess, code, identity.FromContext(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "level": g.Level, "roles": g.Roles, "owner": owner})
+}
+
+// setRole changes a connected member's level and custom roles (see
+// canSetRole) and keeps them for the rest of the session.
+func (h *Hub) setRole(ctx context.Context, sess *Session, rm *room, from *member, msg control) {
+	target := rm.member(msg.To)
+	refuse := func(why string) { from.enqueueJSON(control{Type: "error", Error: why}) }
+	if target == nil || target == from {
+		refuse("No such member.")
+		return
+	}
+	if msg.Level != LevelRead && msg.Level != LevelWrite && msg.Level != LevelAdmin {
+		refuse("No such level.")
+		return
+	}
+	codes, err := h.store.Codes(ctx, sess.ID)
+	if err != nil {
+		refuse("Could not change the role.")
+		return
+	}
+	custom := map[string]bool{}
+	for _, c := range codes {
+		if validRole(c.Role) {
+			custom[c.Role] = true
+		}
+	}
+	roles := []string{}
+	for _, r := range msg.Roles {
+		if !custom[r] {
+			refuse("No such role: " + r)
+			return
+		}
+		if !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	if !canSetRole(from.info.Level, from.user == sess.OwnerID, target.info.Level, target.user == sess.OwnerID, msg.Level) {
+		refuse("You cannot change this member's role.")
+		return
+	}
+	g := grant{Level: msg.Level, Roles: roles}
+	if err := h.store.SetMemberGrant(ctx, sess.ID, target.user, g); err != nil {
+		refuse("Could not change the role.")
+		return
+	}
+	rm.setRole(target.info.Peer, g)
 }
 
 // manager reports whether the user may manage the session's roles: the
@@ -246,7 +306,7 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(maxFrame)
-	role, level := roleOf(sess, code, user)
+	g, owner := h.grantOf(r.Context(), sess, code, user)
 	m := &member{
 		info: peerInfo{UserID: identity.Public(user)},
 		user: user,
@@ -254,7 +314,7 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 		conn: conn,
 		send: make(chan outFrame, sendQueueLen),
 	}
-	m.info.Role, m.info.Level = role, level
+	m.info.Level, m.info.Roles, m.info.Owner = g.Level, g.Roles, owner
 
 	h.mu.Lock()
 	rm := h.rooms[sess.ID]
@@ -303,6 +363,8 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 			rm.signal(m, msg)
 		case "reset":
 			rm.reset(m)
+		case "setRole":
+			h.setRole(ctx, sess, rm, m, msg)
 		}
 	}
 

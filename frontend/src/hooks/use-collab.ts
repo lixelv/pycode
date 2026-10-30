@@ -12,6 +12,7 @@ import {
   type PeerUser,
   type ProviderStatus,
 } from "@/lib/collab/provider"
+import type { Member } from "@/lib/project/access"
 import { localStore, rolesOf } from "@/lib/project/project"
 import { ProjectStore } from "@/lib/project/store"
 
@@ -23,9 +24,8 @@ export interface Peer {
   file?: string
   /** How we are connected to them: directly (WebRTC) or through the server. */
   link?: LinkMode
-  role?: string
-  /** Acts as the owner now. */
-  owner?: boolean
+  /** Their level and roles, and their member number (to change them). */
+  member?: Member & { peer: number; acting: boolean }
 }
 
 const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
@@ -140,15 +140,15 @@ export function useCollab() {
       const list: Peer[] = []
       provider.awareness.getStates().forEach((state, clientId) => {
         const s = state as { user?: PeerUser; file?: string }
-        const role = provider.roleOf(clientId)
         if (s.user)
-          list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId), role: role?.role, owner: role?.owner })
+          list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId), member: provider.memberOf(clientId) ?? undefined })
       })
       list.sort((a, b) => Number(b.isMe) - Number(a.isMe) || a.user.id.localeCompare(b.user.id))
       setPeers(list)
     }
     readPeers()
     provider.awareness.on("change", readPeers)
+    const offError = provider.on("error", (message) => toast.error(message))
     const offLinks = provider.on("links", () => {
       readPeers()
       force((n) => n + 1)
@@ -165,6 +165,7 @@ export function useCollab() {
     return () => {
       provider.awareness.off("change", readPeers)
       offLinks()
+      offError()
       off()
     }
   }, [provider, leave])

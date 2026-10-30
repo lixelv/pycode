@@ -5,7 +5,7 @@ import { docAccess, fileAccess, type Access, type Member, type Rules } from "@/l
 import { rulesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 
-const SOLO: Member = { role: "owner", level: "admin" }
+const SOLO: Member = { level: "admin", roles: [], owner: true }
 
 export interface AccessView {
   member: Member

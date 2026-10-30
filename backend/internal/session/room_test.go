@@ -11,7 +11,11 @@ import (
 )
 
 func newMember(user uuid.UUID, role, level string) *member {
-	return &member{info: peerInfo{UserID: user.String(), Role: role, Level: level}, user: user, send: make(chan outFrame, 64)}
+	info := peerInfo{UserID: user.String(), Level: level, Roles: []string{}, Owner: role == RoleOwner}
+	if validRole(role) {
+		info.Roles = []string{role}
+	}
+	return &member{info: info, user: user, send: make(chan outFrame, 64)}
 }
 
 func newRoom(owner uuid.UUID) *room {
@@ -138,5 +142,48 @@ func TestUserIDsStayOnTheServer(t *testing.T) {
 	}
 	if identity.Public(owner) == owner.String() || identity.Public(owner) != identity.Public(owner) {
 		t.Fatal("a public id must be stable and differ from the cookie id")
+	}
+}
+
+func TestCanSetRole(t *testing.T) {
+	cases := []struct {
+		name                     string
+		from, target, next       string
+		fromOwner, targetIsOwner bool
+		want                     bool
+	}{
+		{"admin demotes a writer", LevelAdmin, LevelWrite, LevelRead, false, false, true},
+		{"admin promotes a reader to write", LevelAdmin, LevelRead, LevelWrite, false, false, true},
+		{"admin cannot make an admin", LevelAdmin, LevelWrite, LevelAdmin, false, false, false},
+		{"admin cannot touch an admin", LevelAdmin, LevelAdmin, LevelRead, false, false, false},
+		{"owner makes an admin", LevelAdmin, LevelWrite, LevelAdmin, true, false, true},
+		{"owner demotes an admin", LevelAdmin, LevelAdmin, LevelWrite, true, false, true},
+		{"nobody changes the owner", LevelAdmin, LevelAdmin, LevelRead, true, true, false},
+		{"a writer changes nobody", LevelWrite, LevelRead, LevelWrite, false, false, false},
+	}
+	for _, c := range cases {
+		if got := canSetRole(c.from, c.fromOwner, c.target, c.targetIsOwner, c.next); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSetRoleTellsEveryone(t *testing.T) {
+	ownerID := uuid.New()
+	r := newRoom(ownerID)
+	owner := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(owner)
+	student := newMember(uuid.New(), RoleWrite, LevelWrite)
+	r.join(student)
+	last(owner, "role")
+	r.setRole(student.info.Peer, grant{Level: LevelWrite, Roles: []string{"ivan", "olga"}})
+	if c := last(owner, "role"); c == nil || c.Peer == nil || c.Peer.Peer != student.info.Peer || len(c.Peer.Roles) != 2 {
+		t.Fatalf("everyone must hear about the new roles: %+v", c)
+	}
+	if c := last(student, "role"); c == nil || c.Peer.Roles[1] != "olga" {
+		t.Fatalf("the member must hear about their own new roles: %+v", c)
+	}
+	if len(student.info.Roles) != 2 {
+		t.Fatal("the room must keep the new roles")
 	}
 }

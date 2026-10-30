@@ -11,9 +11,8 @@ import {
   type LinkMode,
   type PeerUser,
   type ProviderStatus,
-  type SessionMode,
 } from "@/lib/collab/provider"
-import { localStore } from "@/lib/project/project"
+import { localStore, rolesOf } from "@/lib/project/project"
 import { ProjectStore } from "@/lib/project/store"
 
 export interface Peer {
@@ -24,6 +23,9 @@ export interface Peer {
   file?: string
   /** How we are connected to them: directly (WebRTC) or through the server. */
   link?: LinkMode
+  role?: string
+  /** Acts as the owner now. */
+  owner?: boolean
 }
 
 const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
@@ -39,7 +41,8 @@ export function useCollab() {
   const [provider, setProvider] = useState<CollabProvider | null>(null)
   const [status, setStatus] = useState<ProviderStatus | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
-  const [, force] = useState(0)
+  // Bumped whenever our role, the links or the acting owner change.
+  const [version, force] = useState(0)
 
   useEffect(() => {
     fetchMe().then((m) => {
@@ -72,9 +75,10 @@ export function useCollab() {
   )
 
   const start = useCallback(
-    async (mode: SessionMode) => {
+    async (askName: boolean) => {
       if (!me) throw new Error("The collaboration server is not available.")
-      const { session } = await createSession(mode)
+      const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
+      const { session } = await createSession(askName, roles)
       await localStore().ready
       attach(new CollabProvider(session, me, localStore()))
     },
@@ -115,14 +119,19 @@ export function useCollab() {
       const list: Peer[] = []
       provider.awareness.getStates().forEach((state, clientId) => {
         const s = state as { user?: PeerUser; file?: string }
-        if (s.user) list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId) })
+        const role = provider.roleOf(clientId)
+        if (s.user)
+          list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId), role: role?.role, owner: role?.owner })
       })
       list.sort((a, b) => Number(b.isMe) - Number(a.isMe) || a.user.id.localeCompare(b.user.id))
       setPeers(list)
     }
     readPeers()
     provider.awareness.on("change", readPeers)
-    const offLinks = provider.on("links", readPeers)
+    const offLinks = provider.on("links", () => {
+      readPeers()
+      force((n) => n + 1)
+    })
     const off = provider.on("status", (s) => {
       setStatus(s)
       force((n) => n + 1) // role may have changed
@@ -139,7 +148,7 @@ export function useCollab() {
     }
   }, [provider, leave])
 
-  return { me, available, provider, status, peers, start, join, leave, end }
+  return { me, available, provider, status, version, peers, start, join, leave, end }
 }
 
 function dispose(p: CollabProvider | null) {

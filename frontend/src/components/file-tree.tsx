@@ -7,9 +7,14 @@ import {
   FileJson,
   FilePlus,
   FileText,
+  EyeOff,
   Folder,
   FolderOpen,
   FolderPlus,
+  Lock,
+  LockOpen,
+  Eye,
+  Users,
   RotateCcw,
   Trash2,
   Upload,
@@ -21,20 +26,41 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import type { AccessView } from "@/hooks/use-access"
+import { isTest, RESERVED } from "@/lib/project/access"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Peer } from "@/hooks/use-collab"
 import { useI18n } from "@/lib/i18n"
-import { allDirs, cleanPath, dirsOf, exists, languageOf, metasOf, nameOf, parentOf } from "@/lib/project/project"
+import {
+  allDirs,
+  cleanPath,
+  exists,
+  foldersOf,
+  languageOf,
+  metasOf,
+  nameOf,
+  parentOf,
+  rolesOf,
+  setFlag,
+  setFolderRole,
+} from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
 
 interface FileTreeProps {
   store: ProjectStore
   active: string
+  /** Not an admin: cannot change the tree. */
   readOnly: boolean
+  access: AccessView
   peers: Peer[]
   onOpen: (path: string) => void
   onCreate: (path: string, kind: "file" | "dir") => void
@@ -86,7 +112,7 @@ function FileIcon({ path }: { path: string }) {
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { store, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
+  const { store, active, readOnly, access, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -97,18 +123,16 @@ export function FileTree(props: FileTreeProps) {
 
   useEffect(() => {
     const bump = () => setVersion((v) => v + 1)
-    const files = metasOf(store)
-    const dirs = dirsOf(store)
-    files.observe(bump)
-    dirs.observe(bump)
-    return () => {
-      files.unobserve(bump)
-      dirs.unobserve(bump)
-    }
+    store.structure.on("update", bump)
+    return () => store.structure.off("update", bump)
   }, [store])
 
-  const files = [...metasOf(store).keys()]
-  const tree = buildTree(files, allDirs(store))
+  // Only what we may see: a folder is shown when a file inside it would be.
+  const metas = metasOf(store)
+  const folders = foldersOf(store).toJSON() as Record<string, string>
+  const roles = Object.keys(rolesOf(store).toJSON())
+  const files = [...metas.keys()].filter((p) => access.can(p) !== "none")
+  const tree = buildTree(files, allDirs(store).filter((d) => access.can(`${d}/_`) !== "none"))
   // Where the others are: file -> colours.
   const presence = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -152,6 +176,11 @@ export function FileTree(props: FileTreeProps) {
                   <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
                   {open ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
                   <span className="truncate">{node.name}</span>
+                  {folders[node.path] && (
+                    <span title={t("tree.access")} className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5 font-mono text-[10px]">
+                      <Users className="size-2.5" /> {folders[node.path]}
+                    </span>
+                  )}
                   {!readOnly && <DeleteButton label={`${t("tree.delete")} ${node.name}`} onClick={() => onDelete(node.path, "dir")} />}
                 </div>
               )}
@@ -164,6 +193,21 @@ export function FileTree(props: FileTreeProps) {
                 <FolderPlus /> {t("tree.newFolder")}
               </ContextMenuItem>
               <ContextMenuSeparator />
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Users /> {t("tree.access")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuRadioGroup value={folders[node.path] ?? ""} onValueChange={(v) => setFolderRole(store, node.path, v || null)}>
+                    <ContextMenuRadioItem value="">{t("tree.public")}</ContextMenuRadioItem>
+                    {roles.map((r) => (
+                      <ContextMenuRadioItem key={r} value={r} className="font-mono text-xs">
+                        {r}
+                      </ContextMenuRadioItem>
+                    ))}
+                  </ContextMenuRadioGroup>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
               <ContextMenuItem onSelect={() => setRenaming(node.path)}>
                 <Pencil /> {t("tree.rename")}
               </ContextMenuItem>
@@ -202,6 +246,16 @@ export function FileTree(props: FileTreeProps) {
               >
                 <FileIcon path={node.path} />
                 <span className="truncate font-mono text-[12.5px]">{node.name}</span>
+                {metas.get(node.path)?.protected && (
+                  <Lock aria-label={t("tree.protected")} className="size-3 shrink-0 text-muted-foreground">
+                    <title>{t("tree.protected")}</title>
+                  </Lock>
+                )}
+                {metas.get(node.path)?.hidden && (
+                  <EyeOff aria-label={t("tree.hidden")} className="size-3 shrink-0 text-muted-foreground">
+                    <title>{t("tree.hidden")}</title>
+                  </EyeOff>
+                )}
                 <span className="ml-auto flex -space-x-1 pl-1">
                   {(presence.get(node.path) ?? []).slice(0, 3).map((color, i) => (
                     <span key={i} className="size-2 rounded-full border border-background" style={{ background: color }} />
@@ -212,6 +266,26 @@ export function FileTree(props: FileTreeProps) {
             )}
           </ContextMenuTrigger>
           <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+            {metas.get(node.path)?.protected ? (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "protected", false)}>
+                <LockOpen /> {t("tree.unprotect")}
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "protected", true)}>
+                <Lock /> {t("tree.protect")}
+              </ContextMenuItem>
+            )}
+            {isTest(node.path) &&
+              (metas.get(node.path)?.hidden ? (
+                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", false)}>
+                  <Eye /> {t("tree.show")}
+                </ContextMenuItem>
+              ) : (
+                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", true)}>
+                  <EyeOff /> {t("tree.hide")}
+                </ContextMenuItem>
+              ))}
+            <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => setRenaming(node.path)}>
               <Pencil /> {t("tree.rename")}
             </ContextMenuItem>
@@ -228,6 +302,7 @@ export function FileTree(props: FileTreeProps) {
   const validate = (parent: string, name: string, current?: string): { path?: string; error?: string } => {
     const path = cleanPath(parent ? `${parent}/${name}` : name)
     if (!path) return { error: t("tree.err.dots") }
+    if (path === RESERVED) return { error: t("tree.err.reserved") }
     if (path !== current && exists(store, path)) return { error: t("tree.err.exists") }
     return { path }
   }

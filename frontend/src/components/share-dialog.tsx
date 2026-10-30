@@ -1,13 +1,16 @@
-import { Check, Copy, Eye, Loader2, LogOut, Pencil, Power, Radio } from "lucide-react"
-import { useState, type FormEvent } from "react"
+import { Check, Copy, Link2, Loader2, LogOut, Plus, Power, Radio, X } from "lucide-react"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { Peer } from "@/hooks/use-collab"
-import { formatCode, type CollabProvider, type Role, type SessionMode } from "@/lib/collab/provider"
-import { useI18n, type MessageKey } from "@/lib/i18n"
+import { addRole, formatCode, listCodes, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
+import { useI18n } from "@/lib/i18n"
+import { BUILT_IN, roleLabel } from "@/lib/roles"
+import { rolesOf } from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
 
 interface ShareDialogProps {
@@ -15,29 +18,31 @@ interface ShareDialogProps {
   onOpenChange: (open: boolean) => void
   available: boolean | null
   provider: CollabProvider | null
+  /** The project shown (its custom roles live in it). */
+  store: ProjectStore
   peers: Peer[]
-  onStart: (mode: SessionMode) => Promise<void>
+  onStart: (askName: boolean) => Promise<void>
   onJoin: (code: string) => Promise<void>
   onLeave: () => void
   onEnd: () => Promise<void>
 }
 
-const ROLE_LABEL: Record<Role, MessageKey> = { owner: "share.owner", editor: "share.editor", viewer: "share.viewer" }
+const ROLE_NAME = /^[\p{L}\p{N}_-]{1,32}$/u
 
 export function ShareDialog(props: ShareDialogProps) {
   const { open, onOpenChange, provider } = props
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         {provider ? <LiveSession {...props} provider={provider} /> : <StartOrJoin {...props} />}
       </DialogContent>
     </Dialog>
   )
 }
 
-function StartOrJoin({ available, onStart, onJoin, onOpenChange }: ShareDialogProps) {
+function StartOrJoin({ available, store, onStart, onJoin, onOpenChange }: ShareDialogProps) {
   const { t } = useI18n()
-  const [mode, setMode] = useState<SessionMode>("read_write")
+  const [askName, setAskName] = useState(false)
   const [code, setCode] = useState("")
   const [busy, setBusy] = useState<"start" | "join" | null>(null)
 
@@ -75,31 +80,12 @@ function StartOrJoin({ available, onStart, onJoin, onOpenChange }: ShareDialogPr
 
       <section className="flex flex-col gap-3">
         <div className="text-sm font-medium">{t("share.start")}</div>
-        <div role="radiogroup" className="grid grid-cols-2 gap-2">
-          {(
-            [
-              ["read_write", Pencil, t("share.rw"), t("share.rwText")],
-              ["read_only", Eye, t("share.ro"), t("share.roText")],
-            ] as const
-          ).map(([value, Icon, title, text]) => (
-            <button
-              key={value}
-              role="radio"
-              aria-checked={mode === value}
-              onClick={() => setMode(value)}
-              className={cn(
-                "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors",
-                mode === value ? "border-foreground bg-accent" : "border-border hover:border-muted-foreground",
-              )}
-            >
-              <span className="flex items-center gap-2 text-sm font-medium">
-                <Icon className="size-4" /> {title}
-              </span>
-              <span className="text-xs text-muted-foreground">{text}</span>
-            </button>
-          ))}
-        </div>
-        <Button disabled={!available || busy !== null} onClick={() => void run("start", () => onStart(mode))}>
+        <CustomRoles store={store} />
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={askName} onChange={(e) => setAskName(e.target.checked)} className="size-4 accent-foreground" />
+          {t("share.askName")}
+        </label>
+        <Button disabled={!available || busy !== null} onClick={() => void run("start", () => onStart(askName))}>
           {busy === "start" ? <Loader2 className="animate-spin" /> : <Radio />} {t("share.startBtn")}
         </Button>
       </section>
@@ -116,7 +102,7 @@ function StartOrJoin({ available, onStart, onJoin, onOpenChange }: ShareDialogPr
           spellCheck={false}
           autoComplete="off"
           aria-label="Session code or link"
-          className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-sm uppercase outline-none placeholder:normal-case focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+          className={INPUT + " flex-1 font-mono uppercase placeholder:normal-case"}
         />
         <Button type="submit" variant="outline" disabled={!available || !code.trim() || busy !== null}>
           {busy === "join" && <Loader2 className="animate-spin" />} {t("share.join")}
@@ -126,11 +112,109 @@ function StartOrJoin({ available, onStart, onJoin, onOpenChange }: ShareDialogPr
   )
 }
 
-function LiveSession({ provider, peers, onLeave, onEnd, onOpenChange }: ShareDialogProps & { provider: CollabProvider }) {
+const INPUT =
+  "h-8 min-w-0 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+
+/**
+ * The project's custom roles (structure.roles): name and what they may do
+ * with public files. `onAdded` lets a live session create the role's code.
+ */
+function CustomRoles({ store, onAdded }: { store: ProjectStore; onAdded?: (name: string, level: "read" | "write") => void }) {
   const { t } = useI18n()
-  const link = `${location.origin}/s/${provider.code}`
-  const isOwner = provider.role === "owner"
+  const [roles, setRoles] = useState<Record<string, "read" | "write">>({})
+  const [name, setName] = useState("")
+  const [level, setLevel] = useState<"read" | "write">("write")
+  useEffect(() => {
+    const map = rolesOf(store)
+    const read = () => setRoles(map.toJSON() as Record<string, "read" | "write">)
+    read()
+    map.observe(read)
+    return () => map.unobserve(read)
+  }, [store])
+
+  const valid = ROLE_NAME.test(name) && !BUILT_IN[name]
+  const add = (e: FormEvent) => {
+    e.preventDefault()
+    if (!valid) return
+    rolesOf(store).set(name, level)
+    onAdded?.(name, level)
+    setName("")
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* In a live session the roles are listed with their codes instead. */}
+      {!onAdded && Object.keys(roles).length > 0 && (
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {Object.entries(roles).map(([role, lvl]) => (
+            <li key={role} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+              <span className="font-mono text-xs">{role}</span>
+              <span className="text-xs text-muted-foreground">{t("share.publicLevel", { level: roleLabel(lvl) })}</span>
+              <Button size="icon-xs" variant="ghost" className="ml-auto" aria-label={t("share.removeRole")} onClick={() => rolesOf(store).delete(role)}>
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={add} className="flex gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value.trim())}
+          placeholder={t("share.roleName")}
+          aria-label={t("share.roleName")}
+          aria-invalid={name !== "" && !valid}
+          title={name !== "" && !valid ? t("share.roleBad") : undefined}
+          className={cn(INPUT, "flex-1 font-mono aria-invalid:border-destructive")}
+        />
+        <Segmented value={level} onChange={setLevel} />
+        <Button type="submit" variant="outline" size="sm" disabled={!valid}>
+          <Plus /> {t("share.addRole")}
+        </Button>
+      </form>
+    </div>
+  )
+}
+
+function Segmented({ value, onChange }: { value: "read" | "write"; onChange: (v: "read" | "write") => void }) {
+  return (
+    <div role="radiogroup" className="inline-flex shrink-0 rounded-md border border-border bg-muted p-0.5">
+      {(["read", "write"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          role="radio"
+          aria-checked={value === v}
+          onClick={() => onChange(v)}
+          className={cn(
+            "rounded-[5px] px-2 py-0.5 text-xs font-medium transition-colors",
+            value === v ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {roleLabel(v)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: ShareDialogProps & { provider: CollabProvider }) {
+  const { t } = useI18n()
   const [ending, setEnding] = useState(false)
+  const [codes, setCodes] = useState<RoleCode[] | null>(null)
+  const admin = provider.isAdmin
+
+  const refresh = useCallback(() => {
+    if (admin) listCodes(provider.code).then((r) => setCodes(r.codes)).catch((err: Error) => toast.error(err.message))
+  }, [admin, provider])
+  useEffect(refresh, [refresh])
+
+  const ORDER = ["admin", "write", "read"]
+  const sorted = [...(codes ?? [])].sort((a, b) => {
+    const ia = ORDER.indexOf(a.role)
+    const ib = ORDER.indexOf(b.role)
+    return (ia < 0 ? 9 : ia) - (ib < 0 ? 9 : ib) || a.role.localeCompare(b.role)
+  })
 
   return (
     <div className="flex flex-col gap-5">
@@ -142,16 +226,40 @@ function LiveSession({ provider, peers, onLeave, onEnd, onOpenChange }: ShareDia
           </span>
           {t("share.title")}
           <Badge variant="outline" className="ml-1 font-normal">
-            {provider.session.mode === "read_only" ? t("share.ro") : t("share.rw")}
+            {roleLabel(provider.member.role)}
           </Badge>
         </DialogTitle>
-        <DialogDescription>{t("share.linkText")}</DialogDescription>
+        <DialogDescription>{admin ? t("share.rolesText") : t("share.linkText")}</DialogDescription>
       </DialogHeader>
 
-      <div className="grid gap-2">
-        <CopyField label={t("share.link")} value={link} />
-        <CopyField label={t("share.code")} value={formatCode(provider.code)} mono large />
-      </div>
+      {admin ? (
+        <section className="flex flex-col gap-2">
+          <div className="text-sm font-medium">{t("share.roles")}</div>
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {codes === null && (
+              <li className="flex justify-center p-3">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </li>
+            )}
+            {sorted.map((c) => (
+              <RoleRow key={c.role} code={c} />
+            ))}
+          </ul>
+          <CustomRoles
+            store={store}
+            onAdded={(name, level) =>
+              addRole(provider.code, name, level)
+                .then(refresh)
+                .catch((err: Error) => toast.error(err.message))
+            }
+          />
+        </section>
+      ) : (
+        <div className="grid gap-2">
+          <CopyField label={t("share.link")} value={`${location.origin}/s/${provider.code}`} />
+          <CopyField label={t("share.code")} value={formatCode(provider.code)} mono large />
+        </div>
+      )}
 
       <section className="flex flex-col gap-2">
         <div className="text-sm font-medium">{t("share.members", { n: peers.length })}</div>
@@ -170,7 +278,7 @@ function LiveSession({ provider, peers, onLeave, onEnd, onOpenChange }: ShareDia
                 </span>
               )}
               <span className="ml-auto text-xs text-muted-foreground">
-                {t(p.user.id === provider.session.ownerId ? ROLE_LABEL.owner : provider.session.mode === "read_only" ? ROLE_LABEL.viewer : ROLE_LABEL.editor)}
+                {p.owner && p.role !== "owner" ? t("share.role.acting") : p.role ? roleLabel(p.role) : ""}
               </span>
             </li>
           ))}
@@ -187,7 +295,7 @@ function LiveSession({ provider, peers, onLeave, onEnd, onOpenChange }: ShareDia
         >
           <LogOut /> {t("share.leave")}
         </Button>
-        {isOwner && (
+        {provider.member.role === "owner" && (
           <Button
             variant="destructive"
             disabled={ending}
@@ -208,6 +316,30 @@ function LiveSession({ provider, peers, onLeave, onEnd, onOpenChange }: ShareDia
         )}
       </div>
     </div>
+  )
+}
+
+/** One role's join code, with buttons to copy its link or the code. */
+function RoleRow({ code }: { code: RoleCode }) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState<"link" | "code" | null>(null)
+  const copy = async (kind: "link" | "code") => {
+    await navigator.clipboard.writeText(kind === "link" ? `${location.origin}/s/${code.code}` : formatCode(code.code))
+    setCopied(kind)
+    setTimeout(() => setCopied(null), 1500)
+  }
+  return (
+    <li className="flex items-center gap-2 py-1.5 pr-1.5 pl-3">
+      <span className={cn("min-w-0 truncate text-sm", !BUILT_IN[code.role] && "font-mono text-xs")}>{roleLabel(code.role)}</span>
+      {!BUILT_IN[code.role] && <span className="text-xs text-muted-foreground">{roleLabel(code.level)}</span>}
+      <span className="ml-auto font-mono text-sm tracking-wider">{formatCode(code.code)}</span>
+      <Button size="icon-sm" variant="ghost" aria-label={t("share.copyLink")} title={t("share.copyLink")} onClick={() => void copy("link")}>
+        {copied === "link" ? <Check /> : <Link2 />}
+      </Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("share.copyCode")} title={t("share.copyCode")} onClick={() => void copy("code")}>
+        {copied === "code" ? <Check /> : <Copy />}
+      </Button>
+    </li>
   )
 }
 

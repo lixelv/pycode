@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useCollab } from "@/hooks/use-collab"
 import { usePackages } from "@/hooks/use-packages"
 import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
+import { useAccess } from "@/hooks/use-access"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedTerminal } from "@/lib/collab/doc"
@@ -28,6 +29,7 @@ import {
   deletePath,
   downloadBlob,
   exportZip,
+  applyEnv,
   importZip,
   languageOf,
   localStore,
@@ -41,6 +43,7 @@ import {
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
+import { roleLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -119,21 +122,23 @@ function Workspace() {
   const store = provider?.store ?? localStore()
   const doc = store.runtime // console and run state
   const awareness = provider?.awareness ?? null
-  const canWrite = !provider || provider.canWrite
   const isGuest = !!provider && provider.store !== localStore()
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
     if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
   }, [store, provider])
 
-  const [files, setFiles] = useState<string[]>(() => [...metasOf(store).keys()])
+  const access = useAccess(store, provider, collab.version)
+  const [allFiles, setAllFiles] = useState<string[]>(() => [...metasOf(store).keys()])
   useEffect(() => {
     const map = metasOf(store)
-    const read = () => setFiles([...map.keys()].sort())
+    const read = () => setAllFiles([...map.keys()].sort())
     read()
     map.observe(read)
     return () => map.unobserve(read)
   }, [store])
+  // Files we may not see are not there for us at all.
+  const files = useMemo(() => allFiles.filter((p) => access.can(p) !== "none"), [allFiles, access])
 
   const [active, setActive] = useState(DEFAULT_FILE)
   // Keep the open file valid (deleted, or another project after joining/leaving).
@@ -141,6 +146,8 @@ function Workspace() {
     if (files.length && !files.includes(active)) setActive(files.includes(DEFAULT_FILE) ? DEFAULT_FILE : files[0])
   }, [files, active])
   const activeExists = files.includes(active)
+  const canWrite = activeExists && access.can(active) === "write"
+  const canRun = access.canRun
   const language = languageOf(active)
 
   useEffect(() => {
@@ -229,7 +236,7 @@ function Workspace() {
       toast.message(t("toast.onlyPython"))
       return
     }
-    if (!canWrite) return
+    if (!canRun) return
     setPreview(null)
     setConsoleOpen(true)
     // We become the one running the project's program; a run going on
@@ -241,7 +248,7 @@ function Workspace() {
     }
     resetRun(doc, collab.me ?? "local")
     runner.run(snapshotFiles(store), active, pkgs.activeSpecs)
-  }, [activeExists, language, active, canWrite, doc, store, provider, collab.me, runner, pkgs.activeSpecs])
+  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs])
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(() => {
@@ -265,6 +272,7 @@ function Workspace() {
         destructive: true,
         onConfirm: () => {
           replaceProject(store, content.files, content.dirs, packagesOf(store).toArray())
+          if (content.env) applyEnv(store, content.env)
           const first = Object.keys(content.files).sort((a, b) => Number(b.endsWith(".py")) - Number(a.endsWith(".py")) || a.localeCompare(b))[0]
           setActive(content.files[DEFAULT_FILE] !== undefined ? DEFAULT_FILE : first ?? DEFAULT_FILE)
           toast.success(t("toast.opened", { name: file.name }))
@@ -275,8 +283,7 @@ function Workspace() {
   )
 
   // In a session only the owner resets — the session's project, for everyone.
-  const isOwner = provider?.role === "owner"
-  const canReset = !provider || isOwner
+  const canReset = !provider || provider.isOwner
 
   const reset = useCallback(() => {
     if (!canReset) return
@@ -488,13 +495,13 @@ function Workspace() {
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
-            <ShareButton live={!!provider} peers={collab.peers} readOnly={provider?.session.mode === "read_only"} onClick={() => setShareOpen(true)} />
-            {consoleActive && canWrite && language === "python" ? (
+            <ShareButton live={!!provider} peers={collab.peers} role={provider?.member.role} onClick={() => setShareOpen(true)} />
+            {consoleActive && canRun && language === "python" ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
               </Button>
             ) : (
-              <Button size="sm" onClick={run} disabled={!runnable || (language === "python" && !canWrite)} className="min-w-24">
+              <Button size="sm" onClick={run} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
                 <Play className="fill-current" /> {language === "markdown" ? t("btn.preview") : t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>
@@ -508,7 +515,8 @@ function Workspace() {
               <FileTree
                 store={store}
                 active={active}
-                readOnly={!canWrite}
+                readOnly={!access.isAdmin}
+                access={access}
                 peers={collab.peers}
                 onOpen={(path) => {
                   setActive(path)
@@ -540,7 +548,7 @@ function Workspace() {
 
           {view === "packages" && (
             <main className="min-h-0 min-w-0 flex-1">
-              <PackagesPanel packages={pkgs.packages} readOnly={!canWrite} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
+              <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
             </main>
           )}
           {/* The editor stays mounted (hidden) so its state survives tab switches. */}
@@ -562,7 +570,7 @@ function Workspace() {
               />
               {!activeExists && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background text-sm text-muted-foreground">
-                  {isGuest ? t("editor.waitingProject") : t("editor.createFile")}
+                  {!isGuest ? t("editor.createFile") : files.length || provider?.adminOnline ? t("editor.waitingProject") : t("editor.waitingTeacher")}
                 </div>
               )}
             </div>
@@ -589,16 +597,16 @@ function Workspace() {
                       status={consoleView.status}
                       chunks={sharedConsole.chunks}
                       exit={consoleView.exit}
-                      canInput={canWrite}
+                      canInput={canRun}
                       draft={sharedConsole.draft}
-                      onDraft={(value) => canWrite && setDraft(doc, value)}
+                      onDraft={(value) => canRun && setDraft(doc, value)}
                       timeoutSec={RUN_TIMEOUT_SEC}
                       onInput={sendInput}
                       onEof={sendEof}
                       onStop={stop}
                       onClear={() => {
                         const term = sharedTerminal(doc)
-                        if (canWrite) term.delete(0, term.length)
+                        if (canRun) term.delete(0, term.length)
                       }}
                       onClose={() => setConsoleOpen(false)}
                     />
@@ -652,6 +660,7 @@ function Workspace() {
         onOpenChange={setShareOpen}
         available={collab.available}
         provider={provider}
+        store={store}
         peers={collab.peers}
         onStart={collab.start}
         onJoin={collab.join}
@@ -685,12 +694,12 @@ function Breadcrumb({ path }: { path: string }) {
 function ShareButton({
   live,
   peers,
-  readOnly,
+  role,
   onClick,
 }: {
   live: boolean
   peers: { clientId: number; user: { color: string; name: string } }[]
-  readOnly: boolean
+  role?: string
   onClick: () => void
 }) {
   if (!live) {
@@ -714,7 +723,7 @@ function ShareButton({
         ))}
       </span>
       <span className="font-mono text-xs">{peers.length > 4 ? `+${peers.length - 4}` : peers.length}</span>
-      <span className="hidden text-xs sm:inline">{readOnly ? translate("btn.liveReadOnly") : translate("btn.live")}</span>
+      <span className="hidden text-xs sm:inline">{role ? roleLabel(role) : translate("btn.live")}</span>
     </Button>
   )
 }

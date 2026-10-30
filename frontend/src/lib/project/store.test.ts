@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 
-import { createFile, deletePath, metasOf, renamePath, replaceProject, snapshotFiles, textOf } from "./project"
+import { applyEnv, createFile, deletePath, exportZip, foldersOf, importZip, metasOf, setFlag, setFolderRole, renamePath, replaceProject, snapshotFiles, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 describe("ProjectStore", () => {
@@ -21,6 +21,31 @@ describe("ProjectStore", () => {
     renamePath(s, "a", "b")
     expect(metasOf(s).has("a/x.py")).toBe(false)
     expect(textOf(s, "b/x.py")).toBe(before)
+  })
+
+  it("hides new tests and moves folder roles on rename", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "a/t.test.py", "")
+    expect(metasOf(s).get("a/t.test.py")!.hidden).toBe(true)
+    setFolderRole(s, "a", "ivan")
+    renamePath(s, "a", "b")
+    expect(foldersOf(s).toJSON()).toEqual({ b: "ivan" })
+  })
+
+  it("keeps access rules through an archive", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "s/ivan/a.py", "x")
+    createFile(s, "t.test.py", "")
+    setFolderRole(s, "s/ivan", "ivan")
+    setFlag(s, "s/ivan/a.py", "protected", true)
+    const zip = importZip(exportZip(s))
+    expect(zip.files).not.toHaveProperty(".pycode.env")
+    const t = new ProjectStore(false)
+    replaceProject(t, zip.files, zip.dirs)
+    applyEnv(t, zip.env!)
+    expect(foldersOf(t).toJSON()).toEqual({ "s/ivan": "ivan" })
+    expect(metasOf(t).get("s/ivan/a.py")!.protected).toBe(true)
+    expect(metasOf(t).get("t.test.py")!.hidden).toBe(true)
   })
 
   it("drops a deleted file's document", () => {

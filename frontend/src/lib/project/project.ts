@@ -6,6 +6,7 @@ import type * as Y from "yjs"
 import type { PackageEntry } from "@/hooks/use-packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
+import { isTest, parseEnv, renameRules, RESERVED, serializeEnv, type EnvRules, type Rules } from "./access"
 import { ProjectStore, type FileMeta } from "./store"
 
 /*
@@ -22,6 +23,19 @@ export function textOf(s: ProjectStore, path: string): Y.Text | null {
   const meta = metasOf(s).get(path)
   return meta?.kind === "text" ? s.doc(`f:${meta.id}`).getText("t") : null
 }
+
+/** The access rules as they stand in the structure document. */
+export function rulesOf(s: ProjectStore): Rules {
+  return {
+    files: metasOf(s).toJSON() as Record<string, FileMeta>,
+    folders: foldersOf(s).toJSON() as Record<string, string>,
+    frozen: !!stateOf(s).get("frozen"),
+  }
+}
+
+export const foldersOf = (s: ProjectStore) => s.structure.getMap<string>("folders")
+export const rolesOf = (s: ProjectStore) => s.structure.getMap<"read" | "write">("roles")
+export const stateOf = (s: ProjectStore) => s.structure.getMap<unknown>("state")
 
 export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
@@ -52,8 +66,26 @@ export function createFile(s: ProjectStore, path: string, content = "") {
   const metas = metasOf(s)
   if (metas.has(path)) return
   const id = newId()
-  metas.set(path, { id, kind: "text", size: content.length })
+  // Tests are hidden from students until an admin shows them.
+  metas.set(path, { id, kind: "text", size: content.length, ...(isTest(path) ? { hidden: true as const } : {}) })
   if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
+}
+
+/** Sets or clears a file's protected/hidden flag. */
+export function setFlag(s: ProjectStore, path: string, flag: "protected" | "hidden", on: boolean) {
+  const metas = metasOf(s)
+  const meta = metas.get(path)
+  if (!meta) return
+  const next = { ...meta }
+  if (on) next[flag] = true
+  else delete next[flag]
+  metas.set(path, next)
+}
+
+/** Gives a folder to a role (only it and admins see inside), or makes it public (null). */
+export function setFolderRole(s: ProjectStore, path: string, role: string | null) {
+  if (role) foldersOf(s).set(path, role)
+  else foldersOf(s).delete(path)
 }
 
 export function createDir(s: ProjectStore, path: string) {
@@ -67,6 +99,8 @@ export function deletePath(s: ProjectStore, path: string) {
     const dirs = dirsOf(s)
     for (const key of [...metas.keys()]) if (key === path || key.startsWith(path + "/")) metas.delete(key)
     for (const key of [...dirs.keys()]) if (key === path || key.startsWith(path + "/")) dirs.delete(key)
+    const folders = foldersOf(s)
+    for (const key of [...folders.keys()]) if (key === path || key.startsWith(path + "/")) folders.delete(key)
   })
 }
 
@@ -124,6 +158,33 @@ export function resetProject(s: ProjectStore) {
   replaceProject(s, { [DEFAULT_FILE]: DEFAULT_CODE })
 }
 
+/** The project's access rules, as written to .pycode.env. */
+export function envOf(s: ProjectStore): EnvRules {
+  const metas = metasOf(s).toJSON() as Record<string, FileMeta>
+  return {
+    roles: rolesOf(s).toJSON() as Record<string, "read" | "write">,
+    folders: foldersOf(s).toJSON() as Record<string, string>,
+    protected: Object.keys(metas).filter((p) => metas[p].protected),
+    hidden: Object.keys(metas).filter((p) => metas[p].hidden),
+  }
+}
+
+/** Replaces the project's access rules (after opening an archive). */
+export function applyEnv(s: ProjectStore, env: EnvRules) {
+  s.structure.transact(() => {
+    const roles = rolesOf(s)
+    const folders = foldersOf(s)
+    roles.clear()
+    folders.clear()
+    for (const [name, level] of Object.entries(env.roles)) roles.set(name, level)
+    for (const [path, role] of Object.entries(env.folders)) folders.set(path, role)
+    for (const path of metasOf(s).keys()) {
+      setFlag(s, path, "protected", env.protected.includes(path))
+      setFlag(s, path, "hidden", env.hidden.includes(path))
+    }
+  })
+}
+
 // ---- archive --------------------------------------------------------------
 
 const MAX_ARCHIVE_FILE = 5 * 1024 * 1024
@@ -131,6 +192,10 @@ const MAX_ARCHIVE_FILE = 5 * 1024 * 1024
 export function exportZip(s: ProjectStore): Uint8Array {
   const entries: Record<string, Uint8Array> = {}
   for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
+  const env = envOf(s)
+  if (Object.keys(env.roles).length || Object.keys(env.folders).length || env.protected.length || env.hidden.length) {
+    entries[RESERVED] = strToU8(serializeEnv(env))
+  }
   // Keep empty folders.
   for (const dir of dirsOf(s).keys()) {
     if (![...metasOf(s).keys()].some((p) => p.startsWith(dir + "/"))) entries[dir + "/"] = new Uint8Array()
@@ -142,7 +207,7 @@ export function exportZip(s: ProjectStore): Uint8Array {
  * Reads a .zip into files and folders. Every file is read as UTF-8 text;
  * unknown or binary files simply show as (unreadable) text.
  */
-export function importZip(data: Uint8Array): { files: Record<string, string>; dirs: string[] } {
+export function importZip(data: Uint8Array): { files: Record<string, string>; dirs: string[]; env: EnvRules | null } {
   const raw = unzipSync(data)
   const files: Record<string, string> = {}
   const dirs: string[] = []
@@ -163,7 +228,9 @@ export function importZip(data: Uint8Array): { files: Record<string, string>; di
     const bytes = raw[original]
     files[path] = bytes.length > MAX_ARCHIVE_FILE ? `(file too large to open: ${bytes.length} bytes)` : strFromU8(bytes, false)
   }
-  return { files, dirs }
+  const envText = files[RESERVED]
+  delete files[RESERVED]
+  return { files, dirs, env: envText === undefined ? null : parseEnv(envText) }
 }
 
 // ---- the local project -------------------------------------------------------
@@ -245,6 +312,11 @@ export function renamePath(s: ProjectStore, from: string, to: string): (path: st
       dirs.delete(key)
       dirs.set(next, true)
     }
+    // Folder roles move with their folders.
+    const folders = foldersOf(s)
+    const moved = renameRules(folders.toJSON() as Record<string, string>, from, to)
+    for (const key of [...folders.keys()]) if (!(key in moved)) folders.delete(key)
+    for (const [key, role] of Object.entries(moved)) if (folders.get(key) !== role) folders.set(key, role)
   })
   return map
 }

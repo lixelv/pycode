@@ -2,7 +2,7 @@ import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, createFile, exportZip, importZip, isText, metasOf, openArchive, projectSize, PROJECT_LIMIT, textOf } from "./project"
+import { addFiles, createFile, exportZip, importZip, isCpp, isText, languageOf, metasOf, openArchive, packagesKind, projectSize, PROJECT_LIMIT, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -120,5 +120,19 @@ describe("exportZip", () => {
     const zip = importZip(await exportZip(s, undefined, missing))
     expect(missing).toEqual(["gone.png"])
     expect(zip.entries.map((e) => e.path)).not.toContain("gone.png")
+  })
+})
+
+describe("packages by language", () => {
+  it("tells which packages system a file uses", () => {
+    expect(packagesKind("a/b.py")).toBe("python")
+    expect(packagesKind("x.hpp")).toBe("cpp")
+    expect(packagesKind("index.html")).toBeNull()
+  })
+
+  it("knows C++ by extension", () => {
+    expect(languageOf("main.cc")).toBe("cpp")
+    expect(isCpp("x.hpp")).toBe(true)
+    expect(isCpp("a.py")).toBe(false)
   })
 })

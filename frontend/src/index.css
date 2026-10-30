@@ -160,6 +160,13 @@
   }
 }
 
+@keyframes flash {
+  0%, 30% { background-color: color-mix(in oklab, var(--primary) 18%, transparent); }
+}
+.animate-flash {
+  animation: flash 1.2s ease-out;
+}
+
 @keyframes console-blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

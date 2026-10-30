@@ -75,10 +75,5 @@ export function useFollow({ provider, editor, tab, file, files, setTab, setFile 
     return () => awareness.off("change", apply)
   }, [awareness, leaderId, provider])
 
-  // Leaving the session ends following.
-  useEffect(() => {
-    if (!provider) setTarget(null)
-  }, [provider])
-
-  return { target, setTarget, stop: useCallback(() => setTarget(null), []), leaderId }
+  return { target: provider ? target : null, setTarget, stop: useCallback(() => setTarget(null), []), leaderId }
 }

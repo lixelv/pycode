@@ -63,6 +63,10 @@ interface FileTreeProps {
   readOnly: boolean
   access: AccessView
   peers: Peer[]
+  /** Files being dragged over the page, and the folder they would land in. */
+  drop?: { dragging: boolean; target: string }
+  /** Paths just added: highlighted for a moment. */
+  flash?: Set<string>
   onOpen: (path: string) => void
   onCreate: (path: string, kind: "file" | "dir") => void
   onDelete: (path: string, kind: "file" | "dir") => void
@@ -114,7 +118,7 @@ function FileIcon({ path }: { path: string }) {
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { store, active, readOnly, access, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
+  const { store, active, readOnly, access, peers, drop, flash, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -163,7 +167,11 @@ export function FileTree(props: FileTreeProps) {
                   className={cn(
                     "group flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
                     selectedDir === node.path && "text-foreground",
+                    drop?.dragging && drop.target === node.path && "bg-primary/10 text-foreground ring-1 ring-primary/50",
+                    flash?.has(node.path) && "animate-flash",
                   )}
+                  data-path={node.path}
+                  data-kind="dir"
                   style={pad}
                   onClick={() => {
                     setSelectedDir(node.path)
@@ -239,7 +247,10 @@ export function FileTree(props: FileTreeProps) {
                 className={cn(
                   "group flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-1 text-sm hover:bg-accent",
                   isActive ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                  flash?.has(node.path) && "animate-flash",
                 )}
+                data-path={node.path}
+                data-kind="file"
                 style={{ paddingLeft: 8 + depth * 12 + 16 }}
                 onClick={() => {
                   setSelectedDir(parentOf(node.path))
@@ -331,7 +342,15 @@ export function FileTree(props: FileTreeProps) {
   })
 
   return (
-    <aside className="flex h-full w-full flex-col bg-card">
+    <aside className="relative flex h-full w-full flex-col bg-card">
+      {drop?.dragging && (
+        <div className="pointer-events-none absolute inset-1.5 z-20 flex animate-in items-end justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5 pb-6 duration-200 fade-in-0 zoom-in-95">
+          <div className="flex items-center gap-2 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg">
+            <Upload className="size-3.5 animate-bounce" />
+            {drop.target ? t("tree.dropInto", { folder: drop.target }) : t("tree.drop")}
+          </div>
+        </div>
+      )}
       <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border pr-1.5 pl-3">
         <span className="mr-auto text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("tree.project")}</span>
         <TreeAction label={t("tree.newFile")} disabled={readOnly} onClick={() => startCreate("file")}>

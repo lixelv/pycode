@@ -196,6 +196,9 @@ const en = {
   "viewer.download": "Download",
   "viewer.loading": "Loading the file…",
   "viewer.missing": "The file could not be loaded: nobody online has it.",
+  "tree.drop": "Drop to add to the project",
+  "tree.dropInto": "Drop to add to {folder}",
+
 } as const
 
 export type MessageKey = keyof typeof en
@@ -383,6 +386,8 @@ const ru: Record<MessageKey, string> = {
   "viewer.download": "Скачать",
   "viewer.loading": "Загружаем файл…",
   "viewer.missing": "Не удалось загрузить файл: его нет ни у кого в сети.",
+  "tree.drop": "Отпустите, чтобы добавить в проект",
+  "tree.dropInto": "Отпустите, чтобы добавить в {folder}",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

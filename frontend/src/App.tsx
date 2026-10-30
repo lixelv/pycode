@@ -23,11 +23,13 @@ import { useCollab } from "@/hooks/use-collab"
 import { usePackages } from "@/hooks/use-packages"
 import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useAccess } from "@/hooks/use-access"
+import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedTerminal } from "@/lib/collab/doc"
 import {
+  addFiles,
   createDir,
   createFile,
   DEFAULT_FILE,
@@ -320,6 +322,25 @@ function Workspace() {
     [store, provider],
   )
 
+  // Files dropped onto the page from anywhere (admins: the tree is theirs to change).
+  const [flash, setFlash] = useState<Set<string>>(new Set())
+  const drop = useFileDrop(access.isAdmin, async (folder, dropped) => {
+    const result = await addFiles(store, folder, dropped)
+    if ("error" in result) {
+      toast.error(t("toast.tooBig", { mb: PROJECT_LIMIT >> 20 }))
+      return
+    }
+    setFlash(new Set(result.added))
+    setTimeout(() => setFlash(new Set()), 1300)
+    if (result.added.length === 1) {
+      setActive(result.added[0])
+      setView("editor")
+    }
+  })
+  useEffect(() => {
+    if (drop.dragging) setFilesOpen(true)
+  }, [drop.dragging])
+
   // In a session only the owner resets — the session's project, for everyone.
   const canReset = !provider || provider.isOwner
 
@@ -585,6 +606,8 @@ function Workspace() {
                 readOnly={!access.isAdmin}
                 access={access}
                 peers={collab.peers}
+                drop={drop}
+                flash={flash}
                 onOpen={(path) => {
                   follow.stop()
                   setActive(path)

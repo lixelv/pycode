@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { STDIN_READY, type CppRunRequest, type RunnerEvent } from "@/workers/protocol"
 
@@ -79,5 +79,100 @@ describe("CppRunnerClient", () => {
     client.interrupt()
     expect(workers[0].terminated).toBe(false)
     expect(events.map((e) => e.type)).toEqual(["exit"])
+  })
+
+  describe("output batching", () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const exitOf = (id: number): RunnerEvent => ({ type: "exit", id, code: 0, duration: 0, reason: null })
+
+    it("batches stdout within 16 ms into one event", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "a" })
+      workers[0].reply({ type: "stdout", data: "b" })
+      workers[0].reply({ type: "stdout", data: "c" })
+      expect(events).toEqual([])
+      vi.advanceTimersByTime(16)
+      expect(events).toEqual([{ type: "stdout", data: "abc" }])
+    })
+
+    it("keeps stdout, stderr, stdout in order as three events", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "a" })
+      workers[0].reply({ type: "stdout", data: "b" })
+      workers[0].reply({ type: "stderr", data: "e" })
+      workers[0].reply({ type: "stdout", data: "c" })
+      vi.advanceTimersByTime(16)
+      expect(events).toEqual([
+        { type: "stdout", data: "ab" },
+        { type: "stderr", data: "e" },
+        { type: "stdout", data: "c" },
+      ])
+    })
+
+    it("emits pending output before input_request", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "Name? " })
+      workers[0].reply({ type: "input_request" })
+      expect(events).toEqual([{ type: "stdout", data: "Name? " }, { type: "input_request" }])
+      vi.advanceTimersByTime(100)
+      expect(events).toHaveLength(2)
+    })
+
+    it("emits pending output before exit", async () => {
+      const { client, workers, events } = setup()
+      const id = await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "bye\n" })
+      workers[0].reply(exitOf(id))
+      expect(events).toEqual([{ type: "stdout", data: "bye\n" }, exitOf(id)])
+      vi.advanceTimersByTime(100)
+      expect(events).toHaveLength(2)
+    })
+
+    it("interrupt emits pending output, then KeyboardInterrupt, then exit 130", async () => {
+      const { client, workers, events } = setup()
+      const id = await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "last line\n" })
+      client.interrupt()
+      expect(events).toEqual([
+        { type: "stdout", data: "last line\n" },
+        { type: "stderr", data: "\nKeyboardInterrupt\n" },
+        expect.objectContaining({ type: "exit", id, code: 130 }),
+      ])
+    })
+
+    it("after interrupt, the batch timer and late messages of the dead worker emit nothing", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "x" })
+      client.interrupt()
+      expect(events).toHaveLength(3)
+      workers[0].reply({ type: "stdout", data: "late" })
+      workers[0].reply({ type: "stderr", data: "later" })
+      vi.advanceTimersByTime(100)
+      expect(events).toHaveLength(3)
+    })
+
+    it("a timer armed before a flush does not emit the next batch early", async () => {
+      const { client, workers, events } = setup()
+      const id = await client.run(WASM, {}, "main.cpp")
+      workers[0].reply({ type: "stdout", data: "a" })
+      workers[0].reply({ type: "input_request" }) // flushes "a"
+      vi.advanceTimersByTime(10)
+      workers[0].reply({ type: "stdout", data: "b" })
+      vi.advanceTimersByTime(10) // 20 ms after the first write, 10 ms after the second
+      expect(events).toEqual([{ type: "stdout", data: "a" }, { type: "input_request" }])
+      vi.advanceTimersByTime(10)
+      expect(events.at(-1)).toEqual({ type: "stdout", data: "b" })
+      workers[0].reply(exitOf(id))
+    })
   })
 })

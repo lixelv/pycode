@@ -1,4 +1,4 @@
-import { Code2, Columns2, Eye, FolderTree, Moon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { Code2, Columns2, Eye, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -11,6 +11,7 @@ import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer, docKindOf } from "@/components/doc-viewer"
 import { FileViewer } from "@/components/file-viewer"
+import { Presentation, type PresentationState } from "@/components/presentation"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
 import { NameDialog } from "@/components/name-dialog"
@@ -334,6 +335,24 @@ function Workspace() {
     [store, provider],
   )
 
+  // A presentation shown to everyone (structure.state.presentation).
+  const [presentation, setPresentation] = useState<PresentationState | null>(null)
+  useEffect(() => {
+    const state = stateOf(store)
+    const read = () => setPresentation((state.get("presentation") as PresentationState | undefined) ?? null)
+    read()
+    state.observe(read)
+    return () => state.unobserve(read)
+  }, [store])
+  const startPresentation = () => {
+    stateOf(store).set("presentation", { path: active, page: docPage, by: store.clientID } satisfies PresentationState)
+    document.documentElement.requestFullscreen?.().catch(() => {})
+  }
+  const stopPresentation = useCallback(() => {
+    stateOf(store).delete("presentation")
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+  }, [store])
+
   // Files dropped onto the page from anywhere (admins: the tree is theirs to change).
   const [flash, setFlash] = useState<Set<string>>(new Set())
   const drop = useFileDrop(access.isAdmin, async (folder, dropped) => {
@@ -594,6 +613,11 @@ function Workspace() {
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
+            {docKind && access.isAdmin && (
+              <Button variant="outline" size="sm" onClick={() => startPresentation()}>
+                <PresentationIcon /> <span className="hidden sm:inline">{t("present.start")}</span>
+              </Button>
+            )}
             {provider && access.isAdmin && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -831,6 +855,19 @@ function Workspace() {
       />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <RemoteCursorStyles peers={collab.peers} labels={labels} />
+      {presentation && metasOf(store).has(presentation.path) && (
+        <Presentation
+          store={store}
+          state={presentation}
+          me={store.clientID}
+          presenterName={collab.peers.find((p) => p.clientId === presentation.by)?.user.name ?? "…"}
+          presenterHere={!provider || collab.peers.some((p) => p.clientId === presentation.by)}
+          admin={access.isAdmin}
+          fetch={fetchBlob}
+          onPage={(page) => stateOf(store).set("presentation", { ...presentation, page })}
+          onStop={stopPresentation}
+        />
+      )}
       <FrostOverlay frozen={!!provider && access.frozen} admin={access.isAdmin} />
       <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />

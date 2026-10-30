@@ -7,7 +7,9 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness"
 import * as syncProtocol from "y-protocols/sync"
-import * as Y from "yjs"
+import type * as Y from "yjs"
+
+import type { ProjectStore } from "@/lib/project/store"
 
 import { colorFor, nameFor } from "./identity"
 
@@ -253,7 +255,7 @@ class Link {
  * — which receivers enforce: changes from viewers are ignored.
  */
 export class CollabProvider {
-  readonly doc: Y.Doc
+  readonly store: ProjectStore
   readonly awareness: Awareness
   role: Role = "viewer"
   /** Our member number in the room (from the server). */
@@ -267,30 +269,35 @@ export class CollabProvider {
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
-  private readonly onUpdate: (update: Uint8Array, origin: unknown) => void
+  private readonly detach: (() => void)[] = []
   private readonly onAwareness: (changes: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void
 
-  constructor(session: SessionInfo, me: string, doc: Y.Doc) {
+  constructor(session: SessionInfo, me: string, store: ProjectStore) {
     this.session = session
-    this.doc = doc
-    this.awareness = new Awareness(doc)
+    this.store = store
+    this.awareness = new Awareness(store.structure)
     this.awareness.setLocalStateField("user", { id: me, name: nameFor(me), color: colorFor(me) } satisfies PeerUser)
 
-    this.onUpdate = (update, origin) => {
-      if (origin instanceof Link || !this.canWrite) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MSG_SYNC)
-      syncProtocol.writeUpdate(enc, update)
-      this.broadcast(encoding.toUint8Array(enc))
-    }
+    for (const id of store.ids()) this.watch(id, store.doc(id))
+    this.detach.push(
+      store.onDoc((id, doc) => {
+        this.watch(id, doc)
+        // A new document (a file someone added): ask everyone for its content.
+        this.broadcast(this.syncStep1(id, doc))
+      }),
+    )
     this.onAwareness = ({ added, updated, removed }, origin) => {
       if (origin instanceof Link) return
       this.broadcast(this.awarenessMessage([...added, ...updated, ...removed]))
     }
-    doc.on("update", this.onUpdate)
     this.awareness.on("update", this.onAwareness)
     window.addEventListener("beforeunload", this.onUnload)
     this.connect()
+  }
+
+  /** Our Yjs client id (the same in every document of the project). */
+  get clientID() {
+    return this.store.clientID
   }
 
   get code() {
@@ -326,11 +333,11 @@ export class CollabProvider {
     this.closed = true
     window.clearTimeout(this.retryTimer)
     window.removeEventListener("beforeunload", this.onUnload)
-    removeAwarenessStates(this.awareness, [this.doc.clientID], "leave")
+    removeAwarenessStates(this.awareness, [this.clientID], "leave")
     this.links.forEach((l) => l.close())
     this.links.clear()
     this.ws?.close()
-    this.doc.off("update", this.onUpdate)
+    this.detach.forEach((fn) => fn())
     this.awareness.off("update", this.onAwareness)
     this.awareness.destroy()
   }
@@ -361,7 +368,7 @@ export class CollabProvider {
       this.emitLinks()
       if (this.closed || this.status === "ended") return
       this.setStatus("offline")
-      const others = [...this.awareness.getStates().keys()].filter((id) => id !== this.doc.clientID)
+      const others = [...this.awareness.getStates().keys()].filter((id) => id !== this.clientID)
       removeAwarenessStates(this.awareness, others, "offline")
       this.retryTimer = window.setTimeout(() => this.connect(), Math.min(10_000, 500 * 2 ** this.retry++))
     }
@@ -434,24 +441,50 @@ export class CollabProvider {
 
   /** A link is usable (direct or relay): exchange state with that member. */
   onLinkReady(link: Link) {
+    for (const id of this.store.ids()) link.send(this.syncStep1(id, this.store.doc(id)))
+    link.send(this.awarenessMessage([...this.awareness.getStates().keys()].filter((id) => id === this.clientID)))
+  }
+
+  /** Sends our changes to a document to everyone. */
+  private watch(docId: string, doc: Y.Doc) {
+    const onUpdate = (update: Uint8Array, origin: unknown) => {
+      if (origin instanceof Link || !this.canWrite) return
+      const enc = this.syncHeader(docId)
+      syncProtocol.writeUpdate(enc, update)
+      this.broadcast(encoding.toUint8Array(enc))
+    }
+    doc.on("update", onUpdate)
+    this.detach.push(() => doc.off("update", onUpdate))
+  }
+
+  /** Sync messages carry the document they are about: [MSG_SYNC][docId][y-sync]. */
+  private syncHeader(docId: string) {
     const enc = encoding.createEncoder()
     encoding.writeVarUint(enc, MSG_SYNC)
-    syncProtocol.writeSyncStep1(enc, this.doc)
-    link.send(encoding.toUint8Array(enc))
-    link.send(this.awarenessMessage([...this.awareness.getStates().keys()].filter((id) => id === this.doc.clientID)))
+    encoding.writeVarString(enc, docId)
+    return enc
+  }
+
+  private syncStep1(docId: string, doc: Y.Doc) {
+    const enc = this.syncHeader(docId)
+    syncProtocol.writeSyncStep1(enc, doc)
+    return encoding.toUint8Array(enc)
   }
 
   onMessage(link: Link, message: Uint8Array) {
     const dec = decoding.createDecoder(message)
     const kind = decoding.readVarUint(dec)
     if (kind === MSG_SYNC) {
+      const docId = decoding.readVarString(dec)
+      // Unknown yet (its file's metadata has not arrived): we ask for it once it does.
+      if (!this.store.has(docId)) return
       // Peek at the sync type: viewers may ask for state (step 1) but not change it.
       const syncType = decoding.peekVarUint(dec)
       if (link.info.role === "viewer" && syncType !== syncProtocol.messageYjsSyncStep1) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MSG_SYNC)
-      syncProtocol.readSyncMessage(dec, enc, this.doc, link)
-      if (encoding.length(enc) > 1) link.send(encoding.toUint8Array(enc))
+      const enc = this.syncHeader(docId)
+      const header = encoding.length(enc)
+      syncProtocol.readSyncMessage(dec, enc, this.store.doc(docId), link)
+      if (encoding.length(enc) > header) link.send(encoding.toUint8Array(enc))
     } else if (kind === MSG_AWARENESS) {
       const update = decoding.readVarUint8Array(dec)
       // Remember which awareness clients this link speaks for.
@@ -467,7 +500,7 @@ export class CollabProvider {
     } else if (kind === MSG_SIGNAL) {
       if (link.info.role === "viewer") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
-      if (signal.to === this.doc.clientID) this.listeners.signal.forEach((fn) => fn(signal))
+      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal))
     }
   }
 
@@ -492,7 +525,7 @@ export class CollabProvider {
   }
 
   private onUnload = () => {
-    removeAwarenessStates(this.awareness, [this.doc.clientID], "unload")
+    removeAwarenessStates(this.awareness, [this.clientID], "unload")
   }
 }
 

@@ -20,7 +20,7 @@ import { usePackages } from "@/hooks/use-packages"
 import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
-import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedPackages, sharedTerminal } from "@/lib/collab/doc"
+import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedTerminal } from "@/lib/collab/doc"
 import {
   createDir,
   createFile,
@@ -28,14 +28,16 @@ import {
   deletePath,
   downloadBlob,
   exportZip,
-  filesOf,
   importZip,
   languageOf,
-  localProject,
+  localStore,
+  metasOf,
+  packagesOf,
   renamePath,
   replaceProject,
   resetProject,
   snapshotFiles,
+  textOf,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
@@ -65,7 +67,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   useEffect(() => {
     applyTheme(loadTheme())
-    localProject().ready.then(() => setReady(true))
+    localStore().ready.then(() => setReady(true))
   }, [])
   if (!ready) return <div className="h-full bg-background" />
   return <Workspace />
@@ -114,19 +116,24 @@ function Workspace() {
   // ---- project & session ------------------------------------------------------
   const collab = useCollab()
   const provider = collab.provider
-  const doc = provider?.doc ?? localProject().doc
+  const store = provider?.store ?? localStore()
+  const doc = store.runtime // console and run state
   const awareness = provider?.awareness ?? null
   const canWrite = !provider || provider.canWrite
-  const isGuest = !!provider && provider.doc !== localProject().doc
-
-  const [files, setFiles] = useState<string[]>(() => [...filesOf(doc).keys()])
+  const isGuest = !!provider && provider.store !== localStore()
   useEffect(() => {
-    const map = filesOf(doc)
+    // End-to-end tests read the project through this hook (opt-in per browser).
+    if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
+  }, [store, provider])
+
+  const [files, setFiles] = useState<string[]>(() => [...metasOf(store).keys()])
+  useEffect(() => {
+    const map = metasOf(store)
     const read = () => setFiles([...map.keys()].sort())
     read()
     map.observe(read)
     return () => map.unobserve(read)
-  }, [doc])
+  }, [store])
 
   const [active, setActive] = useState(DEFAULT_FILE)
   // Keep the open file valid (deleted, or another project after joining/leaving).
@@ -161,14 +168,14 @@ function Workspace() {
   useEffect(() => {
     runnerRef.current = runner
   })
-  const packagesArray = useMemo(() => sharedPackages(doc), [doc])
+  const packagesArray = useMemo(() => packagesOf(store), [store])
   const pkgs = usePackages(packagesArray)
 
   // Input and Stop from other members reach us when we are the one running.
   useEffect(() => {
     if (!provider) return
     return provider.on("signal", (signal) => {
-      if (readRun(provider.doc).executorClient !== provider.doc.clientID) return
+      if (readRun(provider.store.runtime).executorClient !== provider.clientID) return
       if (signal.type === "stdin") runnerRef.current.sendInput(signal.text)
       else if (signal.type === "eof") runnerRef.current.sendEof()
       else if (signal.type === "stop") runnerRef.current.stop()
@@ -233,13 +240,13 @@ function Workspace() {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
     resetRun(doc, collab.me ?? "local")
-    runner.run(snapshotFiles(doc), active, pkgs.activeSpecs)
-  }, [activeExists, language, active, canWrite, doc, provider, collab.me, runner, pkgs.activeSpecs])
+    runner.run(snapshotFiles(store), active, pkgs.activeSpecs)
+  }, [activeExists, language, active, canWrite, doc, store, provider, collab.me, runner, pkgs.activeSpecs])
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(() => {
-    downloadBlob(exportZip(doc), provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
-  }, [doc, provider])
+    downloadBlob(exportZip(store), provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
+  }, [store, provider])
 
   const upload = useCallback(
     async (file: File) => {
@@ -257,17 +264,14 @@ function Workspace() {
         action: t("confirm.zip.action"),
         destructive: true,
         onConfirm: () => {
-          replaceProject(doc, content.files, content.dirs, readPackages())
+          replaceProject(store, content.files, content.dirs, packagesOf(store).toArray())
           const first = Object.keys(content.files).sort((a, b) => Number(b.endsWith(".py")) - Number(a.endsWith(".py")) || a.localeCompare(b))[0]
           setActive(content.files[DEFAULT_FILE] !== undefined ? DEFAULT_FILE : first ?? DEFAULT_FILE)
           toast.success(t("toast.opened", { name: file.name }))
         },
       })
-      function readPackages() {
-        return sharedPackages(doc).toArray()
-      }
     },
-    [doc, provider],
+    [store, provider],
   )
 
   // In a session only the owner resets — the session's project, for everyone.
@@ -282,13 +286,13 @@ function Workspace() {
       action: t("confirm.reset.action"),
       destructive: true,
       onConfirm: () => {
-        resetProject(doc)
+        resetProject(store)
         setActive(DEFAULT_FILE)
         provider?.announceReset()
         toast.success(t("toast.reset"))
       },
     })
-  }, [canReset, provider, doc, t])
+  }, [canReset, provider, store, t])
 
   // Everyone else follows the owner's reset.
   useEffect(() => {
@@ -301,24 +305,24 @@ function Workspace() {
 
   const createEntry = useCallback(
     (path: string, kind: "file" | "dir") => {
-      if (kind === "dir") createDir(doc, path)
+      if (kind === "dir") createDir(store, path)
       else {
-        createFile(doc, path)
+        createFile(store, path)
         setActive(path)
         setView("editor")
       }
     },
-    [doc],
+    [store],
   )
 
-  const deleteEntry = useCallback((path: string) => deletePath(doc, path), [doc])
+  const deleteEntry = useCallback((path: string) => deletePath(store, path), [store])
 
   const renameEntry = useCallback(
     (from: string, to: string) => {
-      const map = renamePath(doc, from, to)
+      const map = renamePath(store, from, to)
       setActive((current) => map(current))
     },
-    [doc],
+    [store],
   )
 
   const formatCode = useCallback(async () => {
@@ -415,7 +419,7 @@ function Workspace() {
   }
 
   const errors = diagnostics.length
-  const previewText = preview && preview === active ? text : preview ? (filesOf(doc).get(preview)?.toString() ?? "") : ""
+  const previewText = preview && preview === active ? text : preview ? (textOf(store, preview)?.toString() ?? "") : ""
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -502,7 +506,7 @@ function Workspace() {
           {filesOpen && (
             <div style={{ width: filesWidth }} className="h-full min-w-0 shrink-0">
               <FileTree
-                doc={doc}
+                store={store}
                 active={active}
                 readOnly={!canWrite}
                 peers={collab.peers}
@@ -543,7 +547,7 @@ function Workspace() {
           <main ref={split} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", view !== "editor" && "hidden")}>
             <div className="relative min-h-0 flex-1">
               <CodeEditor
-                doc={doc}
+                store={store}
                 path={active}
                 available={activeExists}
                 awareness={awareness}

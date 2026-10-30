@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import * as Y from "yjs"
 
 import { fetchMe } from "@/lib/collab/identity"
 import { translate } from "@/lib/i18n"
@@ -14,7 +13,8 @@ import {
   type ProviderStatus,
   type SessionMode,
 } from "@/lib/collab/provider"
-import { localProject } from "@/lib/project/project"
+import { localStore } from "@/lib/project/project"
+import { ProjectStore } from "@/lib/project/store"
 
 export interface Peer {
   clientId: number
@@ -29,8 +29,8 @@ export interface Peer {
 const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
 
 /**
- * The live session. The owner shares their own project (their local doc, so
- * every change is saved in their browser); a guest works on a fresh doc that
+ * The live session. The owner shares their own project (their local store, so
+ * every change is saved in their browser); a guest works on a fresh store that
  * fills from the others and is dropped on leaving — back to their own project.
  */
 export function useCollab() {
@@ -64,9 +64,9 @@ export function useCollab() {
       if (session.endedAt) throw new Error("This session has ended.")
       const isOwner = session.ownerId === me
       // The owner rejoining shares their own project again.
-      const doc = isOwner ? localProject().doc : new Y.Doc()
-      if (isOwner) await localProject().ready
-      attach(new CollabProvider(session, me, doc))
+      const store = isOwner ? localStore() : new ProjectStore(false)
+      await store.ready
+      attach(new CollabProvider(session, me, store))
     },
     [me, attach],
   )
@@ -75,8 +75,8 @@ export function useCollab() {
     async (mode: SessionMode) => {
       if (!me) throw new Error("The collaboration server is not available.")
       const { session } = await createSession(mode)
-      await localProject().ready
-      attach(new CollabProvider(session, me, localProject().doc))
+      await localStore().ready
+      attach(new CollabProvider(session, me, localStore()))
     },
     [me, attach],
   )
@@ -115,7 +115,7 @@ export function useCollab() {
       const list: Peer[] = []
       provider.awareness.getStates().forEach((state, clientId) => {
         const s = state as { user?: PeerUser; file?: string }
-        if (s.user) list.push({ clientId, user: s.user, isMe: clientId === provider.doc.clientID, file: s.file, link: modes.get(clientId) })
+        if (s.user) list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId) })
       })
       list.sort((a, b) => Number(b.isMe) - Number(a.isMe) || a.user.id.localeCompare(b.user.id))
       setPeers(list)
@@ -144,7 +144,7 @@ export function useCollab() {
 
 function dispose(p: CollabProvider | null) {
   if (!p) return
-  const guestDoc = p.doc !== localProject().doc ? p.doc : null
+  const guest = p.store !== localStore() ? p.store : null
   p.destroy()
-  guestDoc?.destroy()
+  guest?.destroy()
 }

@@ -9,6 +9,7 @@
     "prebuild": "node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -49,6 +50,7 @@
     "oxlint": "^1.88.0",
     "shadcn": "^4.22.1",
     "typescript": "~6.0.3",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
   }
 }

@@ -9,3 +9,4 @@ __pycache__/
 .env
 # Built VS Code extensions (rebuild with vsce)
 *.vsix
+.superpowers/

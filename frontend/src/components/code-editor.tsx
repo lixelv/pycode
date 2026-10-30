@@ -7,7 +7,8 @@ import * as Y from "yjs"
 import { useI18n } from "@/lib/i18n"
 import { registerPythonIntellisense } from "@/lib/intellisense"
 import { monaco, type MonacoApi } from "@/lib/monaco"
-import { filesOf, languageOf } from "@/lib/project/project"
+import { languageOf, metasOf, textOf } from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
 import { lint, type Diagnostic } from "@/lib/ruff"
 import type { Theme } from "@/lib/storage"
 
@@ -17,7 +18,7 @@ export type EditorInstance = MonacoApi.editor.IStandaloneCodeEditor
 
 interface CodeEditorProps {
   /** The project and the file shown; the editor edits that file's Y.Text. */
-  doc: Y.Doc
+  store: ProjectStore
   path: string
   /** Whether the file exists yet (a guest's project arrives after joining). */
   available: boolean
@@ -36,7 +37,7 @@ interface CodeEditorProps {
 let modelCounter = 0
 
 export function CodeEditor({
-  doc,
+  store,
   path,
   available,
   awareness,
@@ -58,17 +59,17 @@ export function CodeEditor({
     handlers.current = { onRun, onCursor, onSave, onText }
   }, [onRun, onCursor, onSave, onText])
 
-  // The file's shared text. A reset or an opened archive replaces the Y.Text
-  // under the same path: follow it, or the editor would stay bound to the
-  // deleted one (and show nothing).
-  const [ytext, setYtext] = useState(() => filesOf(doc).get(path))
+  // The file's shared text. A reset or an opened archive puts a new file
+  // (a new document) under the same path: follow it, or the editor would
+  // stay bound to the deleted one (and show nothing).
+  const [ytext, setYtext] = useState(() => textOf(store, path))
   useEffect(() => {
-    const files = filesOf(doc)
-    const read = () => setYtext(files.get(path))
+    const metas = metasOf(store)
+    const read = () => setYtext(textOf(store, path))
     read()
-    files.observe(read)
-    return () => files.unobserve(read)
-  }, [doc, path])
+    metas.observe(read)
+    return () => metas.unobserve(read)
+  }, [store, path])
 
   // One Monaco model per open file, bound to the file's shared text.
   useEffect(() => {

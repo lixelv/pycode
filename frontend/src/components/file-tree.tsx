@@ -15,7 +15,6 @@ import {
   Upload,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import type * as Y from "yjs"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -28,11 +27,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Peer } from "@/hooks/use-collab"
 import { useI18n } from "@/lib/i18n"
-import { allDirs, cleanPath, dirsOf, exists, filesOf, languageOf, nameOf, parentOf } from "@/lib/project/project"
+import { allDirs, cleanPath, dirsOf, exists, languageOf, metasOf, nameOf, parentOf } from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
 
 interface FileTreeProps {
-  doc: Y.Doc
+  store: ProjectStore
   active: string
   readOnly: boolean
   peers: Peer[]
@@ -86,7 +86,7 @@ function FileIcon({ path }: { path: string }) {
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { doc, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
+  const { store, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -97,18 +97,18 @@ export function FileTree(props: FileTreeProps) {
 
   useEffect(() => {
     const bump = () => setVersion((v) => v + 1)
-    const files = filesOf(doc)
-    const dirs = dirsOf(doc)
+    const files = metasOf(store)
+    const dirs = dirsOf(store)
     files.observe(bump)
     dirs.observe(bump)
     return () => {
       files.unobserve(bump)
       dirs.unobserve(bump)
     }
-  }, [doc])
+  }, [store])
 
-  const files = [...filesOf(doc).keys()]
-  const tree = buildTree(files, allDirs(doc))
+  const files = [...metasOf(store).keys()]
+  const tree = buildTree(files, allDirs(store))
   // Where the others are: file -> colours.
   const presence = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -228,7 +228,7 @@ export function FileTree(props: FileTreeProps) {
   const validate = (parent: string, name: string, current?: string): { path?: string; error?: string } => {
     const path = cleanPath(parent ? `${parent}/${name}` : name)
     if (!path) return { error: t("tree.err.dots") }
-    if (path !== current && exists(doc, path)) return { error: t("tree.err.exists") }
+    if (path !== current && exists(store, path)) return { error: t("tree.err.exists") }
     return { path }
   }
 

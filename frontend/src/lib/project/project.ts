@@ -1,20 +1,29 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
 import { IndexeddbPersistence } from "y-indexeddb"
-import * as Y from "yjs"
+import { Doc as YDoc } from "yjs"
+import type * as Y from "yjs"
 
 import type { PackageEntry } from "@/hooks/use-packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
+import { ProjectStore, type FileMeta } from "./store"
+
 /*
- * A project is a Y.Doc, the same structure alone and in a live session:
- *   files     Y.Map<Y.Text>   path ("src/utils.py") -> content
- *   dirs      Y.Map<true>     folders created explicitly (they may be empty)
- *   packages  Y.Array         PackageEntry
- *   terminal  Y.Text          console output, runs carry {k: ChunkKind}
- *   run       Y.Map           status, exit, executorClient, draft (input being typed)
+ * A project is a ProjectStore (see store.ts). Paths live in
+ * structure.files (path -> FileMeta); a text file's content is the Y.Text
+ * "t" of its own document f:<id>, so a rename only moves the metadata.
  */
-export const filesOf = (doc: Y.Doc) => doc.getMap<Y.Text>("files")
-export const dirsOf = (doc: Y.Doc) => doc.getMap<true>("dirs")
+export const metasOf = (s: ProjectStore) => s.structure.getMap<FileMeta>("files")
+export const dirsOf = (s: ProjectStore) => s.structure.getMap<true>("dirs")
+export const packagesOf = (s: ProjectStore) => s.structure.getArray<PackageEntry>("packages")
+
+/** The shared text of a text file, or null (no such file, or binary). */
+export function textOf(s: ProjectStore, path: string): Y.Text | null {
+  const meta = metasOf(s).get(path)
+  return meta?.kind === "text" ? s.doc(`f:${meta.id}`).getText("t") : null
+}
+
+export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
 export const DEFAULT_FILE = "main.py"
 
@@ -39,86 +48,92 @@ export function cleanPath(raw: string): string | null {
 export const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "")
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1)
 
-export function createFile(doc: Y.Doc, path: string, content = "") {
-  const files = filesOf(doc)
-  if (files.has(path)) return
-  doc.transact(() => {
-    const text = new Y.Text()
-    text.insert(0, content)
-    files.set(path, text)
-  })
+export function createFile(s: ProjectStore, path: string, content = "") {
+  const metas = metasOf(s)
+  if (metas.has(path)) return
+  const id = newId()
+  metas.set(path, { id, kind: "text", size: content.length })
+  if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
 }
 
-export function createDir(doc: Y.Doc, path: string) {
-  dirsOf(doc).set(path, true)
+export function createDir(s: ProjectStore, path: string) {
+  dirsOf(s).set(path, true)
 }
 
 /** Deletes a file, or a folder with everything inside it. */
-export function deletePath(doc: Y.Doc, path: string) {
-  doc.transact(() => {
-    const files = filesOf(doc)
-    const dirs = dirsOf(doc)
-    for (const key of [...files.keys()]) if (key === path || key.startsWith(path + "/")) files.delete(key)
+export function deletePath(s: ProjectStore, path: string) {
+  s.structure.transact(() => {
+    const metas = metasOf(s)
+    const dirs = dirsOf(s)
+    for (const key of [...metas.keys()]) if (key === path || key.startsWith(path + "/")) metas.delete(key)
     for (const key of [...dirs.keys()]) if (key === path || key.startsWith(path + "/")) dirs.delete(key)
   })
 }
 
-export function exists(doc: Y.Doc, path: string) {
-  if (filesOf(doc).has(path) || dirsOf(doc).has(path)) return true
-  return [...filesOf(doc).keys()].some((k) => k.startsWith(path + "/"))
+export function exists(s: ProjectStore, path: string) {
+  if (metasOf(s).has(path) || dirsOf(s).has(path)) return true
+  return [...metasOf(s).keys()].some((k) => k.startsWith(path + "/"))
 }
 
 /** Every folder, explicit or implied by a file inside it. */
-export function allDirs(doc: Y.Doc): string[] {
-  const set = new Set<string>(dirsOf(doc).keys())
-  for (const path of filesOf(doc).keys()) {
+export function allDirs(s: ProjectStore): string[] {
+  const set = new Set<string>(dirsOf(s).keys())
+  for (const path of metasOf(s).keys()) {
     for (let p = parentOf(path); p; p = parentOf(p)) set.add(p)
   }
   return [...set].sort()
 }
 
-export function snapshotFiles(doc: Y.Doc): Record<string, string> {
+/** The content of every text file we have. */
+export function snapshotFiles(s: ProjectStore): Record<string, string> {
   const out: Record<string, string> = {}
-  filesOf(doc).forEach((text, path) => (out[path] = text.toString()))
+  for (const path of metasOf(s).keys()) {
+    const text = textOf(s, path)
+    if (text) out[path] = text.toString()
+  }
   return out
 }
 
-/** Replaces the whole project content (files, folders, packages). */
-export function replaceProject(doc: Y.Doc, files: Record<string, string>, dirs: string[] = [], packages: PackageEntry[] = []) {
-  doc.transact(() => {
-    const f = filesOf(doc)
-    const d = dirsOf(doc)
-    for (const k of [...f.keys()]) f.delete(k)
+/** Replaces the whole project content (files, folders, packages) and clears the console. */
+export function replaceProject(s: ProjectStore, files: Record<string, string>, dirs: string[] = [], packages: PackageEntry[] = []) {
+  const fresh: [string, string][] = []
+  s.structure.transact(() => {
+    const metas = metasOf(s)
+    const d = dirsOf(s)
+    for (const k of [...metas.keys()]) metas.delete(k)
     for (const k of [...d.keys()]) d.delete(k)
     for (const [path, content] of Object.entries(files)) {
-      const text = new Y.Text()
-      text.insert(0, content)
-      f.set(path, text)
+      const id = newId()
+      metas.set(path, { id, kind: "text", size: content.length })
+      fresh.push([id, content])
     }
     for (const dir of dirs) d.set(dir, true)
-    const pkgs = doc.getArray<PackageEntry>("packages")
+    const pkgs = packagesOf(s)
     pkgs.delete(0, pkgs.length)
     pkgs.push(packages)
-    const term = doc.getText("terminal")
+  })
+  for (const [id, content] of fresh) if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
+  s.runtime.transact(() => {
+    const term = s.runtime.getText("terminal")
     term.delete(0, term.length)
-    doc.getMap("run").clear()
+    s.runtime.getMap("run").clear()
   })
 }
 
-export function resetProject(doc: Y.Doc) {
-  replaceProject(doc, { [DEFAULT_FILE]: DEFAULT_CODE })
+export function resetProject(s: ProjectStore) {
+  replaceProject(s, { [DEFAULT_FILE]: DEFAULT_CODE })
 }
 
 // ---- archive --------------------------------------------------------------
 
 const MAX_ARCHIVE_FILE = 5 * 1024 * 1024
 
-export function exportZip(doc: Y.Doc): Uint8Array {
+export function exportZip(s: ProjectStore): Uint8Array {
   const entries: Record<string, Uint8Array> = {}
-  for (const [path, content] of Object.entries(snapshotFiles(doc))) entries[path] = strToU8(content)
+  for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
   // Keep empty folders.
-  for (const dir of dirsOf(doc).keys()) {
-    if (![...filesOf(doc).keys()].some((p) => p.startsWith(dir + "/"))) entries[dir + "/"] = new Uint8Array()
+  for (const dir of dirsOf(s).keys()) {
+    if (![...metasOf(s).keys()].some((p) => p.startsWith(dir + "/"))) entries[dir + "/"] = new Uint8Array()
   }
   return zipSync(entries, { level: 6 })
 }
@@ -153,43 +168,49 @@ export function importZip(data: Uint8Array): { files: Record<string, string>; di
 
 // ---- the local project -------------------------------------------------------
 
-const LOCAL_DB = "python-coder:project"
+const LEGACY_DB = "python-coder:project"
 const LEGACY_PACKAGES = "python-coder:packages"
 
-export interface LocalProject {
-  doc: Y.Doc
-  ready: Promise<void>
+let local: ProjectStore | null = null
+
+/** The user's own project, saved in IndexedDB (await `.ready`). */
+export function localStore(): ProjectStore {
+  if (local) return local
+  const s = new ProjectStore(true)
+  local = s
+  const ready = s.ready.then(async () => {
+    if (metasOf(s).size === 0) await migrate(s)
+    // A run cannot survive a reload.
+    const run = s.runtime.getMap("run")
+    if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
+  })
+  s.ready = ready
+  return s
 }
 
-let local: LocalProject | null = null
-
-/** The user's own project, saved in IndexedDB. */
-export function localProject(): LocalProject {
-  if (local) return local
-  const doc = new Y.Doc()
-  const persistence = new IndexeddbPersistence(LOCAL_DB, doc)
-  const ready = new Promise<void>((resolve) => {
-    persistence.once("synced", () => {
-      if (filesOf(doc).size === 0) {
-        // First start: bring over the code and packages kept by older versions.
-        let legacyCode: string | null = null
-        let legacyPackages: PackageEntry[] = []
-        try {
-          legacyCode = localStorage.getItem("python-coder:code")
-          legacyPackages = JSON.parse(localStorage.getItem(LEGACY_PACKAGES) ?? "[]")
-        } catch {
-          // storage unavailable
-        }
-        replaceProject(doc, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
-      }
-      // A run cannot survive a reload.
-      const run = doc.getMap("run")
-      if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
-      resolve()
-    })
-  })
-  local = { doc, ready }
-  return local
+/** First start of this version: bring over the single-document project of older ones. */
+async function migrate(s: ProjectStore) {
+  const old = new YDoc()
+  const persistence = new IndexeddbPersistence(LEGACY_DB, old)
+  await persistence.whenSynced
+  const files = old.getMap<Y.Text>("files")
+  if (files.size > 0) {
+    const content: Record<string, string> = {}
+    files.forEach((text, path) => (content[path] = text.toString()))
+    replaceProject(s, content, [...old.getMap("dirs").keys()], old.getArray<PackageEntry>("packages").toArray())
+  } else {
+    let legacyCode: string | null = null
+    let legacyPackages: PackageEntry[] = []
+    try {
+      legacyCode = localStorage.getItem("python-coder:code")
+      legacyPackages = JSON.parse(localStorage.getItem(LEGACY_PACKAGES) ?? "[]")
+    } catch {
+      // storage unavailable
+    }
+    replaceProject(s, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
+  }
+  await persistence.clearData()
+  old.destroy()
 }
 
 export function downloadBlob(data: Uint8Array, name: string, type = "application/zip") {
@@ -202,22 +223,21 @@ export function downloadBlob(data: Uint8Array, name: string, type = "application
 }
 
 /**
- * Renames a file or a folder (with everything inside). Yjs types cannot be
- * moved, so contents are copied into new texts under the new paths.
+ * Renames a file or a folder (with everything inside). Only the metadata
+ * moves: each file keeps its document, so open editors stay bound.
  * Returns how a path maps after the rename (for the open file).
  */
-export function renamePath(doc: Y.Doc, from: string, to: string): (path: string) => string {
+export function renamePath(s: ProjectStore, from: string, to: string): (path: string) => string {
   const map = (path: string) => (path === from ? to : path.startsWith(from + "/") ? to + path.slice(from.length) : path)
-  doc.transact(() => {
-    const files = filesOf(doc)
-    const dirs = dirsOf(doc)
-    for (const key of [...files.keys()]) {
+  s.structure.transact(() => {
+    const metas = metasOf(s)
+    const dirs = dirsOf(s)
+    for (const key of [...metas.keys()]) {
       const next = map(key)
       if (next === key) continue
-      const text = new Y.Text()
-      text.insert(0, files.get(key)!.toString())
-      files.delete(key)
-      files.set(next, text)
+      const meta = metas.get(key)!
+      metas.delete(key)
+      metas.set(next, meta)
     }
     for (const key of [...dirs.keys()]) {
       const next = map(key)

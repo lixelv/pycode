@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { fetchCppPackage, headerFiles, loadCppPackages, parseCppSpec, pickInclude, type CppPackage } from "./packages"
+import { applyLoadFailures, fetchCppPackage, headerFiles, loadCppPackages, parseCppSpec, pickInclude, type CppPackage } from "./packages"
 
 describe("parseCppSpec", () => {
   it("parses owner/repo@ref", () => {
@@ -15,6 +15,13 @@ describe("parseCppSpec", () => {
   it("rejects . and .. as owner or repo", () => {
     for (const bad of ["../..", "./x", "x/..", "../x@v1", "./."]) expect(parseCppSpec(bad)).toBeNull()
     expect(parseCppSpec("a.b/c..d")).toMatchObject({ repo: "a.b/c..d" })
+  })
+  it("rejects a ref with a . or .. path segment", () => {
+    for (const bad of ["o/r@../x", "o/r@a/../b", "o/r@.", "o/r@..", "o/r@./x", "o/r@a/."]) expect(parseCppSpec(bad)).toBeNull()
+  })
+  it("accepts refs with dots and slashes that are not path segments", () => {
+    expect(parseCppSpec("o/r@v1.2.3")).toMatchObject({ repo: "o/r", ref: "v1.2.3" })
+    expect(parseCppSpec("o/r@feature/x")).toMatchObject({ repo: "o/r", ref: "feature/x" })
   })
   it("rejects a bare name", () => {
     expect(parseCppSpec("json")).toBeNull()
@@ -123,6 +130,51 @@ describe("loadCppPackages", () => {
     expect(result.files).toEqual({ "/packages/ok/lib/include/a.hpp": "// a" })
     expect(result.includes).toEqual(["/packages/ok/lib/include"])
     expect(onFail).toHaveBeenCalledTimes(1)
-    expect(onFail).toHaveBeenCalledWith("bad/lib", expect.stringContaining("503"))
+    expect(onFail).toHaveBeenCalledWith("bad/lib", "1.0.0", expect.stringContaining("503"))
+  })
+})
+
+describe("applyLoadFailures", () => {
+  const pkg = (over: Partial<CppPackage>): CppPackage => ({
+    repo: "o/r",
+    ref: "1.0.0",
+    spec: "o/r@1.0.0",
+    status: "installed",
+    version: "1.0.0",
+    ...over,
+  })
+
+  it("turns an installed entry with a matching repo@version key into a load-failed error", () => {
+    const [p] = applyLoadFailures([pkg({})], { "o/r@1.0.0": "boom" })
+    expect(p).toMatchObject({ status: "error", error: "boom", loadFailed: true })
+  })
+  it("leaves the same repo at another version untouched", () => {
+    const stored = pkg({ version: "2.0.0" })
+    const [p] = applyLoadFailures([stored], { "o/r@1.0.0": "boom" })
+    expect(p).toBe(stored)
+    expect(p.loadFailed).toBeUndefined()
+  })
+  it("leaves a stored error or installing entry untouched and not flagged", () => {
+    const err = pkg({ status: "error", error: "stored" })
+    const inst = pkg({ repo: "a/b", status: "installing" })
+    const [e, i] = applyLoadFailures([err, inst], { "o/r@1.0.0": "boom", "a/b@1.0.0": "boom" })
+    expect(e).toBe(err)
+    expect(i).toBe(inst)
+    expect(e.error).toBe("stored")
+    expect(e.loadFailed).toBeUndefined()
+    expect(i.loadFailed).toBeUndefined()
+  })
+  it("returns the entries unchanged when nothing failed", () => {
+    const list = [pkg({}), pkg({ repo: "a/b" })]
+    const out = applyLoadFailures(list, {})
+    expect(out).toEqual(list)
+    expect(out[0]).toBe(list[0])
+    expect(out[1]).toBe(list[1])
+  })
+  it("does not mutate the stored entry", () => {
+    const stored = pkg({})
+    applyLoadFailures([stored], { "o/r@1.0.0": "boom" })
+    expect(stored.status).toBe("installed")
+    expect(stored.loadFailed).toBeUndefined()
   })
 })

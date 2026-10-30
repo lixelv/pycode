@@ -12,6 +12,7 @@ export interface Chunk {
 }
 
 export type RunStatus = "idle" | "compiling" | "connecting" | "running" | "waiting" | "finished"
+/** A program is starting, running or waiting for input. */
 export const isBusy = (status: RunStatus) => status === "compiling" || status === "connecting" || status === "running" || status === "waiting"
 
 export interface ExitInfo {
@@ -191,8 +192,8 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const begin = useCallback(
     (next: ProgramRunner, what: string): number | null => {
       if (!RunnerClient.supported()) {
-        setChunks([{ kind: "stderr", text: `This browser does not allow the in-browser ${what} here (the page is not cross-origin isolated).\n` }])
-        setExit({ code: null, duration: 0, reason: "error", message: `${what} unavailable` })
+        setChunks([{ kind: "stderr", text: translate("run.unsupported", { what }) + "\n" }])
+        setExit({ code: null, duration: 0, reason: "error", message: translate("run.unavailable", { what }) })
         setStatus("finished")
         return null
       }
@@ -247,7 +248,9 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
     async (files: ProjectFiles, entry: string, compile: () => Promise<CppBuild>) => {
       const gen = begin(cppRunner, "C++")
       if (gen === null) return
-      setStatus("compiling")
+      // Always emitted: a Run during a compile leaves the local status as it is, but the doc was reset.
+      setStatusState("compiling")
+      emit.current?.({ type: "status", status: "compiling" })
       let build: CppBuild
       try {
         build = await compile()

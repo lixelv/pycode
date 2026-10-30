@@ -12,11 +12,15 @@ import {
 } from "@/workers/protocol"
 
 type Listener = (event: RunnerEvent) => void
+type OutputEvent = Extract<RunnerEvent, { type: "stdout" | "stderr" }>
+
+const BATCH_MS = 16
 
 /**
  * Runs compiled C++ programs in cpp-run.worker, with input() on the same
  * shared buffers as Python. A wasm program cannot be interrupted, so Stop
- * terminates the worker and starts a new one.
+ * terminates the worker and starts a new one. The worker posts every write,
+ * because it could not send held text later: output is batched here instead.
  */
 export class CppRunnerClient implements ProgramRunner {
   private worker: Worker | null = null
@@ -27,6 +31,9 @@ export class CppRunnerClient implements ProgramRunner {
   private running: { id: number; started: number } | null = null
   private nextId = 1
   private createWorker: () => Worker
+  /** Output not emitted yet, one entry per run of the same kind. */
+  private batch: OutputEvent[] = []
+  private batchTimer: ReturnType<typeof setTimeout> | undefined
 
   /** `createWorker` is replaced in tests. */
   constructor(createWorker: () => Worker = () => new CppRunWorker()) {
@@ -44,17 +51,41 @@ export class CppRunnerClient implements ProgramRunner {
     this.listeners.forEach((l) => l(event))
   }
 
+  private flush() {
+    const batch = this.batch
+    this.dropBatch()
+    batch.forEach((event) => this.emit(event))
+  }
+
+  private dropBatch() {
+    clearTimeout(this.batchTimer)
+    this.batchTimer = undefined
+    this.batch = []
+  }
+
+  private receive(event: RunnerEvent) {
+    if (event.type === "stdout" || event.type === "stderr") {
+      const last = this.batch.at(-1)
+      if (last?.type === event.type) last.data += event.data
+      else this.batch.push({ ...event })
+      this.batchTimer ??= setTimeout(() => this.flush(), BATCH_MS)
+      return
+    }
+    this.flush()
+    if (event.type === "exit" && event.id === this.running?.id) this.running = null
+    this.emit(event)
+  }
+
   private spawn() {
     const worker = this.createWorker()
     worker.onmessage = (msg: MessageEvent<RunnerEvent>) => {
       if (worker !== this.worker) return
-      const event = msg.data
-      if (event.type === "exit" && event.id === this.running?.id) this.running = null
-      this.emit(event)
+      this.receive(msg.data)
     }
     worker.onerror = (e) => {
       if (worker !== this.worker || !this.running) return
       const { id, started } = this.running
+      this.flush()
       this.restart()
       this.emit({ type: "stderr", data: `\n${e.message || "The C++ runner crashed."}\n` })
       this.emit({ type: "exit", id, code: 1, duration: (performance.now() - started) / 1000, reason: null })
@@ -98,6 +129,7 @@ export class CppRunnerClient implements ProgramRunner {
   interrupt() {
     if (!this.running) return
     const { id, started } = this.running
+    this.flush()
     this.restart()
     this.spawn() // ready for the next run
     this.emit({ type: "stderr", data: "\nKeyboardInterrupt\n" })
@@ -105,6 +137,7 @@ export class CppRunnerClient implements ProgramRunner {
   }
 
   restart() {
+    this.dropBatch()
     this.worker?.terminate()
     this.worker = null
     this.running = null

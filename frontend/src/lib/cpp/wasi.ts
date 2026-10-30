@@ -20,6 +20,15 @@ export class Utf8Out {
   }
 }
 
+/** The largest length <= n that does not cut a multibyte character of `bytes`. */
+export function utf8Boundary(bytes: Uint8Array, n: number): number {
+  if (n >= bytes.length) return bytes.length
+  let i = n
+  // A byte 10xxxxxx continues a character, which has at most 3 of them.
+  while (i > 0 && n - i < 3 && (bytes[i] & 0xc0) === 0x80) i--
+  return i
+}
+
 /** The program's working folder: the entry's folder under /project. */
 export function cwdOf(entry: string) {
   const dir = entry.split("/").slice(0, -1).join("/")
@@ -106,7 +115,7 @@ export async function runWasm(
   let outputLimited = false
   const output = (kind: "stdout" | "stderr") =>
     new ConsoleStdout((bytes) => {
-      const part = bytes.subarray(0, left)
+      const part = bytes.subarray(0, utf8Boundary(bytes, left))
       left -= part.length
       if (part.length) write(kind, part)
       if (part.length < bytes.length) {

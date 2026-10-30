@@ -7,57 +7,31 @@ import type { CppRunRequest, RunnerEvent } from "@/workers/protocol"
 
 const post = (event: RunnerEvent) => postMessage(event)
 
-/** Coalesces writes into few messages, keeping stdout and stderr in order. */
-class Output {
-  private decoders = { stdout: new Utf8Out(), stderr: new Utf8Out() }
-  private kind: "stdout" | "stderr" = "stdout"
-  private pending = ""
-  private last = 0
-
-  write(kind: "stdout" | "stderr", bytes: Uint8Array) {
-    if (kind !== this.kind) this.flush()
-    this.kind = kind
-    this.pending += this.decoders[kind].push(bytes)
-    if (this.pending.length > 4096 || performance.now() - this.last > 16) this.flush()
-  }
-
-  flush() {
-    if (this.pending) post({ type: this.kind, data: this.pending })
-    this.pending = ""
-    this.last = performance.now()
-  }
-
-  end() {
-    for (const kind of ["stdout", "stderr"] as const) {
-      this.flush()
-      this.kind = kind
-      this.pending = this.decoders[kind].flush()
-    }
-    this.flush()
-  }
-}
-
 onmessage = async ({ data: msg }: MessageEvent<CppRunRequest>) => {
   if (msg.type !== "run") return // batch (checks) comes with Task 12
-  const output = new Output()
+  // Every write is posted at once: the program is synchronous, so nothing here
+  // could send held text later, and Stop terminates this worker. The page batches.
+  const decoders = { stdout: new Utf8Out(), stderr: new Utf8Out() }
+  const send = (type: "stdout" | "stderr", data: string) => {
+    if (data) post({ type, data })
+  }
+  const write = (kind: "stdout" | "stderr", bytes: Uint8Array) => send(kind, decoders[kind].push(bytes))
   const stdin = new Stdin({
     control: new Int32Array(msg.buffers.control),
     data: new Uint8Array(msg.buffers.data),
-    waiting: () => {
-      output.flush() // the prompt before the input line
-      post({ type: "input_request" })
-    },
+    waiting: () => post({ type: "input_request" }),
   })
   const started = performance.now()
   let code = 1
   let reason: "output_limit" | null = null
   try {
-    const result = await runWasm(msg.wasm, msg.files, msg.cwd, stdin, (kind, bytes) => output.write(kind, bytes))
+    const result = await runWasm(msg.wasm, msg.files, msg.cwd, stdin, write)
     code = result.code
     if (result.outputLimited) reason = "output_limit"
   } catch (err) {
-    output.write("stderr", new TextEncoder().encode(`\n${err instanceof Error ? err.message : String(err)}\n`))
+    send("stderr", `\n${err instanceof Error ? err.message : String(err)}\n`)
   }
-  output.end()
+  // At the output limit a letter left unfinished by an earlier write is dropped, not shown as U+FFFD.
+  if (!reason) for (const kind of ["stdout", "stderr"] as const) send(kind, decoders[kind].flush())
   post({ type: "exit", id: msg.id, code, duration: (performance.now() - started) / 1000, reason })
 }

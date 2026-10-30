@@ -81,7 +81,6 @@ const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "polycode:theme"
 const LABELS_KEY = "polycode:cursor-labels"
 
-/** A program is starting, running or waiting for input. */
 const MD_MODE_KEY = "polycode:md-mode"
 const HTML_MODE_KEY = "polycode:html-mode"
 const BREAKPOINTS_KEY = "polycode:breakpoints"
@@ -402,6 +401,7 @@ function Workspace() {
     }
     if (language === "cpp") {
       setWebRun(null)
+      setRunStatus(doc, "compiling") // resetRun's `connecting` means Python to the console
       void projectFiles(store, provider, active).then((files) =>
         runner.runCpp(files, active, () => cppClient.compile(files, active, NO_CPP_PACKAGES)),
       )

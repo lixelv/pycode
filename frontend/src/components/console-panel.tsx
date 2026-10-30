@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { isBusy, type Chunk, type ExitInfo, type RunStatus } from "@/hooks/use-runner"
+import { ERROR_LINE } from "@/lib/console-lines"
 import { translate, useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -232,14 +233,6 @@ function ConsoleButton({ label, onClick, children }: { label: string; onClick: (
     </Tooltip>
   )
 }
-
-/**
- * The line that explains an error ("ZeroDivisionError: division by zero",
- * clang's "main.cpp:4:3: error: …", an uncaught C++ exception) is red; the
- * rest of the traceback or the compiler's context stays in the console's colours.
- */
-const ERROR_LINE =
-  /^(?:[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Exit|Warning)\b(?::.*)?|\S+:\d+:\d+: (?:fatal )?error: .*|terminate called after throwing .*)$/
 
 function StderrText({ text }: { text: string }) {
   const lines = text.split("\n")

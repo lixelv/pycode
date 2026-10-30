@@ -18,7 +18,6 @@ const en = {
   "btn.share": "Share",
   "btn.live": "Live",
   "btn.run": "Run",
-  "btn.preview": "Preview",
   "btn.stop": "Stop",
   "btn.cancel": "Cancel",
   "btn.delete": "Delete",
@@ -37,7 +36,7 @@ const en = {
   "editor.waitingProject": "Waiting for the session's project…",
   "editor.createFile": "Create a file to start.",
   // toasts & confirms
-  "toast.onlyPython": "Only Python files run. Markdown files open a preview.",
+  "toast.onlyPython": "Only Python files run.",
   "toast.badZip": "This file is not a readable .zip archive.",
   "toast.opened": "Opened {name}",
   "toast.reset": "The project was reset.",
@@ -198,6 +197,10 @@ const en = {
   "viewer.missing": "The file could not be loaded: nobody online has it.",
   "tree.drop": "Drop to add to the project",
   "tree.dropInto": "Drop to add to {folder}",
+  "md.mode": "Markdown view",
+  "md.code": "Code",
+  "md.split": "Side by side",
+  "md.preview": "Preview",
 
 } as const
 
@@ -216,7 +219,6 @@ const ru: Record<MessageKey, string> = {
   "btn.share": "Поделиться",
   "btn.live": "В эфире",
   "btn.run": "Запуск",
-  "btn.preview": "Просмотр",
   "btn.stop": "Стоп",
   "btn.cancel": "Отмена",
   "btn.delete": "Удалить",
@@ -232,7 +234,7 @@ const ru: Record<MessageKey, string> = {
   "editor.readOnly": "Сессия только для просмотра: редактирует только владелец.",
   "editor.waitingProject": "Ждём проект сессии…",
   "editor.createFile": "Создайте файл, чтобы начать.",
-  "toast.onlyPython": "Запускаются только файлы Python. Markdown открывается как просмотр.",
+  "toast.onlyPython": "Запускаются только файлы Python.",
   "toast.badZip": "Это не читаемый .zip-архив.",
   "toast.opened": "Открыт {name}",
   "toast.reset": "Проект сброшен.",
@@ -388,6 +390,10 @@ const ru: Record<MessageKey, string> = {
   "viewer.missing": "Не удалось загрузить файл: его нет ни у кого в сети.",
   "tree.drop": "Отпустите, чтобы добавить в проект",
   "tree.dropInto": "Отпустите, чтобы добавить в {folder}",
+  "md.mode": "Вид Markdown",
+  "md.code": "Код",
+  "md.split": "Рядом",
+  "md.preview": "Просмотр",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

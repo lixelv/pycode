@@ -1,4 +1,4 @@
-import { FolderTree, Moon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { Code2, Columns2, Eye, FolderTree, Moon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -47,7 +47,6 @@ import {
   PROJECT_LIMIT,
   projectFiles,
   stateOf,
-  textOf,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
@@ -58,6 +57,8 @@ const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(naviga
 const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "python-coder:theme"
 const LABELS_KEY = "pycode:cursor-labels"
+const MD_MODE_KEY = "pycode:md-mode"
+type MarkdownMode = "code" | "split" | "preview"
 
 function loadTheme(): "dark" | "light" {
   try {
@@ -134,7 +135,6 @@ function Workspace() {
   const [ruff, setRuff] = useState<string | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
-  const [preview, setPreview] = useState<string | null>(null) // markdown file shown in the console area
   const [text, setText] = useState("")
   const editor = useRef<EditorInstance | null>(null)
   const [editorInstance, setEditorInstance] = useState<EditorInstance | null>(null)
@@ -175,6 +175,21 @@ function Workspace() {
   const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
+  const [mdMode, setMdMode] = useState<MarkdownMode>(() => {
+    try {
+      return (localStorage.getItem(MD_MODE_KEY) as MarkdownMode) || "split"
+    } catch {
+      return "split"
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(MD_MODE_KEY, mdMode)
+    } catch {
+      // storage unavailable
+    }
+  }, [mdMode])
+  const markdownMode = language === "markdown" && activeExists ? mdMode : null
   const follow = useFollow({
     provider,
     editor: editorInstance,
@@ -228,7 +243,6 @@ function Workspace() {
   const sharedStatus = sharedConsole.status
   useEffect(() => {
     if (sharedStatus !== "idle" && sharedStatus !== "finished") {
-      setPreview(null)
       setConsoleOpen(true)
     }
   }, [sharedStatus])
@@ -257,22 +271,16 @@ function Workspace() {
     else provider?.signal({ type: "stop", to: executorClient! })
   }, [amExecutor, executorClient, provider, runner])
 
-  const runnable = language === "python" || language === "markdown"
+  const runnable = language === "python"
 
   const run = useCallback(() => {
     if (!activeExists) return
     setView("editor")
-    if (language === "markdown") {
-      setPreview(active)
-      setConsoleOpen(true)
-      return
-    }
     if (language !== "python") {
       toast.message(t("toast.onlyPython"))
       return
     }
     if (!canRun) return
-    setPreview(null)
     setConsoleOpen(true)
     // We become the one running the project's program; a run going on
     // elsewhere is stopped (its owner stops mirroring when we take over).
@@ -485,7 +493,6 @@ function Workspace() {
   }
 
   const errors = diagnostics.length
-  const previewText = preview && preview === active ? text : preview ? (textOf(store, preview)?.toString() ?? "") : ""
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -536,6 +543,32 @@ function Workspace() {
                 </button>
               ))}
             </nav>
+            {markdownMode && view === "editor" && (
+              <nav role="radiogroup" aria-label={t("md.mode")} className="inline-flex shrink-0 rounded-md border border-border bg-muted p-0.5">
+                {(
+                  [
+                    ["code", Code2, t("md.code")],
+                    ["split", Columns2, t("md.split")],
+                    ["preview", Eye, t("md.preview")],
+                  ] as const
+                ).map(([value, Icon, label]) => (
+                  <button
+                    key={value}
+                    role="radio"
+                    aria-checked={mdMode === value}
+                    title={label}
+                    aria-label={label}
+                    onClick={() => setMdMode(value)}
+                    className={cn(
+                      "inline-flex items-center rounded-[5px] px-2 py-1 transition-colors [&_svg]:size-3.5",
+                      mdMode === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Icon />
+                  </button>
+                ))}
+              </nav>
+            )}
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
@@ -590,7 +623,7 @@ function Workspace() {
               </Button>
             ) : (
               <Button size="sm" onClick={run} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
-                <Play className="fill-current" /> {language === "markdown" ? t("btn.preview") : t("btn.run")}
+                <Play className="fill-current" /> {t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>
             )}
@@ -644,7 +677,8 @@ function Workspace() {
           )}
           {/* The editor stays mounted (hidden) so its state survives tab switches. */}
           <main ref={split} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", view !== "editor" && "hidden")}>
-            <div className="relative min-h-0 flex-1">
+            <div className="flex min-h-0 flex-1">
+            <div className={cn("relative min-h-0 min-w-0 flex-1", markdownMode === "preview" && "hidden")}>
               <CodeEditor
                 store={store}
                 path={active}
@@ -673,6 +707,12 @@ function Workspace() {
                 </div>
               )}
             </div>
+            {markdownMode && markdownMode !== "code" && (
+              <div className={cn("min-h-0 min-w-0 border-l border-console-border", markdownMode === "split" ? "w-1/2" : "flex-1")}>
+                <MarkdownPreview path={active} source={text} store={store} fetch={fetchBlob} />
+              </div>
+            )}
+            </div>
 
             {consoleOpen && (
               <>
@@ -689,27 +729,23 @@ function Workspace() {
                   <div className="absolute inset-x-0 -top-2 -bottom-2 cursor-row-resize" />
                 </div>
                 <div style={{ height: `${consoleHeight * 100}%` }} className="min-h-0 shrink-0">
-                  {preview ? (
-                    <MarkdownPreview path={preview} source={previewText} onClose={() => setPreview(null)} />
-                  ) : (
-                    <ConsolePanel
-                      status={consoleView.status}
-                      chunks={sharedConsole.chunks}
-                      exit={consoleView.exit}
-                      canInput={canRun}
-                      draft={sharedConsole.draft}
-                      onDraft={(value) => canRun && setDraft(doc, value)}
-                      timeoutSec={RUN_TIMEOUT_SEC}
-                      onInput={sendInput}
-                      onEof={sendEof}
-                      onStop={stop}
-                      onClear={() => {
-                        const term = sharedTerminal(doc)
-                        if (canRun) term.delete(0, term.length)
-                      }}
-                      onClose={() => setConsoleOpen(false)}
-                    />
-                  )}
+                  <ConsolePanel
+                    status={consoleView.status}
+                    chunks={sharedConsole.chunks}
+                    exit={consoleView.exit}
+                    canInput={canRun}
+                    draft={sharedConsole.draft}
+                    onDraft={(value) => canRun && setDraft(doc, value)}
+                    timeoutSec={RUN_TIMEOUT_SEC}
+                    onInput={sendInput}
+                    onEof={sendEof}
+                    onStop={stop}
+                    onClear={() => {
+                      const term = sharedTerminal(doc)
+                      if (canRun) term.delete(0, term.length)
+                    }}
+                    onClose={() => setConsoleOpen(false)}
+                  />
                 </div>
               </>
             )}

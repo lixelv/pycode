@@ -175,8 +175,24 @@ export function replaceProject(s: ProjectStore, files: Record<string, string>, d
   })
 }
 
+/** A fresh project: the starting file, and no folder rules, freeze or presentation (roles stay). */
 export function resetProject(s: ProjectStore) {
   replaceProject(s, { [DEFAULT_FILE]: DEFAULT_CODE })
+  s.structure.transact(() => {
+    foldersOf(s).clear()
+    stateOf(s).delete("frozen")
+    stateOf(s).delete("presentation")
+  })
+}
+
+/**
+ * First start of a local project: `fill` it (from an older version's data,
+ * or with the starting file) once. Afterwards an empty project stays empty.
+ */
+export async function setUp(s: ProjectStore, fill: (s: ProjectStore) => Promise<void>) {
+  if (stateOf(s).get("setUp")) return
+  if (metasOf(s).size === 0) await fill(s)
+  stateOf(s).set("setUp", true)
 }
 
 /** The project's access rules, as written to .pycode.env. */
@@ -411,7 +427,7 @@ export function localStore(): ProjectStore {
   const s = new ProjectStore(true)
   local = s
   const ready = s.ready.then(async () => {
-    if (metasOf(s).size === 0) await migrate(s)
+    await setUp(s, migrate)
     // A run cannot survive a reload.
     const run = s.runtime.getMap("run")
     if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")

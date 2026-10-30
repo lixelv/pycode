@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 
-import { createFile, deletePath, exportZip, foldersOf, importZip, metasOf, openArchive, setFlag, setFolderRole, renamePath, replaceProject, snapshotFiles, textOf } from "./project"
+import { createFile, deletePath, exportZip, foldersOf, importZip, metasOf, openArchive, renamePath, replaceProject, resetProject, setFlag, setFolderRole, setUp, snapshotFiles, stateOf, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 describe("ProjectStore", () => {
@@ -78,5 +78,33 @@ describe("ProjectStore", () => {
     // Only the structure travels here; b learns about the file from it.
     Y.applyUpdate(b.structure, Y.encodeStateAsUpdate(a.structure))
     expect(seen).toEqual([`f:${metasOf(a).get("x.py")!.id}`])
+  })
+})
+
+describe("reset and first start", () => {
+  it("reset clears folder rules, freeze and presentation", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "a/x.py", "")
+    setFolderRole(s, "a", "ivan")
+    stateOf(s).set("frozen", true)
+    stateOf(s).set("presentation", { path: "x.pdf", page: 1, by: 1 })
+    resetProject(s)
+    expect(foldersOf(s).size).toBe(0)
+    expect(stateOf(s).get("frozen")).toBeUndefined()
+    expect(stateOf(s).get("presentation")).toBeUndefined()
+  })
+
+  it("sets a project up once: deleting every file later does not bring main.py back", async () => {
+    const s = new ProjectStore(false)
+    let migrations = 0
+    const migrate = async () => {
+      migrations++
+      createFile(s, "main.py", "")
+    }
+    await setUp(s, migrate)
+    deletePath(s, "main.py")
+    await setUp(s, migrate)
+    expect(migrations).toBe(1)
+    expect(metasOf(s).size).toBe(0)
   })
 })

@@ -326,5 +326,61 @@ class ModuleDeclarations(unittest.TestCase):
         self.assertEqual(res, [{"name": "test_a", "ok": False, "message": "TypeError"}])
 
 
+class CppChecks(unittest.TestCase):
+    def setUp(self):
+        self.saved = checker._run_wasm if hasattr(checker, "_run_wasm") else None
+        self.calls = []
+
+    def tearDown(self):
+        if self.saved is None:
+            if hasattr(checker, "_run_wasm"):
+                del checker._run_wasm
+        else:
+            checker._run_wasm = self.saved
+
+    def check(self, source, wasm):
+        def hook(stdin, timeout_ms):
+            self.calls.append(timeout_ms)
+            return wasm(stdin, timeout_ms)
+
+        checker._run_wasm = hook
+        with tempfile.TemporaryDirectory() as project:
+            return checker.run_tests(project, "main.cpp", source, kind="cpp")
+
+    @staticmethod
+    def upper(s, t):
+        return {"stdout": s.upper(), "memory": 2_000_000, "timedOut": False}
+
+    def test_run_goes_through_the_hook(self):
+        res = self.check("import polycode_test\ndef test_a():\n    assert polycode_test.run('ab') == 'AB'\n", self.upper)
+        self.assertEqual([r["ok"] for r in res], [True])
+
+    def test_memory_limit(self):
+        res = self.check("import polycode_test\ndef test_a():\n    polycode_test.run('x', ram_usage=1)\n", self.upper)
+        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["message"].startswith("memory limit 1 MB exceeded"), res[0]["message"])
+
+    def test_time_limit(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', timeout=1)\n",
+            lambda s, t: {"stdout": "", "memory": 0, "timedOut": True},
+        )
+        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["message"].startswith("time limit 1 s exceeded"), res[0]["message"])
+
+    def test_default_timeout_is_the_check_limit(self):
+        self.check("import polycode_test\ndef test_a():\n    polycode_test.run('x')\n", self.upper)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(0 < self.calls[0] <= 30000, self.calls)
+
+    def test_measures(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.run('x', timeout=5, ram_usage=100)\n", self.upper
+        )
+        self.assertTrue(res[0]["ok"], res)
+        self.assertIn("time", res[0])
+        self.assertEqual(res[0]["memory"], 2_000_000)
+
+
 if __name__ == "__main__":
     unittest.main()

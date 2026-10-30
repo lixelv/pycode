@@ -12,7 +12,7 @@ export interface InstallResult {
 
 /** Shared memory between the page and the runner worker. */
 export interface RunnerBuffers {
-  /** [0] stdin state (STDIN_*), [1] byte length of the line in `data`. */
+  /** [0] stdin state (STDIN_*), [1] byte length of the line in `data`, [2] the check's time limit (DEADLINE_SLOT). */
   control: SharedArrayBuffer
   /** UTF-8 bytes of the line the user typed. */
   data: SharedArrayBuffer
@@ -56,12 +56,18 @@ export type RunnerEvent =
   | { type: "checked"; id: number; results: CheckResult[] }
   /** The debugged program stopped (state) or goes on (null). */
   | { type: "paused"; state: DebugState | null }
+  /** polycode_test.run(timeout=…): interrupt the program after ms if timer gen is still armed (lib/python/deadline.ts). */
+  | { type: "deadline"; ms: number; gen: number }
 
 /** One test of an automatic check (python/checker.py). */
 export interface CheckResult {
   name: string
   ok: boolean
   message: string
+  /** Seconds the test's run(timeout=…) calls took, summed. */
+  time?: number
+  /** Peak bytes of the test's run(ram_usage=…) calls. */
+  memory?: number
 }
 
 // ---- tools worker ---------------------------------------------------------

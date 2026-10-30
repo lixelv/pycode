@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
+import { arm, disarm } from "@/lib/python/deadline"
 import packagesSrc from "@/python/packages.py?raw"
 import checkerSrc from "@/python/checker.py?raw"
 import debuggerSrc from "@/python/debugger.py?raw"
@@ -89,6 +90,7 @@ const post = (event: RunnerEvent) => postMessage(event)
 let py: PyodideInterface | null = null
 let buffers: { control: Int32Array; data: Uint8Array; interrupt: Uint8Array } | null = null
 const installed = new Set<string>()
+let deadlines = 0 // generations of polycode_test.run's timers
 let ready: Promise<void> | null = null
 
 // ---- output ---------------------------------------------------------------
@@ -279,6 +281,16 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   await loadImported({ ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
   writeProject(files)
+  // polycode_test.run(timeout=…) asks the page for a timer that interrupts it;
+  // ms 0 cancels it at once and says whether it fired.
+  ;(self as { polycode_deadline?: (ms: number) => boolean }).polycode_deadline = (ms) => {
+    const fired = disarm(buffers!.control, buffers!.interrupt)
+    if (ms) {
+      arm(buffers!.control, ++deadlines)
+      post({ type: "deadline", ms, gen: deadlines })
+    }
+    return fired
+  }
   const checker = py.pyimport("polycode.checker")
   const results = checker.run_tests("/home/pyodide/project", solution, test)
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]

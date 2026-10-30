@@ -241,5 +241,90 @@ class Limits(unittest.TestCase):
         self.assertNotIn("time", res[1])
 
 
+class ModuleDeclarations(unittest.TestCase):
+    SOLUTION = (
+        "import math\n"
+        "EPS = 1e-9\n"
+        "N: int = 3\n"
+        "X = compute()\n"
+        "Y = [f(1)]\n"
+        "a = float(input())\n"
+        "def triangulate(x, y, z): return x + y > z + EPS\n"
+        "class P: pass\n"
+        "print('hi')\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+
+    def check(self, source, solution=None, name="main.py", kind=None):
+        with tempfile.TemporaryDirectory() as project:
+            with open(os.path.join(project, name), "w") as f:
+                f.write(self.SOLUTION if solution is None else solution)
+            if kind is None:
+                return checker.run_tests(project, name, source)
+            return checker.run_tests(project, name, source, kind=kind)
+
+    def ok(self, body, **kw):
+        res = self.check("import polycode_test\ndef test_a():\n" + body, **kw)
+        self.assertEqual(res, [{"name": "test_a", "ok": True, "message": ""}])
+
+    def test_functions_and_classes_kept(self):
+        self.ok("    m = polycode_test.module\n    assert m.triangulate(3, 4, 5)\n    assert m.P\n    assert m.math.sqrt(4) == 2\n")
+
+    def test_program_statements_dropped(self):
+        self.ok("    assert not hasattr(polycode_test.module, 'a')\n")
+
+    def test_annassign_kept(self):
+        self.ok("    assert polycode_test.module.N == 3\n")
+
+    def test_plain_constant_kept(self):
+        self.ok("    assert polycode_test.module.EPS == 1e-9\n")
+
+    def test_call_in_value_dropped(self):
+        self.ok("    assert not hasattr(polycode_test.module, 'X')\n")
+
+    def test_nested_call_dropped(self):
+        self.ok("    assert not hasattr(polycode_test.module, 'Y')\n")
+
+    def test_main_guard_not_run(self):
+        self.ok("    polycode_test.module\n", solution="def main():\n    raise RuntimeError('ran')\n\nif __name__ == '__main__':\n    main()\n")
+
+    def test_cached_within_one_check(self):
+        self.ok("    assert polycode_test.module is polycode_test.module\n")
+
+    def test_cached_across_tests_of_one_check(self):
+        res = self.check(
+            "import polycode_test\nseen = []\n"
+            "def test_a():\n    seen.append(polycode_test.module)\n"
+            "def test_b():\n    assert polycode_test.module is seen[0]\n"
+        )
+        self.assertEqual([r["ok"] for r in res], [True, True])
+
+    def test_nothing_printed(self):
+        import io
+
+        buf, saved = io.StringIO(), sys.stdout
+        sys.stdout = buf
+        try:
+            self.ok("    polycode_test.module\n")
+        finally:
+            sys.stdout = saved
+        self.assertNotIn("hi", buf.getvalue())
+
+    def test_syntax_error_reported(self):
+        res = self.check("import polycode_test\ndef test_a():\n    polycode_test.module\n", solution="def (:\n")
+        self.assertEqual(res[0]["message"], "SyntaxError")
+        self.assertFalse(res[0]["ok"])
+
+    def test_cpp_solution_is_type_error(self):
+        res = self.check(
+            "import polycode_test\ndef test_a():\n    polycode_test.module\n",
+            solution="#include <iostream>\nint main() {}\n",
+            name="main.cpp",
+            kind="cpp",
+        )
+        self.assertEqual(res, [{"name": "test_a", "ok": False, "message": "TypeError"}])
+
+
 if __name__ == "__main__":
     unittest.main()

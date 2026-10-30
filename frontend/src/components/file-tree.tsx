@@ -114,6 +114,7 @@ function FileIcon({ path }: { path: string }) {
   if (lang === "json") return <FileJson className={cn(cls, "text-chart-5")} />
   if (lang === "yaml") return <FileText className={cn(cls, "text-chart-4")} />
   if (lang === "markdown") return <FileText className={cn(cls, "text-chart-2")} />
+  if (lang === "html" || lang === "css" || lang === "javascript") return <FileCode2 className={cn(cls, lang === "javascript" ? "text-chart-4" : lang === "css" ? "text-chart-2" : "text-chart-5")} />
   return <File className={cn(cls, "text-muted-foreground")} />
 }
 

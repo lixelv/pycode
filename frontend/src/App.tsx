@@ -11,6 +11,7 @@ import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer, docKindOf } from "@/components/doc-viewer"
 import { FileViewer } from "@/components/file-viewer"
+import { WebPreview, type WebRun } from "@/components/web-preview"
 import { Presentation, type PresentationState } from "@/components/presentation"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
@@ -52,6 +53,7 @@ import {
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { formatWith } from "@/lib/prettier"
+import { buildPage, scriptPage } from "@/lib/web-preview"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
 import { roleLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
@@ -278,12 +280,12 @@ function Workspace() {
     else provider?.signal({ type: "stop", to: executorClient! })
   }, [amExecutor, executorClient, provider, runner])
 
-  const runnable = language === "python"
+  const runnable = language === "python" || language === "html" || language === "javascript"
 
   const run = useCallback(() => {
     if (!activeExists) return
     setView("editor")
-    if (language !== "python") {
+    if (language !== "python" && language !== "html" && language !== "javascript") {
       toast.message(t("toast.onlyPython"))
       return
     }
@@ -297,8 +299,58 @@ function Workspace() {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
     resetRun(doc, collab.me ?? "local")
-    void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs))
-  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs])
+    if (language === "python") {
+      setWebRun(null)
+      void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs))
+      return
+    }
+    // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
+    const token = crypto.randomUUID()
+    setRunStatus(doc, "running")
+    webStarted.current = performance.now()
+    void projectFiles(store, provider).then((files) => {
+      const page = language === "html" ? buildPage(files, active, token) : scriptPage(String(files[active] ?? ""), token)
+      setWebRun({ path: active, page, token, visible: language === "html" })
+      setLowerTab(language === "html" ? "web" : "console")
+    })
+  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t])
+
+  const [webRun, setWebRun] = useState<WebRun | null>(null)
+  const [lowerTab, setLowerTab] = useState<"console" | "web">("console")
+  const webStarted = useRef(0)
+  const webOutput = useCallback(
+    (kind: "stdout" | "stderr", text: string) => {
+      if (readRun(doc).executorClient === doc.clientID) appendTerminal(doc, kind, text)
+    },
+    [doc],
+  )
+  const webLoaded = useCallback(() => {
+    if (readRun(doc).executorClient !== doc.clientID) return
+    setRunStatus(doc, "finished", { code: 0, duration: (performance.now() - webStarted.current) / 1000, reason: null })
+  }, [doc])
+  const lowerTabs = webRun?.visible ? (
+    <nav role="tablist" className="inline-flex rounded-md border border-console-border p-0.5">
+      {(
+        [
+          ["web", t("web.preview")],
+          ["console", t("console.title")],
+        ] as const
+      ).map(([value, label]) => (
+        <button
+          key={value}
+          role="tab"
+          aria-selected={lowerTab === value}
+          onClick={() => setLowerTab(value)}
+          className={cn(
+            "rounded-[4px] px-2 py-0.5 text-[11px] font-medium tracking-wider uppercase",
+            lowerTab === value ? "bg-white/10 text-console-foreground" : "text-console-muted hover:text-console-foreground",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  ) : undefined
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
@@ -773,7 +825,21 @@ function Workspace() {
                   <div className="absolute inset-x-0 -top-2 -bottom-2 cursor-row-resize" />
                 </div>
                 <div style={{ height: `${consoleHeight * 100}%` }} className="min-h-0 shrink-0">
+                  {webRun && (
+                    <div className={cn("h-full", (lowerTab !== "web" || !webRun.visible) && "hidden")}>
+                      <WebPreview
+                        run={webRun}
+                        tabs={lowerTabs}
+                        onOutput={webOutput}
+                        onLoad={webLoaded}
+                        onReload={run}
+                        onClose={() => setConsoleOpen(false)}
+                      />
+                    </div>
+                  )}
+                  <div className={cn("h-full", webRun?.visible && lowerTab === "web" && "hidden")}>
                   <ConsolePanel
+                    tabs={lowerTabs}
                     status={consoleView.status}
                     chunks={sharedConsole.chunks}
                     exit={consoleView.exit}
@@ -790,6 +856,7 @@ function Workspace() {
                     }}
                     onClose={() => setConsoleOpen(false)}
                   />
+                  </div>
                 </div>
               </>
             )}

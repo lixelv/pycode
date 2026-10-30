@@ -36,7 +36,7 @@ const en = {
   "editor.waitingProject": "Waiting for the session's project…",
   "editor.createFile": "Create a file to start.",
   // toasts & confirms
-  "toast.onlyPython": "Only Python files run.",
+  "toast.onlyPython": "Only Python, HTML and JavaScript files run.",
   "toast.badZip": "This file is not a readable .zip archive.",
   "toast.opened": "Opened {name}",
   "toast.reset": "The project was reset.",
@@ -207,6 +207,9 @@ const en = {
   "present.by": "{name} is presenting",
   "present.stop": "End",
   "btn.format.prettier": "Format with Prettier",
+  "web.title": "Page preview",
+  "web.reload": "Run again",
+  "web.preview": "Preview",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -239,7 +242,7 @@ const ru: Record<MessageKey, string> = {
   "editor.readOnly": "Сессия только для просмотра: редактирует только владелец.",
   "editor.waitingProject": "Ждём проект сессии…",
   "editor.createFile": "Создайте файл, чтобы начать.",
-  "toast.onlyPython": "Запускаются только файлы Python.",
+  "toast.onlyPython": "Запускаются только файлы Python, HTML и JavaScript.",
   "toast.badZip": "Это не читаемый .zip-архив.",
   "toast.opened": "Открыт {name}",
   "toast.reset": "Проект сброшен.",
@@ -405,6 +408,9 @@ const ru: Record<MessageKey, string> = {
   "present.by": "Показывает {name}",
   "present.stop": "Завершить",
   "btn.format.prettier": "Отформатировать Prettier",
+  "web.title": "Просмотр страницы",
+  "web.reload": "Запустить заново",
+  "web.preview": "Страница",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

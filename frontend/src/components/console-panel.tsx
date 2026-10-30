@@ -1,5 +1,5 @@
 import { CornerDownLeft, Eraser, Square, X } from "lucide-react"
-import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -22,6 +22,8 @@ interface ConsolePanelProps {
   onStop: () => void
   onClear: () => void
   onClose: () => void
+  /** Shown in the header before the title (e.g. a switch to the web preview). */
+  tabs?: ReactNode
 }
 
 function exitLabel(exit: ExitInfo, timeoutSec: number) {
@@ -89,6 +91,7 @@ export function ConsolePanel({
   onStop,
   onClear,
   onClose,
+  tabs,
 }: ConsolePanelProps) {
   useI18n() // re-render on language change
   // The line updates locally at once (the shared copy arrives a frame later,
@@ -132,7 +135,7 @@ export function ConsolePanel({
       onClick={() => waiting && inputRef.current?.focus()}
     >
       <header className="flex h-9 shrink-0 items-center gap-3 border-b border-console-border px-3">
-        <span className="text-[11px] font-medium tracking-wider text-console-muted uppercase">{translate("console.title")}</span>
+        {tabs ?? <span className="text-[11px] font-medium tracking-wider text-console-muted uppercase">{translate("console.title")}</span>}
         <StatusPill status={status} exit={exit} timeoutSec={timeoutSec} canInput={canInput} />
         <div className="ml-auto flex items-center gap-0.5">
           {active && canInput && (

@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script>
+  // The web preview frame (see src/components/web-preview.tsx). It has no
+  // origin of its own (sandbox), so even same-site scripts would be refused:
+  // the loader is inline. The app sends the page once this frame is ready.
+  addEventListener("message", function show(e) {
+    if (e.source !== parent || typeof (e.data && e.data.pycodePage) !== "string") return
+    removeEventListener("message", show)
+    document.open()
+    document.write(e.data.pycodePage)
+    document.close()
+  })
+  parent.postMessage({ pycodeReady: true }, "*")
+</script>

@@ -1,4 +1,4 @@
-import { FolderTree, Moon, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { FolderTree, Moon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
@@ -10,6 +10,7 @@ import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
 import { FollowButton } from "@/components/follow-button"
+import { FrostOverlay } from "@/components/frost-overlay"
 import { NameDialog } from "@/components/name-dialog"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
@@ -42,6 +43,7 @@ import {
   replaceProject,
   resetProject,
   snapshotFiles,
+  stateOf,
   textOf,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
@@ -526,6 +528,23 @@ function Workspace() {
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
+            {provider && access.isAdmin && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={access.frozen ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    aria-pressed={access.frozen}
+                    aria-label={t(access.frozen ? "freeze.off" : "freeze.on")}
+                    onClick={() => stateOf(store).set("frozen", !access.frozen)}
+                    className={cn(!access.frozen && "text-muted-foreground", access.frozen && "text-[#52a8ff]")}
+                  >
+                    <Snowflake />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t(access.frozen ? "freeze.off" : "freeze.on")}</TooltipContent>
+              </Tooltip>
+            )}
             {provider && (
               <FollowButton
                 peers={collab.peers}
@@ -727,6 +746,7 @@ function Workspace() {
       />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <RemoteCursorStyles peers={collab.peers} labels={labels} />
+      <FrostOverlay frozen={!!provider && access.frozen} admin={access.isAdmin} />
       <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>

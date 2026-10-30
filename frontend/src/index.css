@@ -246,3 +246,74 @@ body {
 .monaco-editor .bracket-empty {
   color: #8f8f8f !important;
 }
+
+/* ---- Freeze: frost from the edges (components/frost-overlay.tsx) ---------- */
+
+@property --frost {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 130%;
+}
+
+.frost {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  --frost: 74%;
+  animation: frost-in 1.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.frost[data-phase="melting"] {
+  animation: frost-melt 0.7s ease-in both;
+}
+/* Clear in the middle, frosted towards the edges; --frost is where the frost starts. */
+.frost-layer,
+.frost-glass {
+  position: absolute;
+  inset: 0;
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent var(--frost), #000 calc(var(--frost) + 40%));
+  mask-image: radial-gradient(ellipse at center, transparent var(--frost), #000 calc(var(--frost) + 40%));
+}
+.frost-layer {
+  opacity: 0.95;
+}
+.frost-glass {
+  backdrop-filter: blur(4px) saturate(0.5);
+  background: radial-gradient(ellipse at center, transparent 40%, rgb(170 215 255 / 0.28) 75%, rgb(225 242 255 / 0.55));
+  box-shadow: inset 0 0 120px rgb(190 228 255 / 0.45);
+}
+.frost-badge {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font: 500 12px/1.5 "Geist Variable", system-ui, sans-serif;
+  color: #0b2540;
+  background: rgb(220 240 255 / 0.9);
+  box-shadow: 0 4px 24px rgb(120 190 255 / 0.4);
+  animation: frost-badge 0.5s 0.6s ease-out both;
+}
+@keyframes frost-in {
+  0% { --frost: 130%; opacity: 0; }
+  15% { opacity: 1; }
+  60% { --frost: 38%; }
+  100% { --frost: 74%; }
+}
+@keyframes frost-melt {
+  to { opacity: 0; filter: blur(8px); --frost: 130%; }
+}
+@keyframes frost-badge {
+  from { opacity: 0; translate: -50% -8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frost,
+  .frost[data-phase="melting"],
+  .frost-badge {
+    animation: none;
+  }
+}

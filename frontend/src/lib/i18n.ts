@@ -188,6 +188,9 @@ const en = {
   "follow.following": "Following {name}",
   "follow.pick": "Follow",
   "follow.stop": "Stop following",
+  "freeze.badge": "Frozen by the teacher",
+  "freeze.on": "Freeze: students can only watch",
+  "freeze.off": "Unfreeze",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -367,6 +370,9 @@ const ru: Record<MessageKey, string> = {
   "follow.following": "Следую за {name}",
   "follow.pick": "Следовать за",
   "follow.stop": "Перестать следовать",
+  "freeze.badge": "Учитель заморозил класс",
+  "freeze.on": "Заморозить: ученики только смотрят",
+  "freeze.off": "Разморозить",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

@@ -66,6 +66,7 @@ sites. Do not set it on a real server.
   - `docAccess` maps documents to access: `structure` is written by admins only; `runtime` and `board` by write.
   - `useAccess` (hook) gives the UI the same answers. Tree changes, packages, freeze and presentation are admin-only. `*.test.py` files are created hidden.
 - **Running code**: `src/workers/runner.worker.ts` (Pyodide). Binary files are written next to the texts.
+  - The program may be someone else's (a teacher runs a student's file), and the worker shares the app's origin and cookie. So of our own site it reaches only `/pyodide/` and `/api/proxy`; `fetch` is replaced on every prototype; IndexedDB, caches, WebSocket, EventSource and WebTransport are removed. In a session, running a different file starts a fresh interpreter.
   - `input()` blocks on a `SharedArrayBuffer` and wakes via `Atomics`. This needs cross-origin isolation, so COOP/COEP headers are required in nginx and in vite.
   - Stop and the 120 s timeout raise `KeyboardInterrupt` through the interrupt buffer. If the program does not stop, the worker is terminated and recreated.
   - The whole project is written to `/home/pyodide/project`, and the open `.py` file runs as `__main__`.
@@ -106,7 +107,7 @@ sites. Do not set it on a real server.
 - **Console mirroring**: the console always renders from the doc. Whoever runs the program mirrors its output into the doc (`mirrorRun` in `App.tsx`). Others send `stdin`/`eof`/`stop` signals to `executorClient`.
 - **Packages**: installed with micropip. Packages built for Pyodide come from cdn.jsdelivr.net, everything else from PyPI (both serve CORS). The resolved version is pinned after the first install.
 - **Caching**: `public/sw.js` serves `/pyodide/`, `/assets/`, Pyodide CDN wheels and PyPI wheels cache-first. Real Safari/Chrome only; the in-app preview browser cannot register service workers.
-- **Monaco** is slim (`src/lib/monaco-core.ts`: editor contributions only, no TS/CSS/HTML workers).
+- **Monaco** is slim (`src/lib/monaco-core.ts`): editor contributions, our Python, and the HTML/CSS/TypeScript services (see Web files); none of the other languages.
   - The Python tokenizer is our own (`src/lib/python-language.ts`): calls and `def` names → `function`, classes → `type`, brackets → `delimiter.*`.
   - The themes in `src/lib/monaco.ts` set bracket colours by depth (grey, yellow, purple, blue). Empty pairs stay grey via the `bracket-empty` decoration.
   - Models are created per file in `code-editor.tsx`, so model options such as `bracketColorizationOptions` must be set on the model, not only on the editor.
@@ -141,7 +142,7 @@ sites. Do not set it on a real server.
 
 ## Backend
 
-- **`identity`**: a UUIDv7 in the `pc_uid` cookie, issued on the first request.
+- **`identity`**: a UUIDv7 in the `pc_uid` cookie, issued on the first request. The cookie id is the credential: it never leaves the server. Others (and `/api/me`) see `identity.Public(id)`, a hash.
 - **`proxy`**: `/api/proxy?url=`.
   - Public IPs only. The check runs in the dialer `Control` hook on every connection (redirects included). Literal IPs and `localhost`/`.local`/`.internal` are refused up front.
   - 256 requests per minute per user.

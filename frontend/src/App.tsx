@@ -31,6 +31,7 @@ import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatu
 import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
+import { usePersisted } from "@/hooks/use-persisted"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedRun, sharedTerminal } from "@/lib/collab/doc"
@@ -71,6 +72,9 @@ const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(naviga
 const MOD = IS_MAC ? "⌘" : "Ctrl"
 const THEME_KEY = "python-coder:theme"
 const LABELS_KEY = "pycode:cursor-labels"
+
+/** A program is starting, running or waiting for input. */
+const isBusy = (status: RunStatus) => status === "connecting" || status === "running" || status === "waiting"
 const MD_MODE_KEY = "pycode:md-mode"
 const BREAKPOINTS_KEY = "pycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
@@ -117,20 +121,7 @@ function Workspace() {
       // storage unavailable
     }
   }, [theme])
-  const [labels, setLabels] = useState(() => {
-    try {
-      return localStorage.getItem(LABELS_KEY) === "1"
-    } catch {
-      return false
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(LABELS_KEY, labels ? "1" : "0")
-    } catch {
-      // storage unavailable
-    }
-  }, [labels])
+  const [labels, setLabels] = usePersisted(LABELS_KEY, false)
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -169,7 +160,11 @@ function Workspace() {
   const isGuest = !!provider && provider.store !== localStore()
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
-    if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
+    try {
+      if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
+    } catch {
+      // storage unavailable
+    }
   }, [store, provider])
 
   const access = useAccess(store, provider, collab.version)
@@ -198,20 +193,7 @@ function Workspace() {
   const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
-  const [mdMode, setMdMode] = useState<MarkdownMode>(() => {
-    try {
-      return (localStorage.getItem(MD_MODE_KEY) as MarkdownMode) || "split"
-    } catch {
-      return "split"
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(MD_MODE_KEY, mdMode)
-    } catch {
-      // storage unavailable
-    }
-  }, [mdMode])
+  const [mdMode, setMdMode] = usePersisted<MarkdownMode>(MD_MODE_KEY, "split")
   const markdownMode = language === "markdown" && activeExists ? mdMode : null
   const follow = useFollow({
     provider,
@@ -276,7 +258,7 @@ function Workspace() {
   const consoleView: { status: RunStatus; exit: ExitInfo | null } = sharedConsole.executorGone
     ? { status: "finished", exit: { code: null, duration: 0, reason: "error", message: t("console.executorLeft") } }
     : { status: sharedConsole.status, exit: sharedConsole.exit }
-  const consoleActive = consoleView.status === "connecting" || consoleView.status === "running" || consoleView.status === "waiting"
+  const consoleActive = isBusy(consoleView.status)
 
   const sendInput = useCallback(
     (line: string) => {
@@ -299,27 +281,14 @@ function Workspace() {
 
   // ---- debugger -------------------------------------------------------------------
   // Breakpoints are this browser's own (not shared): path -> lines.
-  const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(BREAKPOINTS_KEY) ?? "{}")
-    } catch {
-      return {}
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(BREAKPOINTS_KEY, JSON.stringify(breakpoints))
-    } catch {
-      // storage unavailable
-    }
-  }, [breakpoints])
+  const [breakpoints, setBreakpoints] = usePersisted<Record<string, number[]>>(BREAKPOINTS_KEY, {})
   const toggleBreakpoint = useCallback(
     (line: number) =>
       setBreakpoints((all) => {
         const lines = all[active] ?? []
         return { ...all, [active]: lines.includes(line) ? lines.filter((l) => l !== line) : [...lines, line].sort((a, b) => a - b) }
       }),
-    [active],
+    [active, setBreakpoints],
   )
   const debugCommand = useCallback(
     (command: DebugCommand) => {
@@ -355,7 +324,7 @@ function Workspace() {
   const startRun = useCallback((debug: boolean) => {
     if (!activeExists) return
     setView("editor")
-    if (language !== "python" && language !== "html" && language !== "javascript") {
+    if (!runnable) {
       toast.message(t("toast.onlyPython"))
       return
     }
@@ -364,7 +333,7 @@ function Workspace() {
     // We become the one running the project's program; a run going on
     // elsewhere is stopped (its owner stops mirroring when we take over).
     const prev = readRun(doc)
-    const busy = prev.status === "running" || prev.status === "waiting" || prev.status === "connecting"
+    const busy = isBusy(prev.status)
     if (provider && busy && prev.executorClient !== null && prev.executorClient !== doc.clientID) {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
@@ -390,7 +359,7 @@ function Workspace() {
       setWebRun({ path: active, page, token, visible: language === "html" })
       setLowerTab(language === "html" ? "web" : "console")
     })
-  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles])
+  }, [activeExists, language, runnable, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles])
   const run = useCallback(() => startRun(false), [startRun])
   const debugRun = useCallback(() => startRun(true), [startRun])
 
@@ -414,7 +383,7 @@ function Workspace() {
   const checkHere = useCallback(
     async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
       const test = textOf(store, path.replace(/\.py$/, ".test.py"))?.toString()
-      if (test === undefined) return { results: null, error: t("check.failed", { error: "no tests" }) }
+      if (test === undefined) return { results: null, error: t("check.noTests") }
       try {
         const files = await projectFiles(store, provider, path)
         return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }

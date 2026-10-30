@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { translate, useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 import type { DocKind } from "@/lib/project/project"
@@ -97,6 +98,7 @@ export function DocViewer({
   onPages?: (pages: number) => void
   className?: string
 }) {
+  const { t } = useI18n()
   const box = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<Doc | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -117,7 +119,7 @@ export function DocViewer({
         setDoc(d)
         pagesRef.current?.(d.pages)
       },
-      (err: Error) => live && setError(err.message),
+      () => live && setError(translate("viewer.cannotOpen")),
     )
     return () => {
       live = false
@@ -156,13 +158,13 @@ export function DocViewer({
       {error && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted-foreground">{error}</div>}
       {onPage && pages > 0 && (
         <div className="flex h-10 shrink-0 items-center justify-center gap-2 border-t border-border bg-background">
-          <Button size="icon-sm" variant="ghost" aria-label="Previous page" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          <Button size="icon-sm" variant="ghost" aria-label={t("doc.prev")} disabled={page <= 1} onClick={() => onPage(page - 1)}>
             <ChevronLeft />
           </Button>
           <span className="min-w-16 text-center font-mono text-xs text-muted-foreground">
             {page} / {pages}
           </span>
-          <Button size="icon-sm" variant="ghost" aria-label="Next page" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+          <Button size="icon-sm" variant="ghost" aria-label={t("doc.next")} disabled={page >= pages} onClick={() => onPage(page + 1)}>
             <ChevronRight />
           </Button>
         </div>

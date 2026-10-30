@@ -81,10 +81,10 @@ export function Presentation({
         </span>
         {presenting && (
           <>
-            <Button size="icon-sm" variant="ghost" className="text-white hover:bg-white/10" aria-label="Previous page" disabled={state.page <= 1} onClick={() => onPage(state.page - 1)}>
+            <Button size="icon-sm" variant="ghost" className="text-white hover:bg-white/10" aria-label={t("doc.prev")} disabled={state.page <= 1} onClick={() => onPage(state.page - 1)}>
               <ChevronLeft />
             </Button>
-            <Button size="icon-sm" variant="ghost" className="text-white hover:bg-white/10" aria-label="Next page" disabled={!!pages && state.page >= pages} onClick={() => onPage(state.page + 1)}>
+            <Button size="icon-sm" variant="ghost" className="text-white hover:bg-white/10" aria-label={t("doc.next")} disabled={!!pages && state.page >= pages} onClick={() => onPage(state.page + 1)}>
               <ChevronRight />
             </Button>
           </>

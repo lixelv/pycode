@@ -237,6 +237,11 @@ const en = {
   "tab.board": "Board",
   "check.tooSoon": "Checked a moment ago: try again in a few seconds.",
   "toast.zipMissing": "Left out of the archive (nobody online has them): {files}",
+  "check.noTests": "There are no tests for this file.",
+  "viewer.cannotOpen": "This file could not be opened.",
+  "doc.prev": "Previous page",
+  "doc.next": "Next page",
+  "md.previewLabel": "Markdown preview",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -465,6 +470,11 @@ const ru: Record<MessageKey, string> = {
   "tab.board": "Доска",
   "check.tooSoon": "Проверка была только что: попробуйте через пару секунд.",
   "toast.zipMissing": "Не вошли в архив (их нет ни у кого в сети): {files}",
+  "check.noTests": "Для этого файла нет тестов.",
+  "viewer.cannotOpen": "Не удалось открыть этот файл.",
+  "doc.prev": "Предыдущая страница",
+  "doc.next": "Следующая страница",
+  "md.previewLabel": "Просмотр Markdown",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

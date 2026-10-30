@@ -2,6 +2,7 @@ import DOMPurify from "dompurify"
 import { marked } from "marked"
 import { useEffect, useMemo, useRef, useState } from "react"
 
+import { useI18n } from "@/lib/i18n"
 import { ensureBlob } from "@/lib/project/blobs"
 import { cleanPath, metasOf, parentOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
@@ -22,6 +23,7 @@ export function MarkdownPreview({
   store: ProjectStore
   fetch?: (hash: string) => Promise<Uint8Array>
 }) {
+  const { t } = useI18n()
   const debounced = useDebounced(source, 150)
   const html = useMemo(() => DOMPurify.sanitize(marked.parse(debounced, { async: false, gfm: true }) as string), [debounced])
   const box = useRef<HTMLDivElement>(null)
@@ -50,7 +52,7 @@ export function MarkdownPreview({
   }, [html, path, store, fetch])
 
   return (
-    <section aria-label="Markdown preview" className="h-full overflow-auto bg-console text-console-foreground">
+    <section aria-label={t("md.previewLabel")} className="h-full overflow-auto bg-console text-console-foreground">
       <div ref={box} className="markdown-body px-6 py-5" dangerouslySetInnerHTML={{ __html: html }} />
     </section>
   )

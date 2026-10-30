@@ -174,5 +174,63 @@ describe("CppRunnerClient", () => {
       expect(events.at(-1)).toEqual({ type: "stdout", data: "b" })
       workers[0].reply(exitOf(id))
     })
+
+    /** Write `n` alternating chunks, stdout first or stderr first; returns what was written. */
+    const flood = (worker: FakeWorker, n: number, first: "stdout" | "stderr" = "stdout") => {
+      const written: { type: "stdout" | "stderr"; data: string }[] = []
+      for (let i = 0; i < n; i++) {
+        const type = (i % 2 === 0) === (first === "stdout") ? "stdout" : "stderr"
+        const event = { type, data: `${type[3]}${i};` } as const
+        written.push(event)
+        worker.reply(event)
+      }
+      return written
+    }
+    const outputs = (events: RunnerEvent[]) =>
+      events.filter((e): e is Extract<RunnerEvent, { type: "stdout" | "stderr" }> => e.type === "stdout" || e.type === "stderr")
+
+    it("1000 alternating writes in one batch give at most 64 events", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      flood(workers[0], 1000)
+      vi.advanceTimersByTime(16)
+      expect(outputs(events).length).toBeLessThanOrEqual(64)
+      expect(outputs(events).length).toBeGreaterThan(0)
+    })
+
+    it("a flooded batch loses no text and keeps the written order", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      const written = flood(workers[0], 1000)
+      vi.advanceTimersByTime(16)
+      expect(outputs(events).map((e) => e.data).join("")).toBe(written.map((e) => e.data).join(""))
+    })
+
+    it("a batch of 64 alternating writes keeps every event's own kind", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      const written = flood(workers[0], 64)
+      vi.advanceTimersByTime(16)
+      expect(outputs(events)).toEqual(written)
+    })
+
+    it("after a flush the next batch starts with its own kind and its own count", async () => {
+      const { client, workers, events } = setup()
+      await client.run(WASM, {}, "main.cpp")
+      flood(workers[0], 1000)
+      vi.advanceTimersByTime(16)
+      events.length = 0
+
+      const small = flood(workers[0], 3, "stderr")
+      vi.advanceTimersByTime(16)
+      expect(outputs(events)).toEqual(small)
+      expect(small.map((e) => e.type)).toEqual(["stderr", "stdout", "stderr"])
+      events.length = 0
+
+      // The limit counts per batch: a full batch of 64 is split into 64 events again.
+      const full = flood(workers[0], 64)
+      vi.advanceTimersByTime(16)
+      expect(outputs(events)).toEqual(full)
+    })
   })
 })

@@ -303,6 +303,14 @@ const MIME: Record<string, string> = {
   mp4: "video/mp4",
 }
 
+export type DocKind = "pdf" | "pptx"
+
+/** Documents with their own viewer (and presentation mode). */
+export function docKindOf(path: string): DocKind | null {
+  const ext = path.toLowerCase().split(".").pop()
+  return ext === "pdf" ? "pdf" : ext === "pptx" ? "pptx" : null
+}
+
 export function mimeOf(path: string) {
   return MIME[path.toLowerCase().split(".").pop() ?? ""] ?? "application/octet-stream"
 }

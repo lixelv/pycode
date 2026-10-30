@@ -9,7 +9,8 @@ import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
-import { DocViewer, docKindOf } from "@/components/doc-viewer"
+import { DocViewer } from "@/components/doc-viewer"
+import { docKindOf } from "@/lib/project/project"
 import { CheckResults, type CheckState } from "@/components/check-results"
 import { DebugPanel } from "@/components/debug-panel"
 import { FileViewer } from "@/components/file-viewer"
@@ -344,6 +345,10 @@ function Workspace() {
     return () => window.removeEventListener("keydown", onKey, true)
   }, [pausedAt, amExecutor, debugCommand])
 
+  // Web pages and scripts run in a sandboxed frame (see components/web-preview.tsx).
+  const [webRun, setWebRun] = useState<WebRun | null>(null)
+  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
+  const webStarted = useRef(0)
   const startRun = useCallback((debug: boolean) => {
     if (!activeExists) return
     setView("editor")
@@ -383,9 +388,6 @@ function Workspace() {
   const run = useCallback(() => startRun(false), [startRun])
   const debugRun = useCallback(() => startRun(true), [startRun])
 
-  const [webRun, setWebRun] = useState<WebRun | null>(null)
-  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
-  const webStarted = useRef(0)
   const webOutput = useCallback(
     (kind: "stdout" | "stderr", text: string) => {
       if (readRun(doc).executorClient === doc.clientID) appendTerminal(doc, kind, text)

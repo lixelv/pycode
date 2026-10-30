@@ -1,11 +1,11 @@
 import { ChevronLeft, ChevronRight, Presentation as PresentationIcon, X } from "lucide-react"
 import { useEffect, useState } from "react"
 
-import { DocViewer, docKindOf } from "@/components/doc-viewer"
+import { DocViewer } from "@/components/doc-viewer"
 import { Button } from "@/components/ui/button"
 import { useBlob } from "@/hooks/use-blob"
 import { useI18n } from "@/lib/i18n"
-import { metasOf } from "@/lib/project/project"
+import { docKindOf, metasOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 
 /** structure.state.presentation: who shows which document at which page. */

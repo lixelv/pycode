@@ -4,12 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-export type DocKind = "pdf" | "pptx"
-
-export const docKindOf = (path: string): DocKind | null => {
-  const ext = path.toLowerCase().split(".").pop()
-  return ext === "pdf" ? "pdf" : ext === "pptx" ? "pptx" : null
-}
+import type { DocKind } from "@/lib/project/project"
 
 /** One open document: renders page `page` (1-based) to fit `box`. */
 interface Doc {

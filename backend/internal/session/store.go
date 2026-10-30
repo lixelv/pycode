@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/lixelv/python-coder/backend/internal/identity"
 )
 
 // Session is one row of the sessions table. Code is the code it was looked
@@ -18,10 +21,19 @@ import (
 type Session struct {
 	ID      uuid.UUID  `json:"id"`
 	Code    string     `json:"code"`
-	OwnerID uuid.UUID  `json:"ownerId"`
+	OwnerID uuid.UUID  `json:"-"`
 	AskName bool       `json:"askName"`
 	EndedAt *time.Time `json:"endedAt,omitempty"`
 	Created time.Time  `json:"createdAt"`
+}
+
+// MarshalJSON names the owner by public id (see identity.Public).
+func (s Session) MarshalJSON() ([]byte, error) {
+	type plain Session
+	return json.Marshal(struct {
+		plain
+		Owner string `json:"ownerId"`
+	}{plain(s), identity.Public(s.OwnerID)})
 }
 
 // Code is the join code of one role.

@@ -2,9 +2,12 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/lixelv/python-coder/backend/internal/identity"
 )
 
 func newMember(user uuid.UUID, role, level string) *member {
@@ -118,5 +121,22 @@ func TestWelcomeCarriesOwnCode(t *testing.T) {
 	}
 	if r.session.Code != "WRITECODE" {
 		t.Fatal("the room's session must not change")
+	}
+}
+
+func TestUserIDsStayOnTheServer(t *testing.T) {
+	owner := uuid.Must(uuid.NewV7())
+	data, err := json.Marshal(&Session{ID: uuid.New(), OwnerID: owner, Code: "X"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), owner.String()) {
+		t.Fatalf("the owner's cookie id leaks into the session JSON: %s", data)
+	}
+	if !strings.Contains(string(data), identity.Public(owner)) {
+		t.Fatalf("the session should name its owner by public id: %s", data)
+	}
+	if identity.Public(owner) == owner.String() || identity.Public(owner) != identity.Public(owner) {
+		t.Fatal("a public id must be stable and differ from the cookie id")
 	}
 }

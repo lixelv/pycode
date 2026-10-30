@@ -3,6 +3,8 @@ package identity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -15,6 +17,13 @@ import (
 const cookieName = "pc_uid"
 
 type ctxKey struct{}
+
+// Public is what others may see of a user: the cookie id itself is the
+// credential (whoever sends it is that user), so it never leaves the server.
+func Public(id uuid.UUID) string {
+	sum := sha256.Sum256([]byte("pycode-public:" + id.String()))
+	return hex.EncodeToString(sum[:16])
+}
 
 // FromContext returns the caller's id; Middleware always sets it.
 func FromContext(ctx context.Context) uuid.UUID {

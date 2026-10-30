@@ -248,7 +248,7 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(maxFrame)
 	role, level := roleOf(sess, code, user)
 	m := &member{
-		info: peerInfo{UserID: user.String()},
+		info: peerInfo{UserID: identity.Public(user)},
 		user: user,
 		code: code.Code,
 		conn: conn,

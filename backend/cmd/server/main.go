@@ -66,7 +66,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": identity.FromContext(r.Context())})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": identity.Public(identity.FromContext(r.Context()))})
 	})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {

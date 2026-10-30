@@ -37,10 +37,12 @@ export type RunEvent =
 export interface RunnerOptions {
   onRateLimited?: (message: string) => void
   onEvent?: (event: RunEvent) => void
+  /** Start the interpreter in the background (the project has Python). */
+  warm?: boolean
 }
 
 /** Runs code in the in-browser Python (Pyodide) worker. */
-export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
+export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions = {}) {
   const [status, setStatusState] = useState<RunStatus>("idle")
   const emit = useRef(onEvent)
   useEffect(() => {
@@ -144,10 +146,13 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
 
   // Warm the interpreter up in the background so the first Run is quick.
   useEffect(() => {
-    if (!RunnerClient.supported()) return
+    if (!warm || !RunnerClient.supported() || runner.python) return
     setBooting(true)
-    runner.ready().catch(() => setBooting(false))
-  }, [])
+    runner.ready().then(
+      () => setBooting(false),
+      () => setBooting(false),
+    )
+  }, [warm])
 
   /** Interrupts the program; replaces the interpreter if it does not stop. */
   const stopWith = useCallback(

@@ -18,6 +18,7 @@ import { LivePagePreview, WebPreview, type WebRun } from "@/components/web-previ
 import { Presentation, type PresentationState } from "@/components/presentation"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
+import { LanguageDialog } from "@/components/language-dialog"
 import { NameDialog } from "@/components/name-dialog"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
@@ -45,8 +46,10 @@ import {
   exportZip,
   importZip,
   languageOf,
+  languagesOf,
   localStore,
   metasOf,
+  needsLanguage,
   packagesKind,
   packagesOf,
   renamePath,
@@ -55,8 +58,11 @@ import {
   PROJECT_LIMIT,
   projectFiles,
   rulesOf,
+  startProject,
+  STARTERS,
   stateOf,
   textOf,
+  type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { fileAccess, isTest } from "@/lib/project/access"
@@ -170,6 +176,26 @@ function Workspace() {
   }, [store, provider])
 
   const access = useAccess(store, provider, collab.version)
+  // The project's languages decide which runtimes load; an empty new project asks for one.
+  // Nothing loads until the project is there and has a language (a guest waits for the owner's).
+  const [languages, setLanguages] = useState<ProjectLanguage[]>([])
+  const [askLanguage, setAskLanguage] = useState(false)
+  useEffect(() => {
+    let ready = false
+    const read = () => {
+      const next = ready && !needsLanguage(store) ? languagesOf(store) : []
+      setLanguages((prev) => (prev.join() === next.join() ? prev : next))
+      setAskLanguage(ready && needsLanguage(store))
+    }
+    read()
+    store.structure.on("update", read)
+    void store.ready.then(() => {
+      ready = true
+      read()
+    })
+    return () => store.structure.off("update", read)
+  }, [store])
+  const hasPython = languages.includes("python")
   const [allFiles, setAllFiles] = useState<string[]>(() => [...metasOf(store).keys()])
   useEffect(() => {
     const map = metasOf(store)
@@ -216,8 +242,8 @@ function Workspace() {
   })
 
   useEffect(() => {
-    ruffVersion().then(setRuff).catch(() => {})
-  }, [])
+    if (hasPython) ruffVersion().then(setRuff).catch(() => {})
+  }, [hasPython])
 
   // ---- running ------------------------------------------------------------------
   const sharedConsole = useSharedConsole(doc, awareness)
@@ -236,7 +262,7 @@ function Workspace() {
     else if (event.type === "debug") sharedRun(d).set("debug", event.state)
   }, [])
 
-  const runner = useRunner({ onRateLimited: (message) => toast.warning(message), onEvent: mirrorRun })
+  const runner = useRunner({ onRateLimited: (message) => toast.warning(message), onEvent: mirrorRun, warm: hasPython })
   const runnerRef = useRef(runner)
   useEffect(() => {
     runnerRef.current = runner
@@ -573,6 +599,17 @@ function Workspace() {
       },
     })
   }, [canReset, provider, store, t])
+
+  // A new project's language: only in our own store (a guest, even an admin standing in, waits for the owner's files).
+  const chooseLanguage = useCallback(
+    (lang: ProjectLanguage) => {
+      if (!needsLanguage(store)) return
+      startProject(store, lang)
+      setActive(STARTERS[lang].path)
+      setView("editor")
+    },
+    [store],
+  )
 
   // Everyone else follows the owner's reset.
   useEffect(() => {
@@ -1066,9 +1103,11 @@ function Workspace() {
             {t("footer.position", { line: cursor.line, col: cursor.column })}
           </span>
           <span className="hidden sm:inline">{LANGUAGE_LABEL[language]}</span>
-          <span className="hidden md:inline">
-            {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
-          </span>
+          {hasPython && (
+            <span className="hidden md:inline">
+              {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
+            </span>
+          )}
           {ruff && <span className="hidden lg:inline">Ruff {ruff}</span>}
           <button
             onClick={() => setLang(lang === "ru" ? "en" : "ru")}
@@ -1131,6 +1170,7 @@ function Workspace() {
         />
       )}
       <FrostOverlay frozen={!!provider && access.frozen} admin={access.isAdmin} />
+      <LanguageDialog open={askLanguage && !isGuest} onChoose={chooseLanguage} />
       <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>

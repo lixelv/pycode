@@ -1,3 +1,6 @@
+/** A project to run: path -> text, or bytes for a binary file. */
+export type ProjectFiles = Record<string, string | Uint8Array>
+
 export interface InstallResult {
   spec: string
   name?: string
@@ -26,7 +29,7 @@ export const STDIN_MAX_BYTES = 64 * 1024
 export type RunnerRequest =
   | { type: "init"; buffers: RunnerBuffers }
   | { type: "install"; id: number; specs: string[] }
-  | { type: "run"; id: number; files: Record<string, string>; entry: string; specs: string[] }
+  | { type: "run"; id: number; files: ProjectFiles; entry: string; specs: string[] }
 
 export type RunnerEvent =
   | { type: "ready"; python: string }

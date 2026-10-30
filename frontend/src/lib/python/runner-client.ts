@@ -5,6 +5,7 @@ import {
   STDIN_MAX_BYTES,
   STDIN_READY,
   type InstallResult,
+  type ProjectFiles,
   type RunnerEvent,
 } from "@/workers/protocol"
 
@@ -71,7 +72,7 @@ export class RunnerClient {
     return this.readyPromise
   }
 
-  async run(files: Record<string, string>, entry: string, specs: string[]): Promise<number> {
+  async run(files: ProjectFiles, entry: string, specs: string[]): Promise<number> {
     await this.ready()
     const id = this.nextId++
     this.interruptFlag[0] = 0

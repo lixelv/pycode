@@ -4,6 +4,7 @@ import {
   Download,
   File,
   FileCode2,
+  FileImage,
   FileJson,
   FilePlus,
   FileText,
@@ -104,6 +105,7 @@ function buildTree(files: string[], dirs: string[]): Node[] {
 function FileIcon({ path }: { path: string }) {
   const lang = languageOf(path)
   const cls = "size-3.5 shrink-0"
+  if (/\.(png|jpe?g|gif|webp|bmp|ico)$/i.test(path)) return <FileImage className={cn(cls, "text-chart-3")} />
   if (lang === "python") return <FileCode2 className={cn(cls, "text-chart-1")} />
   if (lang === "json") return <FileJson className={cn(cls, "text-chart-5")} />
   if (lang === "yaml") return <FileText className={cn(cls, "text-chart-4")} />

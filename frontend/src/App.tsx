@@ -9,6 +9,7 @@ import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { PackagesPanel } from "@/components/packages-panel"
+import { FileViewer } from "@/components/file-viewer"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
 import { NameDialog } from "@/components/name-dialog"
@@ -33,16 +34,16 @@ import {
   deletePath,
   downloadBlob,
   exportZip,
-  applyEnv,
   importZip,
   languageOf,
   localStore,
   metasOf,
   packagesOf,
   renamePath,
-  replaceProject,
   resetProject,
-  snapshotFiles,
+  openArchive,
+  PROJECT_LIMIT,
+  projectFiles,
   stateOf,
   textOf,
 } from "@/lib/project/project"
@@ -167,7 +168,9 @@ function Workspace() {
     if (files.length && !files.includes(active)) setActive(files.includes(DEFAULT_FILE) ? DEFAULT_FILE : files[0])
   }, [files, active])
   const activeExists = files.includes(active)
-  const canWrite = activeExists && access.can(active) === "write"
+  const activeMeta = activeExists ? metasOf(store).get(active) : undefined
+  const canWrite = activeExists && activeMeta?.kind === "text" && access.can(active) === "write"
+  const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
   const follow = useFollow({
@@ -277,12 +280,13 @@ function Workspace() {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
     resetRun(doc, collab.me ?? "local")
-    runner.run(snapshotFiles(store), active, pkgs.activeSpecs)
+    void projectFiles(store, provider).then((files) => runner.run(files, active, pkgs.activeSpecs))
   }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs])
 
   // ---- project actions ----------------------------------------------------------
-  const download = useCallback(() => {
-    downloadBlob(exportZip(store), provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
+  const download = useCallback(async () => {
+    const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined)
+    downloadBlob(zip, provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
   }, [store, provider])
 
   const upload = useCallback(
@@ -294,17 +298,21 @@ function Workspace() {
         toast.error(t("toast.badZip"))
         return
       }
-      const count = Object.keys(content.files).length
+      if (content.size > PROJECT_LIMIT) {
+        toast.error(t("toast.tooBig", { mb: PROJECT_LIMIT >> 20 }))
+        return
+      }
+      const count = content.entries.length
       setConfirm({
         title: t("confirm.zip.title"),
         description: t("confirm.zip.text", { name: file.name, n: count, whose: t(provider ? "confirm.zip.whoseSession" : "confirm.zip.whoseYour") }),
         action: t("confirm.zip.action"),
         destructive: true,
-        onConfirm: () => {
-          replaceProject(store, content.files, content.dirs, packagesOf(store).toArray())
-          if (content.env) applyEnv(store, content.env)
-          const first = Object.keys(content.files).sort((a, b) => Number(b.endsWith(".py")) - Number(a.endsWith(".py")) || a.localeCompare(b))[0]
-          setActive(content.files[DEFAULT_FILE] !== undefined ? DEFAULT_FILE : first ?? DEFAULT_FILE)
+        onConfirm: async () => {
+          await openArchive(store, content)
+          const paths = content.entries.map((e) => e.path)
+          const first = paths.sort((a, b) => Number(b.endsWith(".py")) - Number(a.endsWith(".py")) || a.localeCompare(b))[0]
+          setActive(paths.includes(DEFAULT_FILE) ? DEFAULT_FILE : first ?? DEFAULT_FILE)
           toast.success(t("toast.opened", { name: file.name }))
         },
       })
@@ -631,6 +639,11 @@ function Workspace() {
                   setEditorInstance(ed)
                 }}
               />
+              {activeExists && activeMeta?.kind === "binary" && (
+                <div className="absolute inset-0">
+                  <FileViewer path={active} meta={activeMeta} fetch={fetchBlob} />
+                </div>
+              )}
               {!activeExists && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background text-sm text-muted-foreground">
                   {!isGuest ? t("editor.createFile") : files.length || provider?.adminOnline ? t("editor.waitingProject") : t("editor.waitingTeacher")}

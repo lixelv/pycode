@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 
-import { applyEnv, createFile, deletePath, exportZip, foldersOf, importZip, metasOf, setFlag, setFolderRole, renamePath, replaceProject, snapshotFiles, textOf } from "./project"
+import { createFile, deletePath, exportZip, foldersOf, importZip, metasOf, openArchive, setFlag, setFolderRole, renamePath, replaceProject, snapshotFiles, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 describe("ProjectStore", () => {
@@ -32,17 +32,16 @@ describe("ProjectStore", () => {
     expect(foldersOf(s).toJSON()).toEqual({ b: "ivan" })
   })
 
-  it("keeps access rules through an archive", () => {
+  it("keeps access rules through an archive", async () => {
     const s = new ProjectStore(false)
     createFile(s, "s/ivan/a.py", "x")
     createFile(s, "t.test.py", "")
     setFolderRole(s, "s/ivan", "ivan")
     setFlag(s, "s/ivan/a.py", "protected", true)
-    const zip = importZip(exportZip(s))
-    expect(zip.files).not.toHaveProperty(".pycode.env")
+    const zip = importZip(await exportZip(s))
+    expect(zip.entries.map((e) => e.path)).not.toContain(".pycode.env")
     const t = new ProjectStore(false)
-    replaceProject(t, zip.files, zip.dirs)
-    applyEnv(t, zip.env!)
+    await openArchive(t, zip)
     expect(foldersOf(t).toJSON()).toEqual({ "s/ivan": "ivan" })
     expect(metasOf(t).get("s/ivan/a.py")!.protected).toBe(true)
     expect(metasOf(t).get("t.test.py")!.hidden).toBe(true)

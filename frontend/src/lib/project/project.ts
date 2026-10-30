@@ -7,6 +7,7 @@ import type { PackageEntry } from "@/hooks/use-packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
 import { isTest, parseEnv, renameRules, RESERVED, serializeEnv, type EnvRules, type Rules } from "./access"
+import { ensureBlob, putBlob, sha256 } from "./blobs"
 import { ProjectStore, type FileMeta } from "./store"
 
 /*
@@ -128,6 +129,17 @@ export function snapshotFiles(s: ProjectStore): Record<string, string> {
   return out
 }
 
+/** Everything a run needs: texts, and binary files (fetched from the session if missing). */
+export async function projectFiles(s: ProjectStore, provider?: { fetchBlob: (hash: string) => Promise<Uint8Array> } | null) {
+  const files: Record<string, string | Uint8Array> = snapshotFiles(s)
+  for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
+    if (meta.kind !== "binary" || !meta.hash) continue
+    const bytes = await ensureBlob(meta.hash, provider ? (h) => provider.fetchBlob(h) : undefined).catch(() => null)
+    if (bytes) files[path] = bytes
+  }
+  return files
+}
+
 /** Replaces the whole project content (files, folders, packages) and clears the console. */
 export function replaceProject(s: ProjectStore, files: Record<string, string>, dirs: string[] = [], packages: PackageEntry[] = []) {
   const fresh: [string, string][] = []
@@ -185,13 +197,120 @@ export function applyEnv(s: ProjectStore, env: EnvRules) {
   })
 }
 
+// ---- adding files (drag and drop, archives) ------------------------------------
+
+/** A whole project (text, binary files and board pictures) stays under this. */
+export const PROJECT_LIMIT = 64 * 1024 * 1024
+
+const TEXT_EXT = new Set(["py", "pyw", "md", "markdown", "txt", "json", "yaml", "yml", "toml", "csv", "html", "htm", "css", "js", "mjs", "xml", "svg", "ini", "cfg"])
+
+/** Text if it has a known text extension, or is valid UTF-8 without NUL bytes. */
+export function isText(path: string, bytes: Uint8Array): boolean {
+  if (TEXT_EXT.has(path.toLowerCase().split(".").pop() ?? "")) return true
+  if (bytes.includes(0)) return false
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Bytes the project takes: texts plus each distinct binary file once (and the board's pictures). */
+export function projectSize(s: ProjectStore): number {
+  let size = 0
+  const hashes = new Set<string>()
+  metasOf(s).forEach((meta, path) => {
+    if (meta.kind === "text") size += textOf(s, path)?.length ?? meta.size
+    else if (meta.hash && !hashes.has(meta.hash)) {
+      hashes.add(meta.hash)
+      size += meta.size
+    }
+  })
+  s.board.getMap<{ dataURL?: string }>("files").forEach((f) => (size += f.dataURL?.length ?? 0))
+  return size
+}
+
+/** A free path: "a.py", then "a (2).py", "a (3).py", … */
+function freePath(s: ProjectStore, path: string): string {
+  if (!exists(s, path)) return path
+  const dot = path.lastIndexOf(".")
+  const slash = path.lastIndexOf("/")
+  const [base, ext] = dot > slash + 1 ? [path.slice(0, dot), path.slice(dot)] : [path, ""]
+  for (let n = 2; ; n++) if (!exists(s, `${base} (${n})${ext}`)) return `${base} (${n})${ext}`
+}
+
+/**
+ * Adds files under a folder: text files as text, the rest as binary
+ * (bytes in the blob store). Nothing is added if the project would grow
+ * past PROJECT_LIMIT.
+ */
+export async function addFiles(
+  s: ProjectStore,
+  dir: string,
+  entries: { path: string; bytes: Uint8Array }[],
+): Promise<{ added: string[] } | { error: "limit" }> {
+  const known = new Set<string>()
+  metasOf(s).forEach((m) => m.hash && known.add(m.hash))
+  const prepared: { path: string; text?: string; meta?: FileMeta; bytes?: Uint8Array }[] = []
+  let grow = 0
+  for (const { path, bytes } of entries) {
+    const full = cleanPath(dir ? `${dir}/${path}` : path)
+    if (!full || full === RESERVED) continue
+    if (isText(full, bytes)) {
+      const text = new TextDecoder().decode(bytes)
+      grow += text.length
+      prepared.push({ path: full, text })
+    } else {
+      const hash = await sha256(bytes)
+      if (!known.has(hash)) {
+        known.add(hash)
+        grow += bytes.length
+      }
+      prepared.push({ path: full, bytes, meta: { id: newId(), kind: "binary", size: bytes.length, hash, mime: mimeOf(full) } })
+    }
+  }
+  if (projectSize(s) + grow > PROJECT_LIMIT) return { error: "limit" }
+  for (const p of prepared) if (p.bytes) await putBlob(p.bytes, p.meta!.hash)
+  const added: string[] = []
+  for (const p of prepared) {
+    const path = freePath(s, p.path)
+    if (p.meta) metasOf(s).set(path, p.meta)
+    else createFile(s, path, p.text)
+    added.push(path)
+  }
+  return { added }
+}
+
+const MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  pdf: "application/pdf",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  zip: "application/zip",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  mp4: "video/mp4",
+}
+
+export function mimeOf(path: string) {
+  return MIME[path.toLowerCase().split(".").pop() ?? ""] ?? "application/octet-stream"
+}
+
 // ---- archive --------------------------------------------------------------
 
-const MAX_ARCHIVE_FILE = 5 * 1024 * 1024
-
-export function exportZip(s: ProjectStore): Uint8Array {
+/** Packs the project; binary files are fetched first if this browser lacks them. */
+export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promise<Uint8Array>): Promise<Uint8Array> {
   const entries: Record<string, Uint8Array> = {}
   for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
+  for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
+    if (meta.kind === "binary" && meta.hash) entries[path] = await ensureBlob(meta.hash, fetch).catch(() => new Uint8Array())
+  }
   const env = envOf(s)
   if (Object.keys(env.roles).length || Object.keys(env.folders).length || env.protected.length || env.hidden.length) {
     entries[RESERVED] = strToU8(serializeEnv(env))
@@ -203,14 +322,19 @@ export function exportZip(s: ProjectStore): Uint8Array {
   return zipSync(entries, { level: 6 })
 }
 
-/**
- * Reads a .zip into files and folders. Every file is read as UTF-8 text;
- * unknown or binary files simply show as (unreadable) text.
- */
-export function importZip(data: Uint8Array): { files: Record<string, string>; dirs: string[]; env: EnvRules | null } {
+export interface Archive {
+  entries: { path: string; bytes: Uint8Array }[]
+  dirs: string[]
+  env: EnvRules | null
+  size: number
+}
+
+/** Reads a .zip: its files (text or binary, decided when added), folders and access rules. */
+export function importZip(data: Uint8Array): Archive {
   const raw = unzipSync(data)
-  const files: Record<string, string> = {}
+  const entries: Archive["entries"] = []
   const dirs: string[] = []
+  let env: EnvRules | null = null
   const paths = Object.keys(raw).filter((p) => !p.startsWith("__MACOSX/") && !p.split("/").some((part) => part === ".DS_Store"))
   // A zip of one folder ("project/…") is opened as that folder's content.
   const top = new Set(paths.map((p) => p.split("/")[0]))
@@ -225,12 +349,18 @@ export function importZip(data: Uint8Array): { files: Record<string, string>; di
     }
     const path = cleanPath(rel)
     if (!path) continue
-    const bytes = raw[original]
-    files[path] = bytes.length > MAX_ARCHIVE_FILE ? `(file too large to open: ${bytes.length} bytes)` : strFromU8(bytes, false)
+    if (path === RESERVED) env = parseEnv(strFromU8(raw[original]))
+    else entries.push({ path, bytes: raw[original] })
   }
-  const envText = files[RESERVED]
-  delete files[RESERVED]
-  return { files, dirs, env: envText === undefined ? null : parseEnv(envText) }
+  return { entries, dirs, env, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
+}
+
+/** Replaces the project with an archive's content (keeps the packages). */
+export async function openArchive(s: ProjectStore, zip: Archive) {
+  replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
+  const result = await addFiles(s, "", zip.entries)
+  if (zip.env) applyEnv(s, zip.env)
+  return result
 }
 
 // ---- the local project -------------------------------------------------------

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { translate } from "@/lib/i18n"
 import { runner, RunnerClient } from "@/lib/python/runner-client"
+import type { ProjectFiles } from "@/workers/protocol"
 
 export type ChunkKind = "stdout" | "stderr" | "stdin" | "system"
 export interface Chunk {
@@ -155,7 +156,7 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
   )
 
   const run = useCallback(
-    async (files: Record<string, string>, entry: string, specs: string[] = []) => {
+    async (files: ProjectFiles, entry: string, specs: string[] = []) => {
       if (!RunnerClient.supported()) {
         setChunks([{ kind: "stderr", text: "This browser does not allow the in-browser Python here (the page is not cross-origin isolated).\n" }])
         setExit({ code: null, duration: 0, reason: "error", message: "Python unavailable" })

@@ -9,8 +9,9 @@ import {
 import * as syncProtocol from "y-protocols/sync"
 import type * as Y from "yjs"
 
-import { docAccess, type Level, type Member } from "@/lib/project/access"
-import { rulesOf } from "@/lib/project/project"
+import { docAccess, fileAccess, type Level, type Member } from "@/lib/project/access"
+import { getBlob, putBlob, sha256 } from "@/lib/project/blobs"
+import { metasOf, rulesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 
 import { colorFor, nameFor } from "./identity"
@@ -76,6 +77,10 @@ type Events = {
 const MSG_SYNC = 0
 const MSG_AWARENESS = 1
 const MSG_SIGNAL = 2
+// Binary files, fetched part by part: [GET][hash][part] -> [PART][hash][part][total][bytes] (total 0: missing).
+const MSG_BLOB_GET = 3
+const MSG_BLOB_PART = 4
+const BLOB_PART = 1024 * 1024
 // Chunk framing on the wire: [CHUNK][id u32][index u16][count u16][part] or [WHOLE][message].
 const WHOLE = 0
 const CHUNK = 1
@@ -565,11 +570,97 @@ export class CollabProvider {
       }
       applyAwarenessUpdate(this.awareness, update, link)
       this.emitLinks()
+    } else if (kind === MSG_BLOB_GET) {
+      const hash = decoding.readVarString(dec)
+      void this.serveBlob(link, hash, decoding.readVarUint(dec))
+    } else if (kind === MSG_BLOB_PART) {
+      const hash = decoding.readVarString(dec)
+      const part = decoding.readVarUint(dec)
+      const total = decoding.readVarUint(dec)
+      const bytes = decoding.readVarUint8Array(dec)
+      this.waiting.get(`${link.info.peer}:${hash}:${part}`)?.({ total, bytes: bytes.slice() })
     } else if (kind === MSG_SIGNAL) {
       if (this.access(link.info, "runtime") !== "write") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
       if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal))
     }
+  }
+
+  // ---- binary files -------------------------------------------------------------
+
+  private fetching = new Map<string, Promise<Uint8Array>>()
+  private waiting = new Map<string, (part: { total: number; bytes: Uint8Array }) => void>()
+
+  /** Gets a binary file from whoever has it: the owner first, then the others. */
+  fetchBlob(hash: string): Promise<Uint8Array> {
+    let pending = this.fetching.get(hash)
+    if (!pending) {
+      pending = this.download(hash).finally(() => this.fetching.delete(hash))
+      this.fetching.set(hash, pending)
+    }
+    return pending
+  }
+
+  private async download(hash: string): Promise<Uint8Array> {
+    const links = [...this.links.values()].sort((a, b) => Number(b.info.peer === this.owner) - Number(a.info.peer === this.owner))
+    for (const link of links) {
+      const parts: Uint8Array[] = []
+      // One part at a time keeps the relay's queues short.
+      for (let part = 0, total = 1; part < total; part++) {
+        const got = await this.requestPart(link, hash, part)
+        if (!got || got.total === 0) break
+        total = got.total
+        parts.push(got.bytes)
+      }
+      if (!parts.length) continue
+      const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+      let offset = 0
+      for (const p of parts) {
+        bytes.set(p, offset)
+        offset += p.length
+      }
+      if ((await sha256(bytes)) !== hash) continue
+      await putBlob(bytes, hash)
+      return bytes
+    }
+    throw new Error("Nobody in the session has this file.")
+  }
+
+  private requestPart(link: Link, hash: string, part: number) {
+    return new Promise<{ total: number; bytes: Uint8Array } | null>((resolve) => {
+      const key = `${link.info.peer}:${hash}:${part}`
+      const timer = window.setTimeout(() => {
+        this.waiting.delete(key)
+        resolve(null)
+      }, 20_000)
+      this.waiting.set(key, (got) => {
+        window.clearTimeout(timer)
+        this.waiting.delete(key)
+        resolve(got)
+      })
+      const enc = encoding.createEncoder()
+      encoding.writeVarUint(enc, MSG_BLOB_GET)
+      encoding.writeVarString(enc, hash)
+      encoding.writeVarUint(enc, part)
+      link.send(encoding.toUint8Array(enc))
+    })
+  }
+
+  /** Sends one part of a binary file to a member who may see a file with it. */
+  private async serveBlob(link: Link, hash: string, part: number) {
+    const rules = rulesOf(this.store)
+    let allowed = false
+    metasOf(this.store).forEach((meta, path) => {
+      if (meta.hash === hash && fileAccess(link.info, path, rules) !== "none") allowed = true
+    })
+    const bytes = allowed ? await getBlob(hash) : null
+    const enc = encoding.createEncoder()
+    encoding.writeVarUint(enc, MSG_BLOB_PART)
+    encoding.writeVarString(enc, hash)
+    encoding.writeVarUint(enc, part)
+    encoding.writeVarUint(enc, bytes ? Math.max(1, Math.ceil(bytes.length / BLOB_PART)) : 0)
+    encoding.writeVarUint8Array(enc, bytes ? bytes.subarray(part * BLOB_PART, (part + 1) * BLOB_PART) : new Uint8Array())
+    link.send(encoding.toUint8Array(enc))
   }
 
   private awarenessMessage(clients: number[]) {

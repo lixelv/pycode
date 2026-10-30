@@ -191,6 +191,11 @@ const en = {
   "freeze.badge": "Frozen by the teacher",
   "freeze.on": "Freeze: students can only watch",
   "freeze.off": "Unfreeze",
+  "toast.tooBig": "The project would be over {mb} MB: nothing was added.",
+  "viewer.binary": "Binary file · {size}",
+  "viewer.download": "Download",
+  "viewer.loading": "Loading the file…",
+  "viewer.missing": "The file could not be loaded: nobody online has it.",
 } as const
 
 export type MessageKey = keyof typeof en
@@ -373,6 +378,11 @@ const ru: Record<MessageKey, string> = {
   "freeze.badge": "Учитель заморозил класс",
   "freeze.on": "Заморозить: ученики только смотрят",
   "freeze.off": "Разморозить",
+  "toast.tooBig": "Проект стал бы больше {mb} МБ — ничего не добавлено.",
+  "viewer.binary": "Двоичный файл · {size}",
+  "viewer.download": "Скачать",
+  "viewer.loading": "Загружаем файл…",
+  "viewer.missing": "Не удалось загрузить файл: его нет ни у кого в сети.",
 }
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru }

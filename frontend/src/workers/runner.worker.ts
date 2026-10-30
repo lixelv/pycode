@@ -10,6 +10,7 @@ import {
   STDIN_INTERRUPT,
   STDIN_WAITING,
   type InstallResult,
+  type ProjectFiles,
   type RunnerEvent,
   type RunnerRequest,
 } from "./protocol"
@@ -145,7 +146,7 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
 
 // ---- run ------------------------------------------------------------------
 
-async function run(id: number, files: Record<string, string>, entry: string, specs: string[]) {
+async function run(id: number, files: ProjectFiles, entry: string, specs: string[]) {
   if (!py || !buffers) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) {
@@ -155,9 +156,18 @@ async function run(id: number, files: Record<string, string>, entry: string, spe
   }
 
   const runner = py.pyimport("pycoder.runner")
-  const filesPy = py.toPy(files)
+  const text: Record<string, string> = {}
+  for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
+  const filesPy = py.toPy(text)
   runner.write_project(filesPy)
   filesPy.destroy()
+  // Binary files (images, data) go next to the code as they are.
+  for (const [path, content] of Object.entries(files)) {
+    if (typeof content === "string") continue
+    const full = `/home/pyodide/project/${path}`
+    py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")))
+    py.FS.writeFile(full, content)
+  }
   outputBytes = 0
   outputLimited = false
   buffers.interrupt[0] = 0

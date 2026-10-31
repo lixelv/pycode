@@ -148,7 +148,7 @@ def tournament_of(source: str) -> dict | None:
         return None
 
     def named(func) -> bool:
-        return (isinstance(func, ast.Name) and func.id == "tournament") or (isinstance(func, ast.Attribute) and func.attr == "tournament")
+        return (isinstance(func, ast.Name) and func.id == "tournament") or (isinstance(func, ast.Attribute) and func.attr == "tournament" and isinstance(func.value, ast.Name))
 
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and named(node.func)]
     if not calls:
@@ -239,7 +239,7 @@ def _failure(err: BaseException, tests: str, isolated: bool = False) -> str:
     """What the student is told. Only the tests' own asserts carry text: the
     solution must not be able to send anything back through messages."""
     if isinstance(err, TestFileError):
-        return (isinstance(err.code, str) and FILE_ERRORS.get(err.code)) or "error"
+        return (type(err.code) is str and FILE_ERRORS.get(err.code)) or "error"
     if isinstance(err, AssertionError):
         tb = err.__traceback__
         while tb and tb.tb_next:

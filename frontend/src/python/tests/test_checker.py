@@ -636,6 +636,49 @@ class Tournament(unittest.TestCase):
         self.assertTrue(res[1]["skipped"])
         self.assertLessEqual(self.calls[0], 120_000)
 
+    def test_the_limit_of_a_whole_check_is_120_seconds(self):
+        self.check(HEAD + "def test_a():\n    t.run()\n")
+        self.assertGreater(self.calls[0], 30_000)
+        self.assertLessEqual(self.calls[0], 120_000)
+
+    def test_ordinary_check_keeps_its_30_seconds(self):
+        checker._run_outside = lambda stdin, ms, trace: self.calls.append(ms) or {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 0, "failure": "", "elapsed": 0.0}
+        with tempfile.TemporaryDirectory() as project:
+            checker.run_tests(project, "main.cpp", "import polycode_test as t\ndef test_a():\n    t.run()\n", kind="cpp")
+        self.assertLessEqual(self.calls[0], 30_000)
+
+    def test_time_is_what_the_page_measured(self):
+        self.answer = {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 0, "failure": "", "elapsed": 2.0}
+        res = self.check(HEAD + "def test_a():\n    t.run(timeout=1)\n")
+        self.assertEqual(res[0]["message"], "time limit 1 s exceeded: 2.00 s")
+        self.assertEqual(res[0]["time"], 2.0)
+
+    def test_memory_is_traced_only_when_limited(self):
+        traces = []
+
+        def hook(stdin, ms, trace):
+            traces.append(trace)
+            return {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 0, "failure": "", "elapsed": 0.0}
+
+        with tempfile.TemporaryDirectory() as project:
+            checker._run_outside = hook
+            checker.run_tests(project, "main.py", HEAD + "def test_a():\n    t.run()\n    t.run(ram_usage=64)\n", tournament=True)
+        self.assertEqual(traces, [False, True])
+
+    def test_id_of_64_characters_is_accepted(self):
+        self.assertEqual(checker.tournament_of(f"tournament('{'x' * 64}')\n")["id"], "x" * 64)
+
+    def test_a_function_of_the_solution_is_not_a_tournament(self):
+        source = "import polycode_test as t\ndef test_a():\n    assert t.module.tournament(8) == 8\n"
+        self.assertIsNone(checker.tournament_of(source))
+
+    def test_a_str_subclass_cannot_break_the_error_text(self):
+        class Evil(str):
+            def __hash__(self):
+                raise ValueError("no")
+
+        self.assertEqual(checker._failure(checker.TestFileError(Evil("place")), "<tests>"), "error")
+
     def test_exit_code_of_a_python_solution_reaches_the_student(self):
         self.answer = {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 1, "failure": "", "elapsed": 0.0}
         res = self.check(HEAD + "def test_a():\n    t.run()\n")

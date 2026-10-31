@@ -1,3 +1,6 @@
+/** A project to run: path -> text, or bytes for a binary file. */
+export type ProjectFiles = Record<string, string | Uint8Array>
+
 export interface InstallResult {
   spec: string
   name?: string
@@ -22,11 +25,25 @@ export const STDIN_READY = 1
 export const STDIN_EOF = 2
 export const STDIN_INTERRUPT = 3
 export const STDIN_MAX_BYTES = 64 * 1024
+// The debugger waits on the same slot: [0] DEBUG_WAITING until the page sets DEBUG_GO with the command in [1].
+export const DEBUG_WAITING = 4
+export const DEBUG_GO = 5
+export const DEBUG_COMMANDS = ["continue", "next", "step", "return", "stop"] as const
+export type DebugCommand = (typeof DEBUG_COMMANDS)[number]
+
+/** Where a debugged program stopped (python/debugger.py). */
+export interface DebugState {
+  file: string
+  line: number
+  stack: { name: string; file: string; line: number }[]
+  vars: Record<string, string>
+}
 
 export type RunnerRequest =
   | { type: "init"; buffers: RunnerBuffers }
   | { type: "install"; id: number; specs: string[] }
-  | { type: "run"; id: number; files: Record<string, string>; entry: string; specs: string[] }
+  | { type: "run"; id: number; files: ProjectFiles; entry: string; specs: string[]; breakpoints?: Record<string, number[]> }
+  | { type: "check"; id: number; files: ProjectFiles; solution: string; test: string; specs: string[] }
 
 export type RunnerEvent =
   | { type: "ready"; python: string }
@@ -36,6 +53,16 @@ export type RunnerEvent =
   | { type: "input_request" }
   | { type: "installed"; id: number; results: InstallResult[] }
   | { type: "exit"; id: number; code: number; duration: number; reason: "output_limit" | null }
+  | { type: "checked"; id: number; results: CheckResult[] }
+  /** The debugged program stopped (state) or goes on (null). */
+  | { type: "paused"; state: DebugState | null }
+
+/** One test of an automatic check (python/checker.py). */
+export interface CheckResult {
+  name: string
+  ok: boolean
+  message: string
+}
 
 // ---- tools worker ---------------------------------------------------------
 

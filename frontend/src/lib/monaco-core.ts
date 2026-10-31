@@ -76,5 +76,12 @@ import 'monaco-esm/editor/common/standaloneStrings.js'
 import 'monaco-esm/base/browser/ui/codicons/codicon/codicon-modifiers.css'
 import 'monaco-esm/languages/definitions/yaml/register.js'
 import 'monaco-esm/languages/definitions/markdown/register.js'
+// Web pages: highlighting plus the language services (their workers start on first use).
+import 'monaco-esm/languages/definitions/html/register.js'
+import 'monaco-esm/languages/definitions/css/register.js'
+import 'monaco-esm/languages/definitions/javascript/register.js'
+import 'monaco-esm/languages/features/html/register.js'
+import 'monaco-esm/languages/features/css/register.js'
+import 'monaco-esm/languages/features/typescript/register.js'
 
 export * from 'monaco-esm/editor/editor.api.js'

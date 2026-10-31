@@ -1,5 +1,8 @@
 import { loader } from "@monaco-editor/react"
 import EditorWorker from "monaco-esm/editor/editor.worker.js?worker"
+import CssWorker from "monaco-esm/language/css/css.worker.js?worker"
+import HtmlWorker from "monaco-esm/language/html/html.worker.js?worker"
+import TsWorker from "monaco-esm/language/typescript/ts.worker.js?worker"
 import type * as MonacoApi from "monaco-editor"
 
 import * as core from "./monaco-core"
@@ -10,7 +13,15 @@ const monaco = core as unknown as typeof MonacoApi
 registerPython(monaco)
 
 // Bundle Monaco locally instead of loading it from a CDN.
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
+// Each web language has its own worker (started the first time such a file opens).
+self.MonacoEnvironment = {
+  getWorker: (_: string, label: string) => {
+    if (label === "css" || label === "scss" || label === "less") return new CssWorker()
+    if (label === "html") return new HtmlWorker()
+    if (label === "javascript" || label === "typescript") return new TsWorker()
+    return new EditorWorker()
+  },
+}
 loader.config({ monaco })
 
 // JSON: highlighting only (VS Code's own JSON language server is not needed

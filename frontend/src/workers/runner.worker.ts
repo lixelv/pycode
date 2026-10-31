@@ -2,14 +2,22 @@
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
 import packagesSrc from "@/python/packages.py?raw"
+import checkerSrc from "@/python/checker.py?raw"
+import debuggerSrc from "@/python/debugger.py?raw"
 import runnerSrc from "@/python/runner.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
 import {
+  DEBUG_COMMANDS,
+  DEBUG_WAITING,
   STDIN_EOF,
   STDIN_INTERRUPT,
   STDIN_WAITING,
+  type CheckResult,
+  type DebugCommand,
+  type DebugState,
   type InstallResult,
+  type ProjectFiles,
   type RunnerEvent,
   type RunnerRequest,
 } from "./protocol"
@@ -98,7 +106,7 @@ function countOutput(n: number) {
 
 async function boot() {
   py = await bootPyodide()
-  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc })
+  installSources(py, "pycoder", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
@@ -145,7 +153,21 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
 
 // ---- run ------------------------------------------------------------------
 
-async function run(id: number, files: Record<string, string>, entry: string, specs: string[]) {
+/** The debugger stopped: show where, and block until the page says how to go on. */
+function pause(state: string): DebugCommand {
+  if (!buffers) return "continue"
+  stdout.flush()
+  stderr.flush()
+  const { control } = buffers
+  Atomics.store(control, 0, DEBUG_WAITING)
+  post({ type: "paused", state: JSON.parse(state) as DebugState })
+  Atomics.wait(control, 0, DEBUG_WAITING)
+  post({ type: "paused", state: null })
+  if (Atomics.load(control, 0) === STDIN_INTERRUPT) return "stop"
+  return DEBUG_COMMANDS[Atomics.load(control, 1)] ?? "continue"
+}
+
+async function run(id: number, files: ProjectFiles, entry: string, specs: string[], breakpoints?: Record<string, number[]>) {
   if (!py || !buffers) return
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) {
@@ -155,16 +177,18 @@ async function run(id: number, files: Record<string, string>, entry: string, spe
   }
 
   const runner = py.pyimport("pycoder.runner")
-  const filesPy = py.toPy(files)
-  runner.write_project(filesPy)
-  filesPy.destroy()
+  writeProject(files)
   outputBytes = 0
   outputLimited = false
   buffers.interrupt[0] = 0
   const started = performance.now()
   let exitCode = 1
   try {
-    exitCode = runner.run_main(entry) as number
+    if (breakpoints) {
+      const points = py.toPy(breakpoints)
+      exitCode = py.pyimport("pycoder.debugger").run_debug(entry, points, pause) as number
+      points.destroy()
+    } else exitCode = runner.run_main(entry) as number
   } catch (err) {
     stderr.flush()
     post({ type: "stderr", data: `\n${String(err)}\n` })
@@ -173,6 +197,45 @@ async function run(id: number, files: Record<string, string>, entry: string, spe
   stderr.flush()
   buffers.interrupt[0] = 0
   post({ type: "exit", id, code: exitCode, duration: (performance.now() - started) / 1000, reason: outputLimited ? "output_limit" : null })
+}
+
+/** Lays the project out in /home/pyodide/project (texts and binary files). */
+function writeProject(files: ProjectFiles) {
+  if (!py) return
+  const text: Record<string, string> = {}
+  for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
+  const filesPy = py.toPy(text)
+  py.pyimport("pycoder.runner").write_project(filesPy)
+  filesPy.destroy()
+  // Binary files (images, data) go next to the code as they are.
+  for (const [path, content] of Object.entries(files)) {
+    if (typeof content === "string") continue
+    const full = `/home/pyodide/project/${path}`
+    py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")))
+    py.FS.writeFile(full, content)
+  }
+}
+
+// ---- check ------------------------------------------------------------------
+
+/**
+ * Runs an admin's tests against a student's solution. This worker is made
+ * for one check and thrown away; the student's code gets no network and no
+ * browser storage here (it runs in the admin's browser).
+ */
+async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[]) {
+  if (!py) return
+  const missing = specs.filter((s) => !installed.has(s))
+  if (missing.length) await installPackages(missing)
+  for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts"]) {
+    Object.defineProperty(self, name, { value: undefined, configurable: false, writable: false })
+  }
+  writeProject(files)
+  const checker = py.pyimport("pycoder.checker")
+  const results = checker.run_tests("/home/pyodide/project", solution, test)
+  const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
+  results.destroy()
+  post({ type: "checked", id, results: list })
 }
 
 // ---- messages -------------------------------------------------------------
@@ -200,7 +263,9 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
         post({ type: "installed", id: req.id, results: req.specs.map((spec) => ({ spec, error: String(err) })) })
       }
     } else if (req.type === "run") {
-      await run(req.id, req.files, req.entry, req.specs)
+      await run(req.id, req.files, req.entry, req.specs, req.breakpoints)
+    } else if (req.type === "check") {
+      await check(req.id, req.files, req.solution, req.test, req.specs)
     }
   })
 }

@@ -1,10 +1,15 @@
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
+  DEBUG_COMMANDS,
+  DEBUG_GO,
   STDIN_EOF,
   STDIN_INTERRUPT,
   STDIN_MAX_BYTES,
   STDIN_READY,
+  type CheckResult,
+  type DebugCommand,
   type InstallResult,
+  type ProjectFiles,
   type RunnerEvent,
 } from "@/workers/protocol"
 
@@ -71,12 +76,20 @@ export class RunnerClient {
     return this.readyPromise
   }
 
-  async run(files: Record<string, string>, entry: string, specs: string[]): Promise<number> {
+  /** Runs `entry`; with `breakpoints` (path -> lines), under the debugger. */
+  async run(files: ProjectFiles, entry: string, specs: string[], breakpoints?: Record<string, number[]>): Promise<number> {
     await this.ready()
     const id = this.nextId++
     this.interruptFlag[0] = 0
-    this.worker!.postMessage({ type: "run", id, files, entry, specs })
+    this.worker!.postMessage({ type: "run", id, files, entry, specs, breakpoints })
     return id
+  }
+
+  /** Tells the paused debugger how to go on. */
+  debug(command: DebugCommand) {
+    Atomics.store(this.control, 1, DEBUG_COMMANDS.indexOf(command))
+    Atomics.store(this.control, 0, DEBUG_GO)
+    Atomics.notify(this.control, 0)
   }
 
   async install(specs: string[]): Promise<InstallResult[]> {
@@ -110,6 +123,26 @@ export class RunnerClient {
   }
 
   /** Throws the interpreter away (endless C-level loop, removed packages). */
+  /** Runs tests against a solution, then throws this interpreter away (see check() in the worker). */
+  async check(files: ProjectFiles, solution: string, test: string, specs: string[], timeoutMs = 30_000): Promise<CheckResult[]> {
+    await this.ready()
+    const id = this.nextId++
+    try {
+      return await new Promise<CheckResult[]>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs)
+        const off = this.on((event) => {
+          if (event.type !== "checked" || event.id !== id) return
+          clearTimeout(timer)
+          off()
+          resolve(event.results)
+        })
+        this.worker!.postMessage({ type: "check", id, files, solution, test, specs })
+      })
+    } finally {
+      this.restart()
+    }
+  }
+
   restart() {
     this.worker?.terminate()
     this.worker = null

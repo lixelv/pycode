@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { translate } from "@/lib/i18n"
 import { runner, RunnerClient } from "@/lib/python/runner-client"
+import type { DebugCommand, DebugState, ProjectFiles } from "@/workers/protocol"
 
 export type ChunkKind = "stdout" | "stderr" | "stdin" | "system"
 export interface Chunk {
@@ -30,6 +31,8 @@ export type RunEvent =
   | { type: "output"; kind: ChunkKind; text: string }
   | { type: "status"; status: RunStatus }
   | { type: "exit"; exit: ExitInfo }
+  /** The debugger stopped here (or goes on: null). */
+  | { type: "debug"; state: DebugState | null }
 
 export interface RunnerOptions {
   onRateLimited?: (message: string) => void
@@ -52,6 +55,7 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
   }, [])
   const [chunks, setChunks] = useState<Chunk[]>([])
   const [exit, setExit] = useState<ExitInfo | null>(null)
+  const [debugState, setDebugState] = useState<DebugState | null>(null)
   const [runCount, setRunCount] = useState(0)
   const [python, setPython] = useState<string | null>(runner.python)
   const [booting, setBooting] = useState(false)
@@ -89,6 +93,8 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
     (info: ExitInfo) => {
       clearTimers()
       current.current = null
+      setDebugState(null)
+      emit.current?.({ type: "debug", state: null })
       setExit(info)
       emit.current?.({ type: "exit", exit: info })
       setStatus("finished")
@@ -113,6 +119,11 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
               append(event.type, event.data)
               setStatus((s) => (s === "waiting" ? s : "running"))
             }
+            break
+          case "paused":
+            if (current.current === null) break
+            setDebugState(event.state)
+            emit.current?.({ type: "debug", state: event.state })
             break
           case "input_request":
             if (current.current !== null) setStatus("waiting")
@@ -155,7 +166,7 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
   )
 
   const run = useCallback(
-    async (files: Record<string, string>, entry: string, specs: string[] = []) => {
+    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>) => {
       if (!RunnerClient.supported()) {
         setChunks([{ kind: "stderr", text: "This browser does not allow the in-browser Python here (the page is not cross-origin isolated).\n" }])
         setExit({ code: null, duration: 0, reason: "error", message: "Python unavailable" })
@@ -185,10 +196,11 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
       if (!runner.python) setBooting(true)
 
       try {
-        const id = await runner.run(files, entry, specs)
+        const id = await runner.run(files, entry, specs, breakpoints)
         current.current = id
         setStatus("running")
-        timers.current.timeout = window.setTimeout(() => stopWith("timeout"), RUN_TIMEOUT_SEC * 1000)
+        // A program being debugged waits for the person, so it has no time limit.
+        if (!breakpoints) timers.current.timeout = window.setTimeout(() => stopWith("timeout"), RUN_TIMEOUT_SEC * 1000)
       } catch (err) {
         finish({ code: null, duration: 0, reason: "error", message: `Python failed to start: ${(err as Error).message}` })
       }
@@ -216,5 +228,7 @@ export function useRunner({ onRateLimited, onEvent }: RunnerOptions = {}) {
   useEffect(() => () => clearTimers(), [])
 
   const active = status === "connecting" || status === "running" || status === "waiting"
-  return { status, active, chunks, exit, runCount, python, booting, run, stop, sendInput, sendEof, clear }
+  const debug = useCallback((command: DebugCommand) => runner.debug(command), [])
+
+  return { status, active, chunks, exit, runCount, python, booting, run, stop, sendInput, sendEof, clear, debugState, debug }
 }

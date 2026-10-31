@@ -7,18 +7,29 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness"
 import * as syncProtocol from "y-protocols/sync"
-import * as Y from "yjs"
+import type * as Y from "yjs"
+
+import { docAccess, fileAccess, type Level, type Member } from "@/lib/project/access"
+import { getBlob, putBlob, sha256 } from "@/lib/project/blobs"
+import { metasOf, rulesOf } from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
+import type { CheckResult } from "@/workers/protocol"
 
 import { colorFor, nameFor } from "./identity"
 
-export type Role = "owner" | "editor" | "viewer"
-export type SessionMode = "read_only" | "read_write"
-
 export interface SessionInfo {
   id: string
+  /** The code we joined with (each role has its own). */
   code: string
   ownerId: string
-  mode: SessionMode
+  askName: boolean
+}
+
+/** A role's join code. */
+export interface RoleCode {
+  role: string
+  level: Level
+  code: string
 }
 
 export interface PeerUser {
@@ -32,6 +43,9 @@ export type Signal =
   | { type: "stdin"; to: number; text: string }
   | { type: "eof"; to: number }
   | { type: "stop"; to: number }
+  /** Asks an admin to check a solution against its hidden tests. */
+  | { type: "check"; to: number; from: number; path: string }
+  | { type: "check-result"; to: number; path: string; results: CheckResult[]; error?: string }
 
 export type ProviderStatus = "connecting" | "synced" | "offline" | "ended"
 export type LinkMode = "direct" | "relay"
@@ -39,11 +53,13 @@ export type LinkMode = "direct" | "relay"
 interface PeerInfo {
   peer: number
   userId: string
-  role: Role
+  role: string
+  level: Level
 }
 
 type Control =
-  | { type: "welcome"; you: PeerInfo; session: SessionInfo; peers?: PeerInfo[] }
+  | { type: "welcome"; you: PeerInfo; session: SessionInfo; peers?: PeerInfo[]; owner?: number }
+  | { type: "owner"; owner?: number }
   | { type: "join" | "leave"; peer: PeerInfo }
   | { type: "signal"; from: number; data: SignalData }
   | { type: "reset"; from: number }
@@ -56,7 +72,9 @@ type Events = {
   status: (status: ProviderStatus) => void
   /** The owner reset the session's project (announced by the server). */
   reset: () => void
-  signal: (signal: Signal) => void
+  /** A signal addressed to us, with who sent it (their role). */
+  signal: (signal: Signal, from: Member) => void
+  /** Links, roles or the acting owner changed. */
   links: () => void
 }
 
@@ -64,6 +82,10 @@ type Events = {
 const MSG_SYNC = 0
 const MSG_AWARENESS = 1
 const MSG_SIGNAL = 2
+// Binary files, fetched part by part: [GET][hash][part] -> [PART][hash][part][total][bytes] (total 0: missing).
+const MSG_BLOB_GET = 3
+const MSG_BLOB_PART = 4
+const BLOB_PART = 1024 * 1024
 // Chunk framing on the wire: [CHUNK][id u32][index u16][count u16][part] or [WHOLE][message].
 const WHOLE = 0
 const CHUNK = 1
@@ -249,15 +271,19 @@ class Link {
 /**
  * Shares a Y.Doc in a live session. Members connect to each other directly
  * (WebRTC data channels); the server forwards signaling, relays data for
- * pairs that cannot connect directly, and tells everyone each member's role
- * — which receivers enforce: changes from viewers are ignored.
+ * pairs that cannot connect directly, and tells everyone each member's role.
+ * Receivers enforce it per document (lib/project/access.ts): a document is
+ * sent only to those who may read it, and changes are applied only from
+ * those who may write it.
  */
 export class CollabProvider {
-  readonly doc: Y.Doc
+  readonly store: ProjectStore
   readonly awareness: Awareness
-  role: Role = "viewer"
+  member: Member = { role: "read", level: "read" }
   /** Our member number in the room (from the server). */
   peerId = 0
+  /** Who acts as the owner (the owner, or an admin while the owner is away); 0: nobody. */
+  owner = 0
   session: SessionInfo
   status: ProviderStatus = "connecting"
   readonly links = new Map<number, Link>()
@@ -267,38 +293,87 @@ export class CollabProvider {
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
-  private readonly onUpdate: (update: Uint8Array, origin: unknown) => void
+  private readonly detach: (() => void)[] = []
   private readonly onAwareness: (changes: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void
 
-  constructor(session: SessionInfo, me: string, doc: Y.Doc) {
+  /** `name`: what the others see (a generated one when the session does not ask). */
+  constructor(session: SessionInfo, me: string, store: ProjectStore, name?: string | null) {
     this.session = session
-    this.doc = doc
-    this.awareness = new Awareness(doc)
-    this.awareness.setLocalStateField("user", { id: me, name: nameFor(me), color: colorFor(me) } satisfies PeerUser)
+    this.store = store
+    this.awareness = new Awareness(store.structure)
+    this.awareness.setLocalStateField("user", { id: me, name: name || nameFor(me), color: colorFor(me) } satisfies PeerUser)
 
-    this.onUpdate = (update, origin) => {
-      if (origin instanceof Link || !this.canWrite) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MSG_SYNC)
-      syncProtocol.writeUpdate(enc, update)
-      this.broadcast(encoding.toUint8Array(enc))
+    for (const id of store.ids()) this.watch(id, store.doc(id))
+    // Documents we may now read (a test shown, a folder given to our role): ask for them.
+    let readable = this.readable()
+    const onStructure = () => {
+      const now = this.readable()
+      for (const id of now) if (!readable.has(id)) this.broadcast(this.syncStep1(id, store.doc(id)))
+      readable = now
     }
+    store.structure.on("update", onStructure)
+    this.detach.push(() => store.structure.off("update", onStructure))
+    this.detach.push(
+      store.onDoc((id, doc) => {
+        this.watch(id, doc)
+        // A new document (a file someone added): ask everyone for its content.
+        this.broadcast(this.syncStep1(id, doc))
+      }),
+    )
     this.onAwareness = ({ added, updated, removed }, origin) => {
       if (origin instanceof Link) return
       this.broadcast(this.awarenessMessage([...added, ...updated, ...removed]))
     }
-    doc.on("update", this.onUpdate)
     this.awareness.on("update", this.onAwareness)
     window.addEventListener("beforeunload", this.onUnload)
     this.connect()
+  }
+
+  /** Our Yjs client id (the same in every document of the project). */
+  get clientID() {
+    return this.store.clientID
   }
 
   get code() {
     return this.session.code
   }
 
-  get canWrite() {
-    return this.role !== "viewer"
+  get isAdmin() {
+    return this.member.level === "admin"
+  }
+
+  /** We act as the owner now (the owner, or the admin standing in). */
+  get isOwner() {
+    return this.owner !== 0 && this.owner === this.peerId
+  }
+
+  /** An admin (or the owner) is connected besides us. */
+  get adminOnline() {
+    return [...this.links.values()].some((l) => l.info.level === "admin")
+  }
+
+  /** The awareness client ids of the acting owner. */
+  ownerClients(): number[] {
+    if (this.isOwner) return [this.clientID]
+    return [...(this.links.get(this.owner)?.clients ?? [])]
+  }
+
+  /** Whom to ask for a check: ourselves if admin, else the acting owner, else the earliest admin. */
+  checker(): number | null {
+    if (this.isAdmin) return this.clientID
+    const admins = [...this.links.values()]
+      .filter((l) => l.info.level === "admin")
+      .sort((a, b) => Number(b.info.peer === this.owner) - Number(a.info.peer === this.owner) || a.info.peer - b.info.peer)
+    for (const link of admins) for (const client of link.clients) return client
+    return null
+  }
+
+  private access(member: Member, docId: string) {
+    return docAccess(member, docId, rulesOf(this.store))
+  }
+
+  private readable() {
+    return new Set(this.store.ids().filter((id) => this.access(this.member, id) !== "none"))
   }
 
   on<K extends keyof Events>(event: K, fn: Events[K]) {
@@ -306,6 +381,15 @@ export class CollabProvider {
     return () => {
       this.listeners[event].delete(fn)
     }
+  }
+
+  /** A member's role, and whether they act as the owner (for the members list). */
+  roleOf(clientId: number): { role: string; owner: boolean } | null {
+    if (clientId === this.clientID) return { role: this.member.role, owner: this.isOwner }
+    for (const link of this.links.values()) {
+      if (link.clients.has(clientId)) return { role: link.info.role, owner: link.info.peer === this.owner }
+    }
+    return null
   }
 
   /** Who is connected how (for the members list). */
@@ -326,11 +410,11 @@ export class CollabProvider {
     this.closed = true
     window.clearTimeout(this.retryTimer)
     window.removeEventListener("beforeunload", this.onUnload)
-    removeAwarenessStates(this.awareness, [this.doc.clientID], "leave")
+    removeAwarenessStates(this.awareness, [this.clientID], "leave")
     this.links.forEach((l) => l.close())
     this.links.clear()
     this.ws?.close()
-    this.doc.off("update", this.onUpdate)
+    this.detach.forEach((fn) => fn())
     this.awareness.off("update", this.onAwareness)
     this.awareness.destroy()
   }
@@ -361,7 +445,7 @@ export class CollabProvider {
       this.emitLinks()
       if (this.closed || this.status === "ended") return
       this.setStatus("offline")
-      const others = [...this.awareness.getStates().keys()].filter((id) => id !== this.doc.clientID)
+      const others = [...this.awareness.getStates().keys()].filter((id) => id !== this.clientID)
       removeAwarenessStates(this.awareness, others, "offline")
       this.retryTimer = window.setTimeout(() => this.connect(), Math.min(10_000, 500 * 2 ** this.retry++))
     }
@@ -370,16 +454,23 @@ export class CollabProvider {
   private onControl(msg: Control) {
     switch (msg.type) {
       case "welcome":
-        this.role = msg.you.role
+        this.member = { role: msg.you.role, level: msg.you.level }
         this.peerId = msg.you.peer
-        this.session = msg.session
+        this.owner = msg.owner ?? 0
+        // Keep our own code: it is what we reconnect with (each role has its own).
+        this.session = { ...msg.session, code: this.session.code }
         this.retry = 0
         // The newcomer opens a connection to everyone already here.
         for (const info of msg.peers ?? []) this.addLink(info, true)
+        this.emitLinks()
         this.setStatus("synced")
         break
       case "join":
         this.addLink(msg.peer, false)
+        break
+      case "owner":
+        this.owner = msg.owner ?? 0
+        this.emitLinks()
         break
       case "leave": {
         const link = this.links.get(msg.peer.peer)
@@ -434,24 +525,55 @@ export class CollabProvider {
 
   /** A link is usable (direct or relay): exchange state with that member. */
   onLinkReady(link: Link) {
+    for (const id of this.store.ids()) link.send(this.syncStep1(id, this.store.doc(id)))
+    link.send(this.awarenessMessage([...this.awareness.getStates().keys()].filter((id) => id === this.clientID)))
+  }
+
+  /** Sends our changes to a document to everyone. */
+  private watch(docId: string, doc: Y.Doc) {
+    const onUpdate = (update: Uint8Array, origin: unknown) => {
+      if (origin instanceof Link || this.access(this.member, docId) !== "write") return
+      const enc = this.syncHeader(docId)
+      syncProtocol.writeUpdate(enc, update)
+      const message = encoding.toUint8Array(enc)
+      this.links.forEach((link) => {
+        if (this.access(link.info, docId) !== "none") link.send(message)
+      })
+    }
+    doc.on("update", onUpdate)
+    this.detach.push(() => doc.off("update", onUpdate))
+  }
+
+  /** Sync messages carry the document they are about: [MSG_SYNC][docId][y-sync]. */
+  private syncHeader(docId: string) {
     const enc = encoding.createEncoder()
     encoding.writeVarUint(enc, MSG_SYNC)
-    syncProtocol.writeSyncStep1(enc, this.doc)
-    link.send(encoding.toUint8Array(enc))
-    link.send(this.awarenessMessage([...this.awareness.getStates().keys()].filter((id) => id === this.doc.clientID)))
+    encoding.writeVarString(enc, docId)
+    return enc
+  }
+
+  private syncStep1(docId: string, doc: Y.Doc) {
+    const enc = this.syncHeader(docId)
+    syncProtocol.writeSyncStep1(enc, doc)
+    return encoding.toUint8Array(enc)
   }
 
   onMessage(link: Link, message: Uint8Array) {
     const dec = decoding.createDecoder(message)
     const kind = decoding.readVarUint(dec)
     if (kind === MSG_SYNC) {
-      // Peek at the sync type: viewers may ask for state (step 1) but not change it.
+      const docId = decoding.readVarString(dec)
+      // Unknown yet (its file's metadata has not arrived): we ask for it once it does.
+      if (!this.store.has(docId)) return
+      // Step 1 asks for content: answer only those who may read it.
+      // Step 2 and updates change it: apply only from those who may write it.
       const syncType = decoding.peekVarUint(dec)
-      if (link.info.role === "viewer" && syncType !== syncProtocol.messageYjsSyncStep1) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MSG_SYNC)
-      syncProtocol.readSyncMessage(dec, enc, this.doc, link)
-      if (encoding.length(enc) > 1) link.send(encoding.toUint8Array(enc))
+      const access = this.access(link.info, docId)
+      if (syncType === syncProtocol.messageYjsSyncStep1 ? access === "none" : access !== "write") return
+      const enc = this.syncHeader(docId)
+      const header = encoding.length(enc)
+      syncProtocol.readSyncMessage(dec, enc, this.store.doc(docId), link)
+      if (encoding.length(enc) > header) link.send(encoding.toUint8Array(enc))
     } else if (kind === MSG_AWARENESS) {
       const update = decoding.readVarUint8Array(dec)
       // Remember which awareness clients this link speaks for.
@@ -464,11 +586,97 @@ export class CollabProvider {
       }
       applyAwarenessUpdate(this.awareness, update, link)
       this.emitLinks()
+    } else if (kind === MSG_BLOB_GET) {
+      const hash = decoding.readVarString(dec)
+      void this.serveBlob(link, hash, decoding.readVarUint(dec))
+    } else if (kind === MSG_BLOB_PART) {
+      const hash = decoding.readVarString(dec)
+      const part = decoding.readVarUint(dec)
+      const total = decoding.readVarUint(dec)
+      const bytes = decoding.readVarUint8Array(dec)
+      this.waiting.get(`${link.info.peer}:${hash}:${part}`)?.({ total, bytes: bytes.slice() })
     } else if (kind === MSG_SIGNAL) {
-      if (link.info.role === "viewer") return
+      if (this.access(link.info, "runtime") !== "write") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
-      if (signal.to === this.doc.clientID) this.listeners.signal.forEach((fn) => fn(signal))
+      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, link.info))
     }
+  }
+
+  // ---- binary files -------------------------------------------------------------
+
+  private fetching = new Map<string, Promise<Uint8Array>>()
+  private waiting = new Map<string, (part: { total: number; bytes: Uint8Array }) => void>()
+
+  /** Gets a binary file from whoever has it: the owner first, then the others. */
+  fetchBlob(hash: string): Promise<Uint8Array> {
+    let pending = this.fetching.get(hash)
+    if (!pending) {
+      pending = this.download(hash).finally(() => this.fetching.delete(hash))
+      this.fetching.set(hash, pending)
+    }
+    return pending
+  }
+
+  private async download(hash: string): Promise<Uint8Array> {
+    const links = [...this.links.values()].sort((a, b) => Number(b.info.peer === this.owner) - Number(a.info.peer === this.owner))
+    for (const link of links) {
+      const parts: Uint8Array[] = []
+      // One part at a time keeps the relay's queues short.
+      for (let part = 0, total = 1; part < total; part++) {
+        const got = await this.requestPart(link, hash, part)
+        if (!got || got.total === 0) break
+        total = got.total
+        parts.push(got.bytes)
+      }
+      if (!parts.length) continue
+      const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+      let offset = 0
+      for (const p of parts) {
+        bytes.set(p, offset)
+        offset += p.length
+      }
+      if ((await sha256(bytes)) !== hash) continue
+      await putBlob(bytes, hash)
+      return bytes
+    }
+    throw new Error("Nobody in the session has this file.")
+  }
+
+  private requestPart(link: Link, hash: string, part: number) {
+    return new Promise<{ total: number; bytes: Uint8Array } | null>((resolve) => {
+      const key = `${link.info.peer}:${hash}:${part}`
+      const timer = window.setTimeout(() => {
+        this.waiting.delete(key)
+        resolve(null)
+      }, 20_000)
+      this.waiting.set(key, (got) => {
+        window.clearTimeout(timer)
+        this.waiting.delete(key)
+        resolve(got)
+      })
+      const enc = encoding.createEncoder()
+      encoding.writeVarUint(enc, MSG_BLOB_GET)
+      encoding.writeVarString(enc, hash)
+      encoding.writeVarUint(enc, part)
+      link.send(encoding.toUint8Array(enc))
+    })
+  }
+
+  /** Sends one part of a binary file to a member who may see a file with it. */
+  private async serveBlob(link: Link, hash: string, part: number) {
+    const rules = rulesOf(this.store)
+    let allowed = false
+    metasOf(this.store).forEach((meta, path) => {
+      if (meta.hash === hash && fileAccess(link.info, path, rules) !== "none") allowed = true
+    })
+    const bytes = allowed ? await getBlob(hash) : null
+    const enc = encoding.createEncoder()
+    encoding.writeVarUint(enc, MSG_BLOB_PART)
+    encoding.writeVarString(enc, hash)
+    encoding.writeVarUint(enc, part)
+    encoding.writeVarUint(enc, bytes ? Math.max(1, Math.ceil(bytes.length / BLOB_PART)) : 0)
+    encoding.writeVarUint8Array(enc, bytes ? bytes.subarray(part * BLOB_PART, (part + 1) * BLOB_PART) : new Uint8Array())
+    link.send(encoding.toUint8Array(enc))
   }
 
   private awarenessMessage(clients: number[]) {
@@ -492,7 +700,7 @@ export class CollabProvider {
   }
 
   private onUnload = () => {
-    removeAwarenessStates(this.awareness, [this.doc.clientID], "unload")
+    removeAwarenessStates(this.awareness, [this.clientID], "unload")
   }
 }
 
@@ -507,12 +715,20 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
 }
 
-export function createSession(mode: SessionMode) {
-  return api<{ session: SessionInfo; role: Role }>("/api/sessions", { method: "POST", body: JSON.stringify({ mode }) })
+export function createSession(askName: boolean, roles: { name: string; level: "read" | "write" }[]) {
+  return api<{ session: SessionInfo; codes: RoleCode[] }>("/api/sessions", { method: "POST", body: JSON.stringify({ askName, roles }) })
 }
 
 export function getSession(code: string) {
-  return api<{ session: SessionInfo & { endedAt?: string }; role: Role }>(`/api/sessions/${encodeURIComponent(code)}`)
+  return api<{ session: SessionInfo & { endedAt?: string }; role: string; level: Level }>(`/api/sessions/${encodeURIComponent(code)}`)
+}
+
+export function listCodes(code: string) {
+  return api<{ codes: RoleCode[] }>(`/api/sessions/${encodeURIComponent(code)}/codes`)
+}
+
+export function addRole(code: string, name: string, level: "read" | "write") {
+  return api<RoleCode>(`/api/sessions/${encodeURIComponent(code)}/roles`, { method: "POST", body: JSON.stringify({ name, level }) })
 }
 
 export function endSession(code: string) {

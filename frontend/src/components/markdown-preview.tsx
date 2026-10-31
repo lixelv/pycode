@@ -1,31 +1,66 @@
 import DOMPurify from "dompurify"
 import { marked } from "marked"
-import { X } from "lucide-react"
-import { useMemo } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
-import { Button } from "@/components/ui/button"
-import { useI18n } from "@/lib/i18n"
+import { ensureBlob } from "@/lib/project/blobs"
+import { cleanPath, metasOf, parentOf } from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
 
-/** Rendered Markdown, always on the dark console surface. */
-export function MarkdownPreview({ path, source, onClose }: { path: string; source: string; onClose: () => void }) {
-  const { t } = useI18n()
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(source, { async: false, gfm: true }) as string), [source])
+/**
+ * Rendered Markdown, always on the dark console surface, live as the file
+ * is typed. Pictures from the project (`![](img/a.png)`) are shown from
+ * the project's files.
+ */
+export function MarkdownPreview({
+  path,
+  source,
+  store,
+  fetch,
+}: {
+  path: string
+  source: string
+  store: ProjectStore
+  fetch?: (hash: string) => Promise<Uint8Array>
+}) {
+  const debounced = useDebounced(source, 150)
+  const html = useMemo(() => DOMPurify.sanitize(marked.parse(debounced, { async: false, gfm: true }) as string), [debounced])
+  const box = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const urls: string[] = []
+    let live = true
+    for (const img of box.current?.querySelectorAll("img") ?? []) {
+      const src = img.getAttribute("src") ?? ""
+      if (/^[a-z]+:|^\/\//i.test(src)) continue
+      const dir = parentOf(path)
+      const target = cleanPath(src.startsWith("/") ? src : dir ? `${dir}/${src}` : src)
+      const meta = target ? metasOf(store).get(target) : undefined
+      if (!meta?.hash) continue
+      void ensureBlob(meta.hash, fetch).then((bytes) => {
+        if (!live) return
+        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: meta.mime }))
+        urls.push(url)
+        img.src = url
+      })
+    }
+    return () => {
+      live = false
+      urls.forEach((u) => URL.revokeObjectURL(u))
+    }
+  }, [html, path, store, fetch])
+
   return (
-    <section aria-label="Markdown preview" className="flex h-full flex-col bg-console text-console-foreground">
-      <header className="flex h-9 shrink-0 items-center gap-3 border-b border-console-border px-3">
-        <span className="text-[11px] font-medium tracking-wider text-console-muted uppercase">{t("preview.title")}</span>
-        <span className="font-mono text-[11px] text-console-muted">{path}</span>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          aria-label={t("preview.close")}
-          onClick={onClose}
-          className="ml-auto text-console-muted hover:bg-white/10 hover:text-console-foreground dark:hover:bg-white/10"
-        >
-          <X />
-        </Button>
-      </header>
-      <div className="markdown-body min-h-0 flex-1 overflow-auto px-6 py-5" dangerouslySetInnerHTML={{ __html: html }} />
+    <section aria-label="Markdown preview" className="h-full overflow-auto bg-console text-console-foreground">
+      <div ref={box} className="markdown-body px-6 py-5" dangerouslySetInnerHTML={{ __html: html }} />
     </section>
   )
+}
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [state, setState] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setState(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return state
 }

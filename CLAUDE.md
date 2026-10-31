@@ -23,13 +23,15 @@ docker compose up -d --build              # whole stack; port comes from .env (P
 docker compose up -d --build frontend     # after frontend changes
 cd frontend && npx tsc -b                 # type-check (run after every change)
 cd frontend && npx oxlint src             # lint
+cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier)
 cd frontend && npm run dev                # dev server, proxies /api to :8090
 cd backend && gofmt -w . && go vet ./... && go test ./...
 ```
 
-`npm run dev` and `npm run build` first run `scripts/copy-pyodide.mjs`. It
-copies the Pyodide runtime into `public/pyodide/v<version>/` (gitignored)
-and writes `src/generated/pyodide.ts`.
+`npm run dev` and `npm run build` first run `scripts/copy-pyodide.mjs` and
+`scripts/copy-excalidraw.mjs`:
+- the Pyodide runtime goes into `public/pyodide/v<version>/` (gitignored), and `src/generated/pyodide.ts` is written;
+- the whiteboard fonts go into `public/excalidraw/fonts/` (gitignored).
 
 `.env` is gitignored. It holds `PORT` and, on this Mac only,
 `PROXY_ALLOW_CIDRS=198.18.0.0/15`: the user's VPN uses fake-IP DNS, which
@@ -38,23 +40,68 @@ sites. Do not set it on a real server.
 
 ## Frontend architecture
 
-- **Project = Y.Doc** (`src/lib/project/project.ts`), used alone and in
-  sessions alike:
-  - `files`: `Y.Map<Y.Text>` keyed by path;
-  - `dirs`: explicit folders;
-  - `packages`: `Y.Array`;
-  - `terminal`: `Y.Text`, each run of text tagged with attribute `k` (stdout/stderr/stdin/system);
-  - `run`: `Y.Map` holding status, exit, `executorClient` and `draft` (the input line being typed).
+- **Project = a set of Y.Docs** (`ProjectStore`, `src/lib/project/store.ts`), used alone and in sessions alike. Each document is synced and access-checked on its own:
 
-  The local project is persisted with `y-indexeddb`. A Y.Text cannot be
-  moved, so rename, reset and zip import create new texts. The editor
-  follows the Y.Text under its path (see `code-editor.tsx`) so that it
-  never stays bound to a deleted one.
-- **Running code**: `src/workers/runner.worker.ts` (Pyodide).
+  | Document | Contents |
+  |---|---|
+  | `structure` | `files` (path → `FileMeta {id, kind, size, hash?, mime?, protected?, hidden?}`), `dirs`, `packages`, `roles` (custom role → read/write), `folders` (folder → role), `state` (`frozen`, `presentation`) |
+  | `runtime` | `terminal` (`Y.Text`, runs tagged with `k`), `run` (status, exit, `executorClient`, `draft`, `debugging`, `debug`) |
+  | `board` | whiteboard `elements` and `files` |
+  | `f:<id>` | one text file (`getText("t")`) |
+
+  - All documents share one client id (`store.clientID`).
+  - A rename only moves metadata, so open editors stay bound.
+  - Text docs are created and dropped by following `structure.files`.
+  - Persistence: `y-indexeddb`, one database per document (`pycode:<docId>`).
+  - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`).
+  - The editor follows the file's document under its path (a reset or an opened archive puts new ids under the same paths).
+- **Binary files** (`lib/project/blobs.ts`):
+  - Bytes are kept by sha256 in the IndexedDB database `pycode:blobs`; the project holds only the metadata.
+  - Text or binary is decided by `isText()`: known text extensions win, then known binary extensions, then a UTF-8 check.
+  - The project is limited to 64 MB (`PROJECT_LIMIT`; texts plus each distinct binary file plus board pictures).
+  - Archives keep binary files and the access rules (`.pycode.env`, line format, see `access.ts`). That name is reserved at the root.
+- **Access** (`lib/project/access.ts`, pure, unit-tested):
+  - Levels are read < write < admin; owner is an admin.
+  - `fileAccess` applies, in order: hidden → none; every role folder on the path must be the member's own role; protected or frozen → read.
+  - `docAccess` maps documents to access: `structure` is written by admins only; `runtime` and `board` by write.
+  - `useAccess` (hook) gives the UI the same answers. Tree changes, packages, freeze and presentation are admin-only. `*.test.py` files are created hidden.
+- **Running code**: `src/workers/runner.worker.ts` (Pyodide). Binary files are written next to the texts.
   - `input()` blocks on a `SharedArrayBuffer` and wakes via `Atomics`. This needs cross-origin isolation, so COOP/COEP headers are required in nginx and in vite.
   - Stop and the 120 s timeout raise `KeyboardInterrupt` through the interrupt buffer. If the program does not stop, the worker is terminated and recreated.
   - The whole project is written to `/home/pyodide/project`, and the open `.py` file runs as `__main__`.
   - HTTP from user code (`fetch`/XHR) is rewritten to `/api/proxy?url=`. `self.Worker` is deleted so urllib3 cannot start its own nested streaming worker, which would bypass the proxy.
+- **Debugger** (`python/debugger.py`, a `bdb.Bdb`):
+  - Started with `run(files, entry, specs, breakpoints)`. Breakpoints belong to the browser (localStorage `pycode:breakpoints`).
+  - On a stop the worker posts `paused` and waits on the stdin slot (`DEBUG_WAITING` → `DEBUG_GO` with the command in `[1]`). Stop wakes it with `STDIN_INTERRUPT`.
+  - Debug runs have no time limit.
+  - In a session the executor mirrors the stop into `run.debug`, so everyone sees the line.
+  - bdb keeps breakpoints globally and loads them in `__init__`: clear them before `super().__init__()`.
+- **Automatic checks** (`python/checker.py`):
+  - `name.test.py` holds `test_*` functions; `pycode_test.run(stdin)` runs the solution and returns its output, without `input()` prompts.
+  - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
+  - A student sends signal `check` to `provider.checker()` (the acting owner if admin, else the earliest admin) and gets `check-result` back.
+  - The admin runs checks one at a time, at most one per student every 3 s.
+  - Only the tests' own failed asserts carry a message. Errors raised by the solution report only a built-in type name, so the solution cannot send anything back. Results come from code the student controls: they help learning, they are not grades.
+- **What a run sees** (`runVisible` in `access.ts`, used by `projectFiles`): every run, check and preview gets public files plus the role folders the entry file is in, never hidden files. A teacher running a student's program therefore does not expose tests or other students' work.
+- **Web files**:
+  - Monaco's HTML, CSS and TypeScript services are registered in `monaco-core.ts`. `MonacoEnvironment.getWorker` must route by label (css/html/typescript); otherwise the services fail silently.
+  - HTMLHint checks HTML (`lib/web-lint.ts`). Prettier formats HTML/CSS/JS/Markdown (`lib/prettier.ts`, loaded on demand).
+  - Run on `.html` or `.js` uses `lib/web-preview.ts`: the page is built with the project's files inlined as `data:` URLs, plus a console bridge.
+  - It runs in `<iframe sandbox="allow-scripts …" src="/preview.html">`, which has no same origin. The page arrives by postMessage.
+  - `/preview.html` has its own permissive CSP in `nginx.conf`, and its loader is inline: a sandboxed frame has an opaque origin, so CORP same-origin refuses even our own scripts. A `srcdoc` frame would inherit the app's CSP and block every script.
+- **Documents**: PDF via `pdfjs-dist`, PPTX via `pptx-preview` (`components/doc-viewer.tsx`, one page at a time, page controlled by the parent).
+- **Presentation**: an admin presents a PDF or PPTX to everyone (`state.presentation = {path, page, by}`). Only the presenter turns pages; any admin can end it if the presenter is gone.
+- **Markdown**: Code / Side by side / Preview switch (localStorage `pycode:md-mode`). The preview resolves project pictures.
+- **Whiteboard** (`components/board.tsx`, Excalidraw, lazy):
+  - Elements are synced by version via `reconcileElements`. Pictures go into `board.files`.
+  - Pointers travel in awareness (`boardPointer`), the visible area in `boardView` (for Follow).
+  - Fonts are served from `/excalidraw/` (`EXCALIDRAW_ASSET_PATH`).
+- **Session UX**:
+  - Names: asked on joining when the session's `askName` is set; kept per session id.
+  - Cursor name labels: footer toggle (`pycode:cursor-labels`).
+  - Follow: `hooks/use-follow.ts`; awareness `view {tab, file, top}`.
+  - Freeze: `state.frozen`; `components/frost-overlay.tsx` animates `--frost`, which is registered with `@property`.
+  - Drag and drop onto the page: `hooks/use-file-drop.ts` (admins); the tree rows carry `data-path` / `data-kind`.
 - **Analysis**: `src/workers/tools.worker.ts` is a second Pyodide instance for Jedi hints, the flowchart and the syntax tree. It is separate so that hints keep working while a program waits for input. The Python sources are in `src/python/`, the flowchart builder in `flow.py`.
 - **Console mirroring**: the console always renders from the doc. Whoever runs the program mirrors its output into the doc (`mirrorRun` in `App.tsx`). Others send `stdin`/`eof`/`stop` signals to `executorClient`.
 - **Packages**: installed with micropip. Packages built for Pyodide come from cdn.jsdelivr.net, everything else from PyPI (both serve CORS). The resolved version is pinned after the first install.
@@ -77,11 +124,20 @@ sites. Do not set it on a real server.
 - **Transport** (`src/lib/collab/provider.ts`): a WebRTC mesh.
   - Each link starts on the **server relay**, which is usable immediately. A data channel is negotiated in the background and takes over once open.
   - When the channel drops, the link falls back to the relay and retries with backoff. Only the lower peer id starts retries.
-  - Data is the Yjs sync protocol plus awareness plus runner signals. Messages are chunked to 60 KB.
-- **Roles** (owner/editor/viewer) come from the server. Receivers drop doc changes and signals from viewers.
-- **The project lives with the owner**: the owner shares their local doc, and a guest gets a fresh doc that is thrown away on leaving (back to their own project). The server stores no content.
-- **Reset in a session**: owner only. The client announces it with `{"type":"reset"}`; the server relays it only from the owner and replies `error` otherwise.
-- **Cursor colour** (`lib/collab/identity.ts`): hue = `id % 256` scaled to 360°, saturation = `255 − (id >> 8) % 128`, lightness 60%.
+  - Messages are chunked to 60 KB:
+    - `MSG_SYNC [docId][y-sync]`;
+    - awareness;
+    - signals (`stdin`/`eof`/`stop`/`check`/`check-result`);
+    - `MSG_BLOB_GET`/`MSG_BLOB_PART`: binary files, 1 MB parts fetched one at a time, owner first, served only to those who may see a file with that hash.
+- **Access per document**:
+  - A document's updates go only to members who may read it.
+  - Step 1 is answered only to readers; step 2 and updates are applied only from writers (rules read from our own `structure`).
+  - When a document becomes readable, we ask for it.
+  - Consequence: `structure` and protected or hidden files come only from admins, so a newcomer with no admin online sees "waiting for the teacher".
+- **Roles** come from the code a member joined with: `read`, `write`, `admin`, or a custom role (level read/write). The owner (by cookie) is always owner.
+- **Acting owner**: the server picks `room.owner` (the owner while connected, else the admin who joined first) and broadcasts `{"type":"owner"}`. Reset is accepted only from the acting owner.
+- **The project lives with the owner**: the owner shares their local store, and a guest gets a fresh in-memory store that is dropped on leaving.
+- **Cursor colour** (`lib/collab/identity.ts`): hue = `id % 256` scaled to 360°, saturation = `255 − (id >> 8) % 128`, lightness 60%. Names next to cursors are off unless toggled.
 
 ## Backend
 
@@ -89,8 +145,13 @@ sites. Do not set it on a real server.
 - **`proxy`**: `/api/proxy?url=`.
   - Public IPs only. The check runs in the dialer `Control` hook on every connection (redirects included). Literal IPs and `localhost`/`.local`/`.internal` are refused up front.
   - 256 requests per minute per user.
-- **`session`**: Postgres stores session rows only (code, owner, mode). Rooms live in memory. WebSocket protocol:
-  - text frames: JSON control (`welcome`, `join`, `leave`, `signal`, `reset`, `error`, `ended`);
+- **`session`**: Postgres stores session rows (owner, `ask_name`) and `session_codes` (code → role, level). `sessions.code` is the write code. REST:
+  - `POST /api/sessions {askName, roles}` creates a session and returns every code;
+  - `GET /api/sessions/{code}`;
+  - `GET …/codes` and `POST …/roles` (owner or a connected admin).
+
+  Rooms live in memory. WebSocket protocol:
+  - text frames: JSON control (`welcome` with `owner`, `join`, `leave`, `owner`, `signal`, `reset`, `error`, `ended`); peers carry `role` and `level`;
   - binary frames: relay, `[to u32][payload]` from the client and `[from u32][payload]` to it.
 
   Idle sessions expire after 24 h.
@@ -103,6 +164,10 @@ sites. Do not set it on a real server.
 - **Puppeteer headless hides scrollbars**: pass `ignoreDefaultArgs: ["--hide-scrollbars"]`. On macOS, Cmd shortcuts do not reach Monaco in headless Chrome. For WebKit (Safari engine), Playwright's webkit is installed in the scratchpad.
 - **WebRTC cannot connect P2P on this Mac**: the VPN's TUN interface is the only host candidate, so tests always end up on the relay. That is expected.
 - **Nested Python modules** in `src/python/` are bundled with `?raw` and written into the workers' virtual FS as the package `pycoder`.
+- **The e2e hook**: with `localStorage["pycode:e2e"]` set, the app exposes `window.__pycode = {store, provider}`. In tests:
+  - fetch `/api/me` once before the app loads: parallel first requests get different identity cookies;
+  - wait a moment after writing before reloading: y-indexeddb flushes asynchronously.
+- **htmlhint** has no types for its browser build: see `src/htmlhint.d.ts`.
 
 ## Conventions
 

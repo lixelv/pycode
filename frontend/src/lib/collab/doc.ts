@@ -1,16 +1,12 @@
 import * as Y from "yjs"
 
-import type { PackageEntry } from "@/hooks/use-packages"
 import type { Chunk, ChunkKind, ExitInfo, RunStatus } from "@/hooks/use-runner"
 
 /*
- * The shared document of a session:
- *   files     see lib/project/project.ts
- *   packages  Y.Array  PackageEntry objects
+ * The project's runtime document (store.runtime):
  *   terminal  Y.Text   console output; each run of text carries {k: ChunkKind}
  *   run       Y.Map    status, exit, executor (uid) and executorClient (Yjs client id)
  */
-export const sharedPackages = (doc: Y.Doc) => doc.getArray<PackageEntry>("packages")
 export const sharedTerminal = (doc: Y.Doc) => doc.getText("terminal")
 export const sharedRun = (doc: Y.Doc) => doc.getMap<unknown>("run")
 

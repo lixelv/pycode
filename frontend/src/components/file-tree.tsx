@@ -4,38 +4,69 @@ import {
   Download,
   File,
   FileCode2,
+  FileImage,
   FileJson,
   FilePlus,
   FileText,
+  EyeOff,
   Folder,
   FolderOpen,
   FolderPlus,
+  Lock,
+  LockOpen,
+  Eye,
+  Users,
   RotateCcw,
   Trash2,
   Upload,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import type * as Y from "yjs"
 
 import { Button } from "@/components/ui/button"
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import type { AccessView } from "@/hooks/use-access"
+import { isTest, RESERVED } from "@/lib/project/access"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Peer } from "@/hooks/use-collab"
 import { useI18n } from "@/lib/i18n"
-import { allDirs, cleanPath, dirsOf, exists, filesOf, languageOf, nameOf, parentOf } from "@/lib/project/project"
+import {
+  allDirs,
+  cleanPath,
+  exists,
+  foldersOf,
+  languageOf,
+  metasOf,
+  nameOf,
+  parentOf,
+  rolesOf,
+  setFlag,
+  setFolderRole,
+} from "@/lib/project/project"
+import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
 
 interface FileTreeProps {
-  doc: Y.Doc
+  store: ProjectStore
   active: string
+  /** Not an admin: cannot change the tree. */
   readOnly: boolean
+  access: AccessView
   peers: Peer[]
+  /** Files being dragged over the page, and the folder they would land in. */
+  drop?: { dragging: boolean; target: string }
+  /** Paths just added: highlighted for a moment. */
+  flash?: Set<string>
   onOpen: (path: string) => void
   onCreate: (path: string, kind: "file" | "dir") => void
   onDelete: (path: string, kind: "file" | "dir") => void
@@ -78,15 +109,17 @@ function buildTree(files: string[], dirs: string[]): Node[] {
 function FileIcon({ path }: { path: string }) {
   const lang = languageOf(path)
   const cls = "size-3.5 shrink-0"
+  if (/\.(png|jpe?g|gif|webp|bmp|ico)$/i.test(path)) return <FileImage className={cn(cls, "text-chart-3")} />
   if (lang === "python") return <FileCode2 className={cn(cls, "text-chart-1")} />
   if (lang === "json") return <FileJson className={cn(cls, "text-chart-5")} />
   if (lang === "yaml") return <FileText className={cn(cls, "text-chart-4")} />
   if (lang === "markdown") return <FileText className={cn(cls, "text-chart-2")} />
+  if (lang === "html" || lang === "css" || lang === "javascript") return <FileCode2 className={cn(cls, lang === "javascript" ? "text-chart-4" : lang === "css" ? "text-chart-2" : "text-chart-5")} />
   return <File className={cn(cls, "text-muted-foreground")} />
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { doc, active, readOnly, peers, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
+  const { store, active, readOnly, access, peers, drop, flash, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -97,18 +130,16 @@ export function FileTree(props: FileTreeProps) {
 
   useEffect(() => {
     const bump = () => setVersion((v) => v + 1)
-    const files = filesOf(doc)
-    const dirs = dirsOf(doc)
-    files.observe(bump)
-    dirs.observe(bump)
-    return () => {
-      files.unobserve(bump)
-      dirs.unobserve(bump)
-    }
-  }, [doc])
+    store.structure.on("update", bump)
+    return () => store.structure.off("update", bump)
+  }, [store])
 
-  const files = [...filesOf(doc).keys()]
-  const tree = buildTree(files, allDirs(doc))
+  // Only what we may see: a folder is shown when a file inside it would be.
+  const metas = metasOf(store)
+  const folders = foldersOf(store).toJSON() as Record<string, string>
+  const roles = Object.keys(rolesOf(store).toJSON())
+  const files = [...metas.keys()].filter((p) => access.can(p) !== "none")
+  const tree = buildTree(files, allDirs(store).filter((d) => access.can(`${d}/_`) !== "none"))
   // Where the others are: file -> colours.
   const presence = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -137,7 +168,11 @@ export function FileTree(props: FileTreeProps) {
                   className={cn(
                     "group flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
                     selectedDir === node.path && "text-foreground",
+                    drop?.dragging && drop.target === node.path && "bg-primary/10 text-foreground ring-1 ring-primary/50",
+                    flash?.has(node.path) && "animate-flash",
                   )}
+                  data-path={node.path}
+                  data-kind="dir"
                   style={pad}
                   onClick={() => {
                     setSelectedDir(node.path)
@@ -152,6 +187,11 @@ export function FileTree(props: FileTreeProps) {
                   <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
                   {open ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
                   <span className="truncate">{node.name}</span>
+                  {folders[node.path] && (
+                    <span title={t("tree.access")} className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5 font-mono text-[10px]">
+                      <Users className="size-2.5" /> {folders[node.path]}
+                    </span>
+                  )}
                   {!readOnly && <DeleteButton label={`${t("tree.delete")} ${node.name}`} onClick={() => onDelete(node.path, "dir")} />}
                 </div>
               )}
@@ -164,6 +204,21 @@ export function FileTree(props: FileTreeProps) {
                 <FolderPlus /> {t("tree.newFolder")}
               </ContextMenuItem>
               <ContextMenuSeparator />
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Users /> {t("tree.access")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuRadioGroup value={folders[node.path] ?? ""} onValueChange={(v) => setFolderRole(store, node.path, v || null)}>
+                    <ContextMenuRadioItem value="">{t("tree.public")}</ContextMenuRadioItem>
+                    {roles.map((r) => (
+                      <ContextMenuRadioItem key={r} value={r} className="font-mono text-xs">
+                        {r}
+                      </ContextMenuRadioItem>
+                    ))}
+                  </ContextMenuRadioGroup>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
               <ContextMenuItem onSelect={() => setRenaming(node.path)}>
                 <Pencil /> {t("tree.rename")}
               </ContextMenuItem>
@@ -193,7 +248,10 @@ export function FileTree(props: FileTreeProps) {
                 className={cn(
                   "group flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-1 text-sm hover:bg-accent",
                   isActive ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                  flash?.has(node.path) && "animate-flash",
                 )}
+                data-path={node.path}
+                data-kind="file"
                 style={{ paddingLeft: 8 + depth * 12 + 16 }}
                 onClick={() => {
                   setSelectedDir(parentOf(node.path))
@@ -202,6 +260,16 @@ export function FileTree(props: FileTreeProps) {
               >
                 <FileIcon path={node.path} />
                 <span className="truncate font-mono text-[12.5px]">{node.name}</span>
+                {metas.get(node.path)?.protected && (
+                  <Lock aria-label={t("tree.protected")} className="size-3 shrink-0 text-muted-foreground">
+                    <title>{t("tree.protected")}</title>
+                  </Lock>
+                )}
+                {metas.get(node.path)?.hidden && (
+                  <EyeOff aria-label={t("tree.hidden")} className="size-3 shrink-0 text-muted-foreground">
+                    <title>{t("tree.hidden")}</title>
+                  </EyeOff>
+                )}
                 <span className="ml-auto flex -space-x-1 pl-1">
                   {(presence.get(node.path) ?? []).slice(0, 3).map((color, i) => (
                     <span key={i} className="size-2 rounded-full border border-background" style={{ background: color }} />
@@ -212,6 +280,26 @@ export function FileTree(props: FileTreeProps) {
             )}
           </ContextMenuTrigger>
           <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+            {metas.get(node.path)?.protected ? (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "protected", false)}>
+                <LockOpen /> {t("tree.unprotect")}
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "protected", true)}>
+                <Lock /> {t("tree.protect")}
+              </ContextMenuItem>
+            )}
+            {isTest(node.path) &&
+              (metas.get(node.path)?.hidden ? (
+                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", false)}>
+                  <Eye /> {t("tree.show")}
+                </ContextMenuItem>
+              ) : (
+                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", true)}>
+                  <EyeOff /> {t("tree.hide")}
+                </ContextMenuItem>
+              ))}
+            <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => setRenaming(node.path)}>
               <Pencil /> {t("tree.rename")}
             </ContextMenuItem>
@@ -228,7 +316,8 @@ export function FileTree(props: FileTreeProps) {
   const validate = (parent: string, name: string, current?: string): { path?: string; error?: string } => {
     const path = cleanPath(parent ? `${parent}/${name}` : name)
     if (!path) return { error: t("tree.err.dots") }
-    if (path !== current && exists(doc, path)) return { error: t("tree.err.exists") }
+    if (path === RESERVED) return { error: t("tree.err.reserved") }
+    if (path !== current && exists(store, path)) return { error: t("tree.err.exists") }
     return { path }
   }
 
@@ -254,7 +343,15 @@ export function FileTree(props: FileTreeProps) {
   })
 
   return (
-    <aside className="flex h-full w-full flex-col bg-card">
+    <aside className="relative flex h-full w-full flex-col bg-card">
+      {drop?.dragging && (
+        <div className="pointer-events-none absolute inset-1.5 z-20 flex animate-in items-end justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5 pb-6 duration-200 fade-in-0 zoom-in-95">
+          <div className="flex items-center gap-2 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg">
+            <Upload className="size-3.5 animate-bounce" />
+            {drop.target ? t("tree.dropInto", { folder: drop.target }) : t("tree.drop")}
+          </div>
+        </div>
+      )}
       <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border pr-1.5 pl-3">
         <span className="mr-auto text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("tree.project")}</span>
         <TreeAction label={t("tree.newFile")} disabled={readOnly} onClick={() => startCreate("file")}>

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import * as Y from "yjs"
 
 import { fetchMe } from "@/lib/collab/identity"
 import { translate } from "@/lib/i18n"
@@ -12,9 +11,9 @@ import {
   type LinkMode,
   type PeerUser,
   type ProviderStatus,
-  type SessionMode,
 } from "@/lib/collab/provider"
-import { localProject } from "@/lib/project/project"
+import { localStore, rolesOf } from "@/lib/project/project"
+import { ProjectStore } from "@/lib/project/store"
 
 export interface Peer {
   clientId: number
@@ -24,13 +23,16 @@ export interface Peer {
   file?: string
   /** How we are connected to them: directly (WebRTC) or through the server. */
   link?: LinkMode
+  role?: string
+  /** Acts as the owner now. */
+  owner?: boolean
 }
 
 const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
 
 /**
- * The live session. The owner shares their own project (their local doc, so
- * every change is saved in their browser); a guest works on a fresh doc that
+ * The live session. The owner shares their own project (their local store, so
+ * every change is saved in their browser); a guest works on a fresh store that
  * fills from the others and is dropped on leaving — back to their own project.
  */
 export function useCollab() {
@@ -39,7 +41,27 @@ export function useCollab() {
   const [provider, setProvider] = useState<CollabProvider | null>(null)
   const [status, setStatus] = useState<ProviderStatus | null>(null)
   const [peers, setPeers] = useState<Peer[]>([])
-  const [, force] = useState(0)
+  // A session that asks for names waits here for ours (see NameDialog).
+  const [nameAsk, setNameAsk] = useState<{ initial: string | null; resolve: (name: string) => void } | null>(null)
+  const askName = useCallback((sessionId: string) => {
+    const key = `pycode:name:${sessionId}`
+    const saved = storage(key)
+    if (saved) return Promise.resolve(saved)
+    return new Promise<string>((resolve) =>
+      setNameAsk({
+        initial: storage(LAST_NAME),
+        resolve: (name) => {
+          storage(key, name)
+          storage(LAST_NAME, name)
+          setNameAsk(null)
+          resolve(name)
+        },
+      }),
+    )
+  }, [])
+
+  // Bumped whenever our role, the links or the acting owner change.
+  const [version, force] = useState(0)
 
   useEffect(() => {
     fetchMe().then((m) => {
@@ -64,21 +86,24 @@ export function useCollab() {
       if (session.endedAt) throw new Error("This session has ended.")
       const isOwner = session.ownerId === me
       // The owner rejoining shares their own project again.
-      const doc = isOwner ? localProject().doc : new Y.Doc()
-      if (isOwner) await localProject().ready
-      attach(new CollabProvider(session, me, doc))
+      const name = session.askName ? await askName(session.id) : null
+      const store = isOwner ? localStore() : new ProjectStore(false)
+      await store.ready
+      attach(new CollabProvider(session, me, store, name))
     },
-    [me, attach],
+    [me, attach, askName],
   )
 
   const start = useCallback(
-    async (mode: SessionMode) => {
+    async (ask: boolean) => {
       if (!me) throw new Error("The collaboration server is not available.")
-      const { session } = await createSession(mode)
-      await localProject().ready
-      attach(new CollabProvider(session, me, localProject().doc))
+      const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
+      const { session } = await createSession(ask, roles)
+      const name = ask ? await askName(session.id) : null
+      await localStore().ready
+      attach(new CollabProvider(session, me, localStore(), name))
     },
-    [me, attach],
+    [me, attach, askName],
   )
 
   const leave = useCallback(() => {
@@ -115,14 +140,19 @@ export function useCollab() {
       const list: Peer[] = []
       provider.awareness.getStates().forEach((state, clientId) => {
         const s = state as { user?: PeerUser; file?: string }
-        if (s.user) list.push({ clientId, user: s.user, isMe: clientId === provider.doc.clientID, file: s.file, link: modes.get(clientId) })
+        const role = provider.roleOf(clientId)
+        if (s.user)
+          list.push({ clientId, user: s.user, isMe: clientId === provider.clientID, file: s.file, link: modes.get(clientId), role: role?.role, owner: role?.owner })
       })
       list.sort((a, b) => Number(b.isMe) - Number(a.isMe) || a.user.id.localeCompare(b.user.id))
       setPeers(list)
     }
     readPeers()
     provider.awareness.on("change", readPeers)
-    const offLinks = provider.on("links", readPeers)
+    const offLinks = provider.on("links", () => {
+      readPeers()
+      force((n) => n + 1)
+    })
     const off = provider.on("status", (s) => {
       setStatus(s)
       force((n) => n + 1) // role may have changed
@@ -139,12 +169,25 @@ export function useCollab() {
     }
   }, [provider, leave])
 
-  return { me, available, provider, status, peers, start, join, leave, end }
+  return { me, available, provider, status, version, peers, nameAsk, start, join, leave, end }
+}
+
+const LAST_NAME = "pycode:name"
+
+/** Reads (or with a value, writes) localStorage, ignoring unavailable storage. */
+function storage(key: string, value?: string): string | null {
+  try {
+    if (value === undefined) return localStorage.getItem(key)
+    localStorage.setItem(key, value)
+  } catch {
+    // storage unavailable
+  }
+  return null
 }
 
 function dispose(p: CollabProvider | null) {
   if (!p) return
-  const guestDoc = p.doc !== localProject().doc ? p.doc : null
+  const guest = p.store !== localStore() ? p.store : null
   p.destroy()
-  guestDoc?.destroy()
+  guest?.destroy()
 }

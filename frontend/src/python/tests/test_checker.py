@@ -665,6 +665,10 @@ class Tournament(unittest.TestCase):
             checker.run_tests(project, "main.py", HEAD + "def test_a():\n    t.run()\n    t.run(ram_usage=64)\n", tournament=True)
         self.assertEqual(traces, [False, True])
 
+    def test_id_with_a_control_character_is_rejected(self):
+        for source in ("tournament('a\\nb')\n", "tournament('a\\tb')\n", "tournament('\\x00')\n"):
+            self.assertIn("error", checker.tournament_of(source), source)
+
     def test_id_of_64_characters_is_accepted(self):
         self.assertEqual(checker.tournament_of(f"tournament('{'x' * 64}')\n")["id"], "x" * 64)
 

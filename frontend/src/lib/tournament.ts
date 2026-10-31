@@ -1,6 +1,6 @@
 import * as Y from "yjs"
 
-import { fileAccess, type Member, type Rules } from "@/lib/project/access"
+import { docAccess, fileAccess, type Member, type Rules } from "@/lib/project/access"
 import type { CheckResult, CheckTournament } from "@/workers/protocol"
 
 /*
@@ -37,6 +37,19 @@ export const resultsOf = (doc: Y.Doc) => doc.getMap<TournamentEntry>("results")
 /** The column of a test file: `a/ivan/tri.test.py` and `tri.test.py` are both `tri`. */
 export function taskOf(testPath: string): string {
   return testPath.slice(testPath.lastIndexOf("/") + 1).replace(/\.test\.py$/, "")
+}
+
+/** All lines passed; a failing test worth nothing is still a failure, and no lines pass nothing. */
+export const allPassed = (results: CheckResult[]) => results.length > 0 && results.every((r) => r.ok)
+
+/**
+ * The tables to show: by access, not by which documents exist (a student keeps the copy of a table
+ * that became private). `opened` says the store has the document: rules can be a moment behind the store.
+ */
+export function readableTournaments(member: Member, rules: Rules, opened: (docId: string) => boolean): string[] {
+  return Object.keys(rules.tournaments)
+    .filter((id) => docAccess(member, `t:${id}`, rules) !== "none" && opened(`t:${id}`))
+    .sort()
 }
 
 export const maxPoints = (results: CheckResult[]) => results.reduce((sum, r) => sum + (r.points ?? 0), 0)

@@ -76,6 +76,7 @@ import { setLang, translate, useI18n } from "@/lib/i18n"
 import { cppClient, useCppStatus } from "@/lib/cpp/client"
 import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
 import { nameFor } from "@/lib/collab/identity"
+import { whenClientKnown } from "@/lib/collab/known-client"
 import { fileAccess, type Member } from "@/lib/project/access"
 import { maxPoints, recordCheck, tableName } from "@/lib/tournament"
 import { RunnerClient } from "@/lib/python/runner-client"
@@ -508,7 +509,6 @@ function Workspace() {
     return provider.on("signal", (signal, from) => {
       // Results count only from an admin; requests answer only their real sender.
       if (signal.type === "check-result" && from.level !== "admin") return
-      if (signal.type === "check" && !from.clients.has(signal.from)) return
       if (signal.type === "check-result") {
         setCheck({ path: signal.path, results: signal.results, error: signal.error, tournament: signal.tournament, unrecorded: signal.unrecorded })
         setConsoleOpen(true)
@@ -516,27 +516,29 @@ function Workspace() {
         return
       }
       if (signal.type !== "check" || !provider.isAdmin) return
-      // Only for a real file (not another spelling of its path) the student may see.
-      const rules = rulesOf(store)
-      if (!Object.hasOwn(rules.files, signal.path) || fileAccess(from, signal.path, rules) === "none") return
-      // Each check starts a whole Python: one at a time, and at most one per student every few seconds.
-      const now = Date.now()
-      if (now - (lastCheck.current.get(signal.from) ?? 0) < CHECK_COOLDOWN_MS) {
-        provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: [], error: t("check.tooSoon") })
-        return
-      }
-      lastCheck.current.set(signal.from, now)
-      void checks
-        .current(() => checkHere(signal.path))
-        .then((r) => {
-          // After the check: the student's role may have changed while it waited its turn.
-          const member = provider.memberOf(signal.from) ?? from
-          const name = tableName((provider.awareness.getStates().get(signal.from)?.user as { name?: unknown } | undefined)?.name, nameFor(from.userId))
-          // A test file a student can change must not create tables or change who sees them.
-          if (r.tournament && r.testFile && fileAccess(member, r.testFile, rulesOf(store)) !== "write") ensureTournament(store, r.tournament.id, r.tournament.private)
-          const unrecorded = recordIn(signal.path, r, { userId: from.userId, name }, member)
-          provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error, tournament: r.tournament, unrecorded })
-        })
+      whenClientKnown(from.clients, signal.from, () => {
+        // Only for a real file (not another spelling of its path) the student may see.
+        const rules = rulesOf(store)
+        if (!Object.hasOwn(rules.files, signal.path) || fileAccess(from, signal.path, rules) === "none") return
+        // Each check starts a whole Python: one at a time, and at most one per student every few seconds.
+        const now = Date.now()
+        if (now - (lastCheck.current.get(signal.from) ?? 0) < CHECK_COOLDOWN_MS) {
+          provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: [], error: t("check.tooSoon") })
+          return
+        }
+        lastCheck.current.set(signal.from, now)
+        void checks
+          .current(() => checkHere(signal.path))
+          .then((r) => {
+            // After the check: the student's role may have changed while it waited its turn.
+            const member = provider.memberOf(signal.from) ?? from
+            const name = tableName((provider.awareness.getStates().get(signal.from)?.user as { name?: unknown } | undefined)?.name, nameFor(from.userId))
+            // A test file a student can change must not create tables or change who sees them.
+            if (r.tournament && r.testFile && fileAccess(member, r.testFile, rulesOf(store)) !== "write") ensureTournament(store, r.tournament.id, r.tournament.private)
+            const unrecorded = recordIn(signal.path, r, { userId: from.userId, name }, member)
+            provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error, tournament: r.tournament, unrecorded })
+          })
+      })
     })
   }, [provider, store, checkHere, t, recordIn])
 

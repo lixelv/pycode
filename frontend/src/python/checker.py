@@ -86,7 +86,7 @@ class ProgramNotStarted(RuntimeError):
 
 FILE_ERRORS = {
     "place": "tournament() must be one top-level statement",
-    "args": "tournament(id, private=False): id is a string of 1 to 64 characters",
+    "args": "tournament(id, private=False): id is a string of 1 to 64 printable characters",
     "points": "points(amount): amount is a positive number",
 }
 
@@ -134,7 +134,7 @@ def _tournament_args(call: ast.Call) -> dict:
     private = values.get("private", ast.Constant(False))
     if not isinstance(name, ast.Constant) or not isinstance(private, ast.Constant):
         return invalid
-    if not isinstance(name.value, str) or not 1 <= len(name.value) <= MAX_TOURNAMENT_ID or not isinstance(private.value, bool):
+    if not isinstance(name.value, str) or not 1 <= len(name.value) <= MAX_TOURNAMENT_ID or not name.value.isprintable() or not isinstance(private.value, bool):
         return invalid
     return {"id": name.value, "private": private.value}
 

@@ -4,7 +4,7 @@ import type { ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
-import { maxPoints, type CheckTournamentInfo } from "@/lib/tournament"
+import { allPassed, maxPoints, type CheckTournamentInfo } from "@/lib/tournament"
 import type { CheckResult } from "@/workers/protocol"
 
 export interface CheckState {
@@ -23,7 +23,7 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
   const total = check.results?.length ?? 0
   const score = maxPoints(check.results?.filter((r) => r.ok) ?? [])
   const max = check.tournament?.max ?? 0
-  const complete = check.tournament ? score === max : passed === total
+  const complete = check.tournament ? allPassed(check.results ?? []) : passed === total
   return (
     <section aria-label={t("check.title")} className="flex h-full flex-col bg-console text-console-foreground">
       <header className="flex h-9 shrink-0 items-center gap-3 border-b border-console-border px-3">

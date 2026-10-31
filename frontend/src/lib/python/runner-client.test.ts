@@ -25,7 +25,8 @@ const made = vi.hoisted(() => {
 vi.mock("@/workers/runner.worker?worker", () => ({ default: made.FakeWorker }))
 vi.mock("@/workers/cpp-run.worker?worker", () => ({ default: made.FakeWorker }))
 
-import { RunnerClient } from "./runner-client"
+import { SOLUTION_BOOT_MS } from "./limits"
+import { RunnerClient, TOURNAMENT_TIMEOUT_MS } from "./runner-client"
 
 const reply = (worker: InstanceType<typeof made.FakeWorker>, data: RunnerEvent) => worker.onmessage?.({ data })
 
@@ -104,6 +105,36 @@ describe("RunnerClient", () => {
         await vi.advanceTimersByTimeAsync(1000)
       }
       await failed
+    })
+
+    it("lets a tournament's checker fail a run by time before the page gives up", async () => {
+      vi.useFakeTimers()
+      const { outcome, worker, id } = await checking()
+      reply(worker, { type: "tournament", tournament: { id: "cup", private: false } })
+      await vi.advanceTimersByTimeAsync(TOURNAMENT_TIMEOUT_MS + SOLUTION_BOOT_MS)
+      reply(worker, { type: "checked", id, results: [] })
+      await expect(outcome).resolves.toMatchObject({ results: [] })
+    })
+
+    it("still stops a tournament's check that never answers", async () => {
+      vi.useFakeTimers()
+      const { outcome, worker } = await checking()
+      const failed = expect(outcome).rejects.toThrow("timeout")
+      reply(worker, { type: "tournament", tournament: { id: "cup", private: false } })
+      await vi.advanceTimersByTimeAsync(TOURNAMENT_TIMEOUT_MS + SOLUTION_BOOT_MS + 10_000)
+      await failed
+    })
+
+    it("lets an ordinary C++ check fail a run by time before the page gives up", async () => {
+      vi.useFakeTimers()
+      const { client, worker } = await started()
+      const outcome = client.check({}, "main.cpp", "tests", [], new Uint8Array(1))
+      await vi.advanceTimersByTimeAsync(0)
+      const id = worker.posted.find((m) => m.type === "check")!.id!
+      reply(worker, { type: "tournament", tournament: null })
+      await vi.advanceTimersByTimeAsync(31_000)
+      reply(worker, { type: "checked", id, results: [] })
+      await expect(outcome).resolves.toMatchObject({ results: [] })
     })
 
     it("gives a tournament its longer limit", async () => {

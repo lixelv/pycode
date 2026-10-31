@@ -1,4 +1,5 @@
 import { fire } from "@/lib/python/deadline"
+import { SOLUTION_BOOT_MS } from "@/lib/python/limits"
 import { cwdOf } from "@/lib/cpp/wasi"
 import CppRunWorker from "@/workers/cpp-run.worker?worker"
 import RunnerWorker from "@/workers/runner.worker?worker"
@@ -24,6 +25,8 @@ type Listener = (event: RunnerEvent) => void
 
 /** How long a tournament's whole check may take (python/checker.py, TOURNAMENT_LIMIT). */
 export const TOURNAMENT_TIMEOUT_MS = 120_000
+/** When run() itself keeps the limit (python/checker.py), the page's timer is only a backstop: the checker must get to say which test ran out. */
+const BACKSTOP_MS = 5_000
 
 /** A batch run that cannot happen: whoever waits on `result` learns it did not start. A result already given stays. */
 function failBatch(result: SharedArrayBuffer) {
@@ -209,14 +212,14 @@ export class RunnerClient implements ProgramRunner {
     try {
       return await new Promise<CheckOutcome>((resolve, reject) => {
         const timeout = () => reject(new Error("timeout"))
-        let timer = setTimeout(timeout, timeoutMs)
+        let timer = setTimeout(timeout, wasm ? timeoutMs + BACKSTOP_MS : timeoutMs)
         let kind: CheckTournament | null | undefined // the first event's: nothing else can set it
         const off = this.on((event) => {
           if (event.type === "tournament" && kind === undefined) {
             kind = event.tournament
             if (kind) {
               clearTimeout(timer)
-              timer = setTimeout(timeout, TOURNAMENT_TIMEOUT_MS)
+              timer = setTimeout(timeout, TOURNAMENT_TIMEOUT_MS + SOLUTION_BOOT_MS + BACKSTOP_MS)
             }
           }
           if (event.type === "run_outside") {

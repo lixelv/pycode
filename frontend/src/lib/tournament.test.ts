@@ -4,7 +4,7 @@ import * as Y from "yjs"
 import type { CheckResult } from "@/workers/protocol"
 import type { Member, Rules } from "./project/access"
 import type { FileMeta } from "./project/store"
-import { entryOf, tableName, mayRecord, recordCheck, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
+import { allPassed, entryOf, readableTournaments, tableName, mayRecord, recordCheck, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
 
 const r = (name: string, ok: boolean, points = 0, skipped = false): CheckResult => ({ name, ok, message: "", points, ...(skipped && { skipped }) })
 
@@ -189,6 +189,36 @@ describe("tableName", () => {
   })
   it("replaces what is not a name", () => {
     for (const bad of [undefined, null, 5, { a: 1 }, ["x"], "", "   "]) expect(tableName(bad, "fallback")).toBe("fallback")
+  })
+})
+
+describe("allPassed", () => {
+  const line = (ok: boolean, points?: number): CheckResult => ({ name: "t", ok, message: "", ...(points !== undefined && { points }) })
+  it("is true only when every line passed", () => {
+    expect(allPassed([line(true, 10), line(true)])).toBe(true)
+    expect(allPassed([line(true, 10), line(false, 0)])).toBe(false)
+  })
+  it("is false for no lines at all", () => {
+    expect(allPassed([])).toBe(false)
+  })
+})
+
+describe("readableTournaments", () => {
+  const rules = (tournaments: Rules["tournaments"]): Rules => ({ files: {}, folders: {}, frozen: false, tournaments })
+  const student: Member = { level: "write", roles: [] }
+  const admin: Member = { level: "admin", roles: [] }
+  const all = () => true
+
+  it("gives the tables a member may read, sorted", () => {
+    const r = rules({ b: { private: false }, a: { private: false }, c: { private: true } })
+    expect(readableTournaments(student, r, all)).toEqual(["a", "b"])
+    expect(readableTournaments(admin, r, all)).toEqual(["a", "b", "c"])
+  })
+  it("leaves out a table this store has not opened: rules can be a moment behind the store", () => {
+    expect(readableTournaments(student, rules({ a: { private: false }, b: { private: false } }), (id) => id === "t:b")).toEqual(["b"])
+  })
+  it("keeps an id with a line break whole", () => {
+    expect(readableTournaments(student, rules({ "a\nb": { private: false } }), all)).toEqual(["a\nb"])
   })
 })
 

@@ -3,6 +3,7 @@
 // program (waiting for input(), an endless loop) never freezes the page.
 import { utf8Boundary } from "@/lib/cpp/wasi"
 import { arm, disarm } from "@/lib/python/deadline"
+import { SOLUTION_BOOT_MS } from "@/lib/python/limits"
 import { signalBuffer } from "@/lib/python/signal-buffer"
 import packagesSrc from "@/python/packages.py?raw"
 import checkerSrc from "@/python/checker.py?raw"
@@ -33,8 +34,6 @@ import {
 } from "./protocol"
 
 const MAX_OUTPUT_BYTES = 1_000_000
-/** How long a run waits for the solution's own Python to start; not part of its time limit. */
-const SOLUTION_BOOT_MS = 60_000
 
 // ---- network --------------------------------------------------------------
 

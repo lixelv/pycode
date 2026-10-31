@@ -2,7 +2,7 @@ import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, addLanguagesFor, createFile, deletePath, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, resetProject, startProject, STARTERS, stateOf, textOf } from "./project"
+import { addFiles, addLanguagesFor, createFile, deletePath, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -208,5 +208,19 @@ describe("project languages", () => {
     await openArchive(t, importZip(zipSync({ "notes.md": strToU8("# hi\n") })))
     expect(languagesOf(t)).toEqual(["python"])
     expect(needsLanguage(t)).toBe(false)
+  })
+})
+
+describe("testPathOf", () => {
+  it("maps solutions to their test file", () => {
+    expect(testPathOf("a/b.py")).toBe("a/b.test.py")
+    expect(testPathOf("a/b.cpp")).toBe("a/b.test.py")
+    expect(testPathOf("x.cc")).toBe("x.test.py")
+  })
+
+  it("gives null for tests, headers and other files", () => {
+    expect(testPathOf("t.test.py")).toBeNull()
+    expect(testPathOf("README.md")).toBeNull()
+    expect(testPathOf("lib.hpp")).toBeNull()
   })
 })

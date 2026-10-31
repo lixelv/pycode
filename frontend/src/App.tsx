@@ -439,14 +439,13 @@ function Workspace() {
   }, [doc])
   // ---- automatic checks: name.py against name.test.py, run in an admin's browser ----
   const [check, setCheck] = useState<CheckState | null>(null)
-  const testPath = testPathOf(active)
-  const hasTest = !!testPath && allFiles.includes(testPath)
+  const hasTest = testPathOf(active, allFiles) !== null
   const canCheck = !provider || provider.isAdmin || provider.adminOnline
 
   /** Runs the tests of `path` here (we are an admin, or alone). */
   const checkHere = useCallback(
     async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
-      const testFile = testPathOf(path)
+      const testFile = testPathOf(path, Object.keys(rulesOf(store).files))
       const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
       if (test === undefined) return { results: null, error: t("check.noTests") }
       try {

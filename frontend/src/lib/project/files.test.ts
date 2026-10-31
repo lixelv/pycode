@@ -212,15 +212,21 @@ describe("project languages", () => {
 })
 
 describe("testPathOf", () => {
-  it("maps solutions to their test file", () => {
-    expect(testPathOf("a/b.py")).toBe("a/b.test.py")
-    expect(testPathOf("a/b.cpp")).toBe("a/b.test.py")
-    expect(testPathOf("x.cc")).toBe("x.test.py")
+  const files = ["a/ivan/tri.py", "a/ivan/tri.test.py", "a/tri.test.py", "tri.test.py", "b/c/tri.py", "b/c/x.cpp", "x.test.py", "lib.hpp", "t.test.py", "README.md"]
+  it("takes the nearest test file", () => {
+    expect(testPathOf("a/ivan/tri.py", files)).toBe("a/ivan/tri.test.py")
+    expect(testPathOf("a/ivan/tri.py", files.filter((f) => f !== "a/ivan/tri.test.py"))).toBe("a/tri.test.py")
   })
-
+  it("goes up to the root", () => {
+    expect(testPathOf("b/c/tri.py", files)).toBe("tri.test.py")
+    expect(testPathOf("b/c/x.cpp", files)).toBe("x.test.py")
+  })
+  it("does not look in other folders", () => {
+    expect(testPathOf("z/y.py", ["q/y.test.py"])).toBeNull()
+  })
   it("gives null for tests, headers and other files", () => {
-    expect(testPathOf("t.test.py")).toBeNull()
-    expect(testPathOf("README.md")).toBeNull()
-    expect(testPathOf("lib.hpp")).toBeNull()
+    expect(testPathOf("t.test.py", files)).toBeNull()
+    expect(testPathOf("lib.hpp", ["lib.test.py"])).toBeNull()
+    expect(testPathOf("README.md", ["README.test.py"])).toBeNull()
   })
 })

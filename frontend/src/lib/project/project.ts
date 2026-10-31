@@ -62,11 +62,20 @@ const CPP_EXTENSIONS = ["cpp", "cc", "cxx", "h", "hpp"]
 
 export const isCpp = (path: string) => languageOf(path) === "cpp"
 
-/** The test file of a solution (`a/b.py`, `a/b.cpp` → `a/b.test.py`); null for anything else, headers included. */
-export function testPathOf(path: string): string | null {
+/**
+ * The test file of a solution: the nearest `b.test.py` for `a/b.py` or `a/b.cpp`, in its
+ * folder first, then up to the root. Null if there is none, and for anything but a solution (headers included).
+ */
+export function testPathOf(path: string, files: readonly string[]): string | null {
   if (isTest(path)) return null
   const match = /\.(py|cpp|cc|cxx)$/i.exec(path)
-  return match ? `${path.slice(0, match.index)}.test.py` : null
+  if (!match) return null
+  const name = `${path.slice(path.lastIndexOf("/") + 1, match.index)}.test.py`
+  for (let folder = parentOf(path); ; folder = parentOf(folder)) {
+    const candidate = folder ? `${folder}/${name}` : name
+    if (files.includes(candidate)) return candidate
+    if (!folder) return null
+  }
 }
 
 /** Which packages system a file uses; null when it has none. */

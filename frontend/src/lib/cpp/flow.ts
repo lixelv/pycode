@@ -176,7 +176,6 @@ class FlowBuilder {
     return { ok: true, nodes: this.nodes, edges: this.edges, groups: this.groups, truncated }
   }
 
-  /** Top-level code: functions and classes, also inside namespaces and templates. */
   /** Runs a step of the recursive descent, cut off past MAX_DEPTH. */
   nested<T>(fn: () => T): T {
     if (this.depth >= MAX_DEPTH) throw new Truncated()
@@ -188,6 +187,7 @@ class FlowBuilder {
     }
   }
 
+  /** Top-level code: functions and classes, also inside namespaces and templates. */
   declarations(n: Node, cls: string | null) {
     this.nested(() => this.declarationsIn(n, cls))
   }

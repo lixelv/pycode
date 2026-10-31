@@ -278,7 +278,7 @@ function Workspace() {
     else if (event.type === "debug") sharedRun(d).set("debug", event.state)
   }, [])
 
-  const runner = useRunner({ onRateLimited: (message) => toast.warning(message), onEvent: mirrorRun, warm: hasPython })
+  const runner = useRunner({ onRateLimited: (message) => toast.warning(message, { id: "rate-limited" }), onEvent: mirrorRun, warm: hasPython })
   const runnerRef = useRef(runner)
   useEffect(() => {
     runnerRef.current = runner

@@ -238,6 +238,8 @@ export function CodeEditor({
       options={{
         readOnly,
         readOnlyMessage: { value: t("editor.readOnly") },
+        // Monaco hides problems in a read-only editor by default; a student who only reads sees them too.
+        renderValidationDecorations: "on",
         fontFamily: "'Geist Mono Variable', ui-monospace, monospace",
         fontSize: 14,
         lineHeight: 22,

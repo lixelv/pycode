@@ -149,7 +149,7 @@ def _short(text: str) -> str:
     return text if len(text) <= MAX_MESSAGE else text[: MAX_MESSAGE - 1] + "…"
 
 
-def _failure(err: BaseException, tests: str) -> str:
+def _failure(err: BaseException, tests: str, language: str = "python") -> str:
     """What the student is told. Only the tests' own asserts carry text: the
     solution must not be able to send anything back through messages."""
     if isinstance(err, AssertionError):
@@ -168,16 +168,18 @@ def _failure(err: BaseException, tests: str) -> str:
         if isinstance(err, TimeLimitExceeded):
             return _short(f"time limit {limit:g} s exceeded: {used:.2f} s")
         return _short(f"memory limit {limit / 1e6:g} MB exceeded: {used / 1e6:.1f} MB")
-    # Fixed text or an integer: the program's output never gets here.
-    if isinstance(err, OutputLimitExceeded):
-        return "output limit exceeded"
-    if isinstance(err, ProgramNotStarted):
-        return "the program did not start"
-    if isinstance(err, ExitCodeError):
-        try:
-            return _short(f"exit code {int(err.code)}")
-        except BaseException:  # noqa: BLE001
-            return type(err).__name__
+    # Fixed text or an integer: the program's output never gets here. A Python solution
+    # never gets these from run(), but can reach the classes through sys.modules.
+    if language == "cpp":
+        if isinstance(err, OutputLimitExceeded):
+            return "output limit exceeded"
+        if isinstance(err, ProgramNotStarted):
+            return "the program did not start"
+        if isinstance(err, ExitCodeError):
+            try:
+                return _short(f"exit code {int(err.code)}")
+            except BaseException:  # noqa: BLE001
+                return type(err).__name__
     kind = type(err)
     return kind.__name__ if kind.__module__ == "builtins" else "error"
 
@@ -295,7 +297,7 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python") ->
     except SyntaxError as err:
         return [{"name": "tests", "ok": False, "message": _short(f"SyntaxError: {err.msg} (line {err.lineno})")}]
     except BaseException as err:  # noqa: BLE001 - any error in the test file is reported
-        return [{"name": "tests", "ok": False, "message": _failure(err, tests)}]
+        return [{"name": "tests", "ok": False, "message": _failure(err, tests, kind)}]
     results = []
     try:
         for name, fn in list(module.__dict__.items()):
@@ -307,7 +309,7 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python") ->
                 fn()
                 result = {"name": name, "ok": True, "message": ""}
             except BaseException as err:  # noqa: BLE001
-                result = {"name": name, "ok": False, "message": _failure(err, tests)}
+                result = {"name": name, "ok": False, "message": _failure(err, tests, kind)}
             results.append({**result, **_measured()})
     finally:
         sys.modules.pop("polycode_test", None)

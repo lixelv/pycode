@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type * as Y from "yjs"
 
 import { applyLoadFailures, installCppPackage, parseCppSpec, type CppPackage } from "@/lib/cpp/packages"
@@ -13,7 +13,14 @@ export function useCppPackages(shared: Y.Array<CppPackage>) {
   // Packages that are installed in the project but did not load here (offline…), keyed `repo@version`: shown as errors, not retried by every lint.
   const [failed, setFailed] = useState<Record<string, string>>({})
   const packages = useMemo(() => applyLoadFailures(stored, failed), [stored, failed])
-  const fail = useCallback((repo: string, version: string, error: string) => setFailed((f) => ({ ...f, [`${repo}@${version}`]: error })), [])
+  const current = useRef(shared)
+  // A lint of the previous project may still report here: `shared` tells it apart.
+  const fail = useCallback(
+    (repo: string, version: string, error: string) => {
+      if (current.current === shared) setFailed((f) => ({ ...f, [`${repo}@${version}`]: error }))
+    },
+    [shared],
+  )
   // Every key of the repo, whatever its version.
   const clearFailure = useCallback(
     (repo: string) => setFailed((f) => (Object.keys(f).some((k) => k.startsWith(`${repo}@`)) ? Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${repo}@`))) : f)),
@@ -21,6 +28,7 @@ export function useCppPackages(shared: Y.Array<CppPackage>) {
   )
 
   useEffect(() => {
+    current.current = shared
     // Another project or session: what failed to load there says nothing about this list.
     setFailed((f) => (Object.keys(f).length ? {} : f))
     const read = () => setPackages(shared.toArray())
@@ -79,11 +87,12 @@ export function useCppPackages(shared: Y.Array<CppPackage>) {
 
   const retry = useCallback(
     (repo: string) => {
-      const entry = stored.find((p) => p.repo === repo)
+      const entries = stored.filter((p) => p.repo === repo)
+      const entry = entries[0]
       if (!entry) return
       clearFailure(repo)
       // Installed in the project, only this browser failed to load it: the next lint loads it again, the shared list stays as it is.
-      if (entry.status === "installed") return
+      if (entries.some((p) => p.status === "installed")) return
       patch(repo, { status: "installing", error: undefined })
       void install(repo, entry.version ?? entry.ref)
     },

@@ -38,7 +38,7 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
           </div>
         )}
         {check.error && <div className="whitespace-pre-wrap p-2 text-[#ff6166]">{check.error}</div>}
-        {check.results?.length === 0 && <div className="p-2 text-console-muted">{t("check.none")}</div>}
+        {check.results?.length === 0 && !check.error && <div className="p-2 text-console-muted">{t("check.none")}</div>}
         <ul>
           {check.results?.map((r) => (
             <li key={r.name} className="flex items-start gap-2 rounded px-2 py-1">

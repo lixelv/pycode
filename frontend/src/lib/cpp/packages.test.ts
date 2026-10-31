@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { applyLoadFailures, fetchCppPackage, headerFiles, loadCppPackages, parseCppSpec, pickInclude, type CppPackage } from "./packages"
+import { applyLoadFailures, fetchCppPackage, headerFiles, installCppPackage, loadCppPackages, parseCppSpec, pickInclude, type CppPackage } from "./packages"
 
 describe("parseCppSpec", () => {
   it("parses owner/repo@ref", () => {
@@ -131,6 +131,29 @@ describe("loadCppPackages", () => {
     expect(result.includes).toEqual(["/packages/ok/lib/include"])
     expect(onFail).toHaveBeenCalledTimes(1)
     expect(onFail).toHaveBeenCalledWith("bad/lib", "1.0.0", expect.stringContaining("503"))
+  })
+
+  it("does not report an old rejection once a newer load holds that package", async () => {
+    const pkg = (repo: string): CppPackage => ({ repo, ref: "1.0.0", spec: `${repo}@1.0.0`, status: "installed", version: "1.0.0" })
+    const listing = (name: string) => json({ files: [{ name, size: 4 }] })
+    let failFirst!: () => void
+    stub({
+      "https://data.jsdelivr.com/v1/packages/gh/late/lib@1.0.0?structure=flat": () =>
+        new Promise<Response>((resolve) => {
+          failFirst = () => resolve(new Response("", { status: 503 }))
+        }) as unknown as Response,
+    })
+    const onFail = vi.fn()
+    const old = loadCppPackages([pkg("late/lib")], onFail)
+    await vi.waitFor(() => expect(failFirst).toBeDefined())
+    stub({
+      "https://data.jsdelivr.com/v1/packages/gh/late/lib@1.0.0?structure=flat": listing("/include/a.hpp"),
+      "https://cdn.jsdelivr.net/gh/late/lib@1.0.0/include/a.hpp": () => new Response("// a", { status: 200 }),
+    })
+    await installCppPackage("late/lib", "1.0.0")
+    failFirst()
+    await old
+    expect(onFail).not.toHaveBeenCalled()
   })
 })
 

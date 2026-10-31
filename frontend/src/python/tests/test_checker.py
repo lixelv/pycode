@@ -497,5 +497,20 @@ class CppExitStatus(CppChecks):
         self.assertEqual(result, {"stdout": "out", "memory": 7, "timedOut": False, "exitCode": 134, "failure": ""})
 
 
+
+class ForgedProgramErrors(unittest.TestCase):
+    SOURCE = "import sys\ndef test_a():\n    raise sys.modules['checker'].ExitCodeError(123)\n"
+
+    def run_kind(self, kind):
+        with tempfile.TemporaryDirectory() as project:
+            with open(os.path.join(project, "main.py"), "w") as f:
+                f.write("")
+            return checker.run_tests(project, "main.py", self.SOURCE, kind=kind)[0]["message"]
+
+    def test_only_a_cpp_solution_reports_them(self):
+        self.assertEqual(self.run_kind("python"), "error")
+        self.assertEqual(self.run_kind("cpp"), "exit code 123")
+
+
 if __name__ == "__main__":
     unittest.main()

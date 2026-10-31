@@ -1,5 +1,5 @@
 import { CornerDownLeft, Eraser, Square, X } from "lucide-react"
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react"
+import { memo, useEffect, useRef, type KeyboardEvent, type ReactNode } from "react"
 import type * as Y from "yjs"
 
 import { Button } from "@/components/ui/button"
@@ -115,6 +115,8 @@ export function ConsolePanel({
   }, [waiting])
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // Enter that confirms an IME candidate only finishes the composition.
+    if (e.nativeEvent.isComposing) return
     if (e.key === "Enter") {
       e.preventDefault()
       onInput(draft)
@@ -159,15 +161,7 @@ export function ConsolePanel({
       >
         <pre className="font-mono break-words whitespace-pre-wrap">
           {chunks.map((chunk, i) => (
-            <span
-              key={i}
-              className={cn(
-                chunk.kind === "stdin" && "font-semibold underline decoration-console-muted underline-offset-4",
-                chunk.kind === "system" && "text-console-muted",
-              )}
-            >
-              {chunk.kind === "stderr" ? <StderrText text={chunk.text} /> : chunk.text}
-            </span>
+            <ChunkText key={i} kind={chunk.kind} text={chunk.text} />
           ))}
           {waiting && (
             <span className="inline-flex items-baseline">
@@ -206,6 +200,20 @@ export function ConsolePanel({
     </section>
   )
 }
+
+// Memoised by value: the terminal is read anew each frame, and only its last chunk changes.
+const ChunkText = memo(function ChunkText({ kind, text }: Chunk) {
+  return (
+    <span
+      className={cn(
+        kind === "stdin" && "font-semibold underline decoration-console-muted underline-offset-4",
+        kind === "system" && "text-console-muted",
+      )}
+    >
+      {kind === "stderr" ? <StderrText text={text} /> : text}
+    </span>
+  )
+})
 
 function ConsoleButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (

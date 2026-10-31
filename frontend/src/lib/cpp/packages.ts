@@ -129,16 +129,17 @@ export async function loadCppPackages(list: CppPackage[], onFail?: (repo: string
       try {
         return { repo: p.repo, ...(await pending) }
       } catch (error) {
-        cache.delete(key)
+        // Reported at once, and only while this load is still the current one: a Retry or a new install may have replaced it.
+        if (cache.get(key) === pending) {
+          cache.delete(key)
+          onFail?.(p.repo, p.version!, error instanceof Error ? error.message : String(error))
+        }
         throw error
       }
     }),
   )
-  loaded.forEach((entry, i) => {
-    if (entry.status === "rejected") {
-      onFail?.(wanted[i].repo, wanted[i].version!, entry.reason instanceof Error ? entry.reason.message : String(entry.reason))
-      return
-    }
+  loaded.forEach((entry) => {
+    if (entry.status === "rejected") return
     const { repo, include, files } = entry.value
     for (const [path, text] of Object.entries(files)) result.files[`/packages/${repo}/${path}`] = text
     result.includes.push(include ? `/packages/${repo}/${include}` : `/packages/${repo}`)

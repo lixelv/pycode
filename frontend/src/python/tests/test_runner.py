@@ -126,5 +126,38 @@ class Arm(unittest.TestCase):
         self.assertEqual(self.events, ["program"])
 
 
+
+class SleepOutOfRange(unittest.TestCase):
+    def test_a_value_beyond_the_range_goes_to_the_real_sleep(self):
+        for seconds in (1e300, 10**30, -1e300, -(10**400), float("-inf")):
+            slept = []
+            runner.sliced_sleep(seconds, sleep=slept.append, check=lambda: None)
+            self.assertEqual(slept, [seconds])
+
+
+class InternalFrames(unittest.TestCase):
+    def test_frames_from_the_first_internal_one_are_cut(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lib = os.path.join(folder, "lib.py")
+            with open(lib, "w") as f:
+                f.write("def fail():\n    raise ValueError('x')\n")
+            scope = {}
+            exec(compile(open(lib).read(), lib, "exec"), scope)
+
+            def program():
+                scope["fail"]()
+
+            try:
+                program()
+            except ValueError as exc:
+                tb = runner.without_internal_frames(exc.__traceback__, folder)
+            names = []
+            while tb:
+                names.append(tb.tb_frame.f_code.co_name)
+                tb = tb.tb_next
+            self.assertEqual(names[-1], "program")
+            self.assertNotIn("fail", names)
+
+
 if __name__ == "__main__":
     unittest.main()

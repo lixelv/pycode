@@ -150,9 +150,16 @@ async function boot() {
   post({ type: "ready", python: py.runPython("import sys; sys.version.split()[0]") as string })
 }
 
+let eofRepeat = false
+
 /** Blocks the worker until the page sends a line (or EOF / Stop). */
 function readLine(): string | null {
   if (!buffers || !py) return null
+  // input() on a tty reads once more after an empty read: without this, Ctrl+D has to be pressed twice.
+  if (eofRepeat) {
+    eofRepeat = false
+    return null
+  }
   stdout.flush()
   stderr.flush()
   const { control, data } = buffers
@@ -164,7 +171,10 @@ function readLine(): string | null {
     py.checkInterrupt() // raises KeyboardInterrupt inside Python
     return null
   }
-  if (state === STDIN_EOF) return null
+  if (state === STDIN_EOF) {
+    eofRepeat = true
+    return null
+  }
   const length = Atomics.load(control, 1)
   return new TextDecoder().decode(data.slice(0, length))
 }

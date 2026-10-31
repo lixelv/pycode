@@ -69,6 +69,39 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
+def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> dict:
+    """Runs ``path`` with a fixed input for a tournament's check: {exitCode, memory}.
+
+    input() prompts are not printed, reading past ``stdin`` raises EOFError.
+    ``memory`` is the tracemalloc peak in bytes, 0 unless ``trace_memory``.
+    """
+    import io
+    import tracemalloc
+
+    lines = io.StringIO(stdin)
+
+    def fake_input(prompt=""):
+        line = lines.readline()
+        if not line:
+            raise EOFError("the program asked for more input than the test gave")
+        return line.rstrip("\n")
+
+    saved = builtins.input, sys.stdin
+    builtins.input, sys.stdin = fake_input, lines
+    memory = 0
+    if trace_memory:
+        tracemalloc.start()
+    try:
+        code = run_main(path, arm=arm)
+        if trace_memory:
+            memory = tracemalloc.get_traced_memory()[1]
+    finally:
+        if trace_memory and tracemalloc.is_tracing():
+            tracemalloc.stop()
+        builtins.input, sys.stdin = saved
+    return {"exitCode": code, "memory": memory}
+
+
 def without_internal_frames(tb, folder: str = os.path.dirname(os.path.abspath(__file__))):
     """Ends a traceback before our own wrappers (time.sleep), which mean nothing to a student."""
     head = tb

@@ -14,7 +14,7 @@ limits; ``None`` or ``0`` turns one off. A limit that is on is also measured
 and shown with the test's result.
 
 A C++ solution (``kind="cpp"``) is already compiled: its ``run()`` has the same
-limits and runs the program through the page (``_run_wasm``). Its output
+limits and runs the program through the page (``_run_outside``). Its output
 includes prompts, since they are ordinary ``cout``; input past the end of
 ``stdin`` is EOF. ``run()`` fails the test if the program exits non-zero, crashes,
 is cut by the output limit or does not start, whatever it printed.

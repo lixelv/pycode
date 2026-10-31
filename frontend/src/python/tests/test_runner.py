@@ -126,6 +126,73 @@ class Arm(unittest.TestCase):
         self.assertEqual(self.events, ["program"])
 
 
+class Batch(unittest.TestCase):
+    """run_batch runs a solution on a fixed stdin text, with no console."""
+
+    def setUp(self):
+        self.cwd = os.getcwd()
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.addCleanup(os.chdir, self.cwd)
+        self.path = list(sys.path)
+        self.addCleanup(setattr, sys, "path", self.path)
+        self.argv = sys.argv
+        self.addCleanup(setattr, sys, "argv", self.argv)
+        os.chdir(self.dir.name)
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def write(self, source):
+        with open("main.py", "w") as f:
+            f.write(source)
+
+    def run_batch(self, stdin, **kw):
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
+            return runner.run_batch("main.py", stdin, **kw)
+
+    def out(self):
+        return self.stdout.getvalue()
+
+    def test_prompt_is_not_printed_and_eof_is_an_error(self):
+        self.write('print(input("? "))\ninput()\n')
+        self.assertEqual(self.run_batch("x\n")["exitCode"], 1)
+        self.assertEqual(self.out(), "x\n")
+
+    def test_stdin_read_gets_the_text(self):
+        self.write("import sys\nprint(sys.stdin.read())\n")
+        self.run_batch("a\nb\n")
+        self.assertEqual(self.out(), "a\nb\n\n")
+
+    def test_exit_codes(self):
+        for source, code in (("import sys; sys.exit(3)", 3), ("raise ValueError", 1), ("pass", 0)):
+            self.write(source)
+            self.assertEqual(self.run_batch("")["exitCode"], code, source)
+
+    def test_traceback_does_not_reach_stdout(self):
+        self.write('raise ValueError("secret")\n')
+        self.assertEqual(self.run_batch("")["exitCode"], 1)
+        self.assertEqual(self.out(), "")
+
+    def test_memory_only_when_traced(self):
+        self.write("x = bytearray(10**7)")
+        self.assertGreaterEqual(self.run_batch("", trace_memory=True)["memory"], 10**7)
+        self.assertEqual(self.run_batch("")["memory"], 0)
+
+    def test_restores_input_and_stdin(self):
+        saved = builtins.input, sys.stdin
+        self.write("pass\n")
+        self.run_batch("")
+        self.assertEqual((builtins.input, sys.stdin), saved)
+
+    def test_arm_is_called_before_the_program(self):
+        events = []
+        self.write("import builtins; builtins.polycode_probe = 1")
+        self.addCleanup(lambda: hasattr(builtins, "polycode_probe") and delattr(builtins, "polycode_probe"))
+        self.run_batch("", arm=lambda: events.append(hasattr(builtins, "polycode_probe")))
+        self.assertEqual(events, [False])
+
 
 class SleepOutOfRange(unittest.TestCase):
     def test_a_value_beyond_the_range_goes_to_the_real_sleep(self):

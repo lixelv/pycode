@@ -4,6 +4,7 @@ import CppRunWorker from "@/workers/cpp-run.worker?worker"
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
   BATCH_NOT_STARTED,
+  BATCH_STARTED,
   DEBUG_COMMANDS,
   DEBUG_GO,
   STDIN_EOF,
@@ -19,6 +20,15 @@ import {
 } from "@/workers/protocol"
 
 type Listener = (event: RunnerEvent) => void
+
+/** A batch run that cannot happen: whoever waits on `result` learns it did not start. A result already given stays. */
+function failBatch(result: SharedArrayBuffer) {
+  const header = new Int32Array(result, 0, 5)
+  Atomics.compareExchange(header, 0, 0, BATCH_NOT_STARTED)
+  Atomics.store(header, BATCH_STARTED, 1)
+  Atomics.notify(header, BATCH_STARTED)
+  Atomics.notify(header, 0)
+}
 
 /**
  * Owns the Python runner worker: starting it, feeding input(), interrupting,
@@ -140,13 +150,22 @@ export class RunnerClient implements ProgramRunner {
     this.killWasm()
     const worker = new CppRunWorker()
     this.wasmWorker = worker
-    worker.onerror = () => {
-      // The worker failed to load: the test fails. A result it has already given stays.
-      const header = new Int32Array(result, 0, 4)
-      if (Atomics.compareExchange(header, 0, 0, BATCH_NOT_STARTED) !== 0) return
-      Atomics.notify(header, 0)
-    }
+    worker.onerror = () => failBatch(result) // the worker failed to load: the test fails
+    // A wasm program starts at once: its time counts from here.
+    const header = new Int32Array(result, 0, 5)
+    Atomics.store(header, BATCH_STARTED, 1)
+    Atomics.notify(header, BATCH_STARTED)
     worker.postMessage({ type: "batch", wasm, files, cwd, stdin, result })
+  }
+
+  /** A tournament's solution, one run in this interpreter; the answer goes straight into `result`. */
+  async batch(files: ProjectFiles, entry: string, specs: string[], stdin: string, traceMemory: boolean, result: SharedArrayBuffer) {
+    try {
+      await this.ready()
+      this.worker!.postMessage({ type: "batch", files, entry, specs, stdin, traceMemory, result })
+    } catch {
+      failBatch(result)
+    }
   }
 
   private killWasm() {
@@ -165,8 +184,8 @@ export class RunnerClient implements ProgramRunner {
       return await new Promise<CheckResult[]>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs)
         const off = this.on((event) => {
-          if (event.type === "run_wasm" && wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
-          if (event.type === "kill_wasm") this.killWasm()
+          if (event.type === "run_outside" && wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
+          if (event.type === "kill_outside") this.killWasm()
           if (event.type !== "checked" || event.id !== id) return
           clearTimeout(timer)
           off()

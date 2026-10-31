@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
+import { utf8Boundary } from "@/lib/cpp/wasi"
 import { arm, disarm } from "@/lib/python/deadline"
 import { signalBuffer } from "@/lib/python/signal-buffer"
 import packagesSrc from "@/python/packages.py?raw"
@@ -12,8 +13,10 @@ import { bootPyodide, hideSources, installSources, type PyodideInterface } from 
 import {
   BATCH_EXITED,
   BATCH_HEADER_BYTES,
+  BATCH_NOT_STARTED,
   BATCH_OUTPUT_LIMIT,
   BATCH_RESULT_BYTES,
+  BATCH_STARTED,
   DEBUG_COMMANDS,
   DEBUG_WAITING,
   STDIN_EOF,
@@ -129,6 +132,26 @@ const stderr = new Stream("stderr")
 let outputBytes = 0
 let outputLimited = false
 
+/** Where a batch run's stdout goes instead of the page; stderr is only counted. */
+class BatchOutput {
+  length = 0
+  private full = false
+  private bytes: Uint8Array
+  constructor(bytes: Uint8Array) {
+    this.bytes = bytes
+  }
+  write(data: Uint8Array) {
+    if (this.full) return
+    const room = this.bytes.length - this.length
+    this.full = data.length > room
+    const part = this.full ? data.subarray(0, utf8Boundary(data, room)) : data
+    this.bytes.set(part, this.length)
+    this.length += part.length
+  }
+}
+
+let sink: BatchOutput | null = null
+
 function countOutput(n: number) {
   outputBytes += n
   if (outputBytes > MAX_OUTPUT_BYTES && !outputLimited && buffers) {
@@ -152,8 +175,8 @@ async function boot() {
   polycode.runner.install_sleep()
   hideSources(py, "polycode")
 
-  py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
-  py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), stderr.write(b), b.length), isatty: true })
+  py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), sink ? sink.write(b) : stdout.write(b), b.length), isatty: true })
+  py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), sink ? undefined : stderr.write(b), b.length), isatty: true })
   py.setStdin({ stdin: readLine, isatty: true })
 
   post({ type: "ready", python: py.runPython("import sys; sys.version.split()[0]") as string })
@@ -164,6 +187,7 @@ let eofRepeat = false
 /** Blocks the worker until the page sends a line (or EOF / Stop). */
 function readLine(): string | null {
   if (!buffers || !py) return null
+  if (sink) return null // a batch run's input is run_batch's own: anything else reads EOF, never blocks
   // input() on a tty reads once more after an empty read: without this, Ctrl+D has to be pressed twice.
   if (eofRepeat) {
     eofRepeat = false
@@ -304,16 +328,16 @@ function writeProject(files: ProjectFiles) {
 
 // ---- check ------------------------------------------------------------------
 
-/** Runs the C++ solution through the page and blocks until it ends or its time is up. */
-function runOutside(stdin: string, timeoutMs: number) {
+/** Runs the solution through the page and blocks until it ends or its time is up. */
+function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean) {
   const result = new SharedArrayBuffer(BATCH_RESULT_BYTES)
-  const header = new Int32Array(result, 0, 4)
-  post({ type: "run_wasm", stdin, timeoutMs, result })
+  const header = new Int32Array(result, 0, 5)
+  post({ type: "run_outside", stdin, timeoutMs, traceMemory, result })
   const started = performance.now()
   const waited = Atomics.wait(header, 0, 0, timeoutMs)
   const elapsed = (performance.now() - started) / 1000
   if (waited === "timed-out") {
-    post({ type: "kill_wasm" })
+    post({ type: "kill_outside" })
     return { stdout: "", memory: 0, timedOut: true, exitCode: 0, failure: "", elapsed }
   }
   // TextDecoder refuses a view of shared memory: slice() copies it out.
@@ -354,6 +378,62 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   post({ type: "checked", id, results: list })
 }
 
+// ---- a tournament's solution ------------------------------------------------
+
+let batchPrepared = false
+
+/**
+ * One run of a tournament's solution, in an interpreter that never sees the tests.
+ * The header is always written: whoever waits on it must not wait for nothing.
+ */
+async function batch(req: Extract<RunnerRequest, { type: "batch" }>) {
+  if (!py || !buffers) return
+  const header = new Int32Array(req.result, 0, 5)
+  let state = BATCH_NOT_STARTED
+  let code = 1
+  let memory = 0
+  const output = new BatchOutput(new Uint8Array(req.result, BATCH_HEADER_BYTES))
+  try {
+    if (!batchPrepared) {
+      const missing = req.specs.filter((s) => !installed.has(s))
+      if (missing.length) await installPackages(missing)
+      await loadImported(req.files)
+      for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
+      batchPrepared = true
+    }
+    writeProject(req.files)
+    outputBytes = 0
+    outputLimited = false
+    sink = output
+    const startProgram = () => {
+      armInterrupts()
+      Atomics.store(header, BATCH_STARTED, 1)
+      Atomics.notify(header, BATCH_STARTED)
+      py?.checkInterrupt()
+    }
+    const proxy = polycode.runner.run_batch.callKwargs(req.entry, req.stdin, { arm: startProgram, trace_memory: req.traceMemory })
+    const result = proxy.toJs({ dict_converter: Object.fromEntries }) as { exitCode: number; memory: number }
+    proxy.destroy()
+    code = result.exitCode
+    memory = result.memory
+    state = BATCH_EXITED
+  } catch {
+    // Before the program: it did not start. After: it failed, like a crash.
+    if (Atomics.load(header, BATCH_STARTED)) state = BATCH_EXITED
+  }
+  if (outputLimited) state = BATCH_OUTPUT_LIMIT
+  sink = null
+  py.setInterruptBuffer(undefined as unknown as Uint8Array)
+  buffers.interrupt[0] = 0
+  header[1] = output.length
+  header[2] = memory
+  header[3] = code
+  Atomics.store(header, BATCH_STARTED, 1)
+  Atomics.notify(header, BATCH_STARTED)
+  Atomics.store(header, 0, state)
+  Atomics.notify(header, 0)
+}
+
 // ---- messages -------------------------------------------------------------
 
 // Requests are handled one at a time, in order.
@@ -382,6 +462,8 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
       await run(req.id, req.files, req.entry, req.specs, req.breakpoints)
     } else if (req.type === "check") {
       await check(req.id, req.files, req.solution, req.test, req.specs, req.cpp)
+    } else if (req.type === "batch") {
+      await batch(req)
     }
   })
 }

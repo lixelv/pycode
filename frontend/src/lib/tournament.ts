@@ -80,7 +80,15 @@ export function standings(results: Record<string, TournamentEntry>): Standing[] 
 
 /** A run counts only for a solution its author may change, against tests they may not. */
 export function mayRecord(member: Member, solution: string, testFile: string, rules: Rules): boolean {
+  if (!Object.hasOwn(rules.files, solution) || !Object.hasOwn(rules.files, testFile)) return false
   return fileAccess(member, solution, rules) === "write" && fileAccess(member, testFile, rules) !== "write"
+}
+
+const MAX_NAME = 40
+
+/** The name a student's awareness claims, as it goes into a document that stays: any JSON can be there. */
+export function tableName(claimed: unknown, fallback: string): string {
+  return typeof claimed === "string" && claimed.trim() ? claimed.slice(0, MAX_NAME) : fallback
 }
 
 /**

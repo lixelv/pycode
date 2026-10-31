@@ -21,6 +21,7 @@ import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
 import { LanguageDialog } from "@/components/language-dialog"
 import { NameDialog } from "@/components/name-dialog"
+import { TournamentPanel } from "@/components/tournament-panel"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
 import { Button } from "@/components/ui/button"
@@ -28,6 +29,7 @@ import { Kbd } from "@/components/ui/kbd"
 import { Toaster } from "@/components/ui/sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCollab } from "@/hooks/use-collab"
+import { useTournaments } from "@/hooks/use-tournaments"
 import { useCppPackages } from "@/hooks/use-cpp-packages"
 import { usePackages } from "@/hooks/use-packages"
 import { isBusy, RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
@@ -66,6 +68,7 @@ import {
   isCpp,
   testPathOf,
   ensureTournament,
+  tournamentsOf,
   textOf,
   type ProjectLanguage,
 } from "@/lib/project/project"
@@ -74,7 +77,7 @@ import { cppClient, useCppStatus } from "@/lib/cpp/client"
 import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
 import { nameFor } from "@/lib/collab/identity"
 import { fileAccess, type Member } from "@/lib/project/access"
-import { maxPoints, recordCheck } from "@/lib/tournament"
+import { maxPoints, recordCheck, tableName } from "@/lib/tournament"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { serial } from "@/lib/queue"
@@ -376,7 +379,7 @@ function Workspace() {
 
   // Web pages and scripts run in a sandboxed frame (see components/web-preview.tsx).
   const [webRun, setWebRun] = useState<WebRun | null>(null)
-  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
+  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug" | "tournament">("console")
   const webStarted = useRef(0)
   const lastEntry = useRef<string | null>(null)
   const startRun = useCallback((debug: boolean) => {
@@ -452,7 +455,6 @@ function Workspace() {
       const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
       if (test === undefined) return { results: null, error: t("check.noTests") }
       const finished = ({ results, tournament }: CheckOutcome) => {
-        if (tournament) ensureTournament(store, tournament.id, tournament.private)
         return { results, testFile: testFile!, tournament: tournament && { ...tournament, max: maxPoints(results) } }
       }
       try {
@@ -473,6 +475,7 @@ function Workspace() {
   const recordIn = useCallback(
     (path: string, done: Awaited<ReturnType<typeof checkHere>>, who: { userId: string; name: string }, member: Member | null) => {
       if (!done.tournament || !done.results || !done.testFile) return false
+      if (!tournamentsOf(store).has(done.tournament.id)) return true // the test file's author may not declare tables
       return recordCheck(store.doc(`t:${done.tournament.id}`), done.results, path, done.testFile, who, member, rulesOf(store), Date.now())
     },
     [store],
@@ -490,6 +493,7 @@ function Workspace() {
       return
     }
     const done = await checkHere(active)
+    if (done.tournament) ensureTournament(store, done.tournament.id, done.tournament.private)
     // In a session an admin's own check is only a try: the table is for students' runs.
     const userId = collab.me ?? "local"
     const unrecorded = provider ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
@@ -512,8 +516,9 @@ function Workspace() {
         return
       }
       if (signal.type !== "check" || !provider.isAdmin) return
-      // Only for a solution the student may see.
-      if (fileAccess(from, signal.path, rulesOf(store)) === "none") return
+      // Only for a real file (not another spelling of its path) the student may see.
+      const rules = rulesOf(store)
+      if (!Object.hasOwn(rules.files, signal.path) || fileAccess(from, signal.path, rules) === "none") return
       // Each check starts a whole Python: one at a time, and at most one per student every few seconds.
       const now = Date.now()
       if (now - (lastCheck.current.get(signal.from) ?? 0) < CHECK_COOLDOWN_MS) {
@@ -526,16 +531,25 @@ function Workspace() {
         .then((r) => {
           // After the check: the student's role may have changed while it waited its turn.
           const member = provider.memberOf(signal.from) ?? from
-          const name = (provider.awareness.getStates().get(signal.from)?.user as { name?: string } | undefined)?.name ?? nameFor(from.userId)
+          const name = tableName((provider.awareness.getStates().get(signal.from)?.user as { name?: unknown } | undefined)?.name, nameFor(from.userId))
+          // A test file a student can change must not create tables or change who sees them.
+          if (r.tournament && r.testFile && fileAccess(member, r.testFile, rulesOf(store)) !== "write") ensureTournament(store, r.tournament.id, r.tournament.private)
           const unrecorded = recordIn(signal.path, r, { userId: from.userId, name }, member)
           provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error, tournament: r.tournament, unrecorded })
         })
     })
   }, [provider, store, checkHere, t, recordIn])
 
+  const tournaments = useTournaments(store, access)
+  // The table is gone (Reset, an opened archive, it became private): back to the console.
+  useEffect(() => {
+    if (lowerTab === "tournament" && !tournaments.length) setLowerTab("console")
+  }, [lowerTab, tournaments.length])
+
   const lowerTabList = [
     ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),
     ...(check ? [["tests", t("check.tab")] as const] : []),
+    ...(tournaments.length ? [["tournament", t("tournament.tab")] as const] : []),
     ...(sharedConsole.debugging ? [["debug", t("debug.tab")] as const] : []),
     ["console", t("console.title")] as const,
   ]
@@ -1105,6 +1119,7 @@ function Workspace() {
                     </div>
                   )}
                   {check && lowerTab === "tests" && <CheckResults check={check} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
+                  {tournaments.length > 0 && lowerTab === "tournament" && <TournamentPanel tournaments={tournaments} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
                   {sharedConsole.debugging && lowerTab === "debug" && (
                     <DebugPanel
                       state={consoleActive ? sharedConsole.debug : null}
@@ -1122,7 +1137,7 @@ function Workspace() {
                   <div
                     className={cn(
                       "h-full",
-                      ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests") || (sharedConsole.debugging && lowerTab === "debug")) && "hidden",
+                      ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests") || (tournaments.length > 0 && lowerTab === "tournament") || (sharedConsole.debugging && lowerTab === "debug")) && "hidden",
                     )}
                   >
                   <ConsolePanel
@@ -1155,7 +1170,7 @@ function Workspace() {
             <span className={cn("size-1.5 rounded-full", errors > 0 ? "bg-[#ff6166]" : "bg-[#62c073]")} />
             {errors === 0 ? t("footer.noErrors") : errors === 1 ? t("footer.error") : t("footer.errors", { n: errors })}
           </span>
-          {!consoleOpen && (sharedConsole.chunks.length > 0 || runner.runCount > 0) && (
+          {!consoleOpen && (sharedConsole.chunks.length > 0 || runner.runCount > 0 || tournaments.length > 0) && (
             <button onClick={() => setConsoleOpen(true)} className="inline-flex items-center gap-1 hover:text-console-foreground">
               <TerminalSquare className="size-3" /> {t("footer.console")}
             </button>

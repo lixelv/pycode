@@ -4,7 +4,7 @@ import * as Y from "yjs"
 import type { CheckResult } from "@/workers/protocol"
 import type { Member, Rules } from "./project/access"
 import type { FileMeta } from "./project/store"
-import { entryOf, mayRecord, recordCheck, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
+import { entryOf, tableName, mayRecord, recordCheck, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
 
 const r = (name: string, ok: boolean, points = 0, skipped = false): CheckResult => ({ name, ok, message: "", points, ...(skipped && { skipped }) })
 
@@ -158,3 +158,37 @@ describe("recordCheck", () => {
     expect(resultsOf(doc).get("u1/tri")).toEqual({ name: "Ivan", score: 40, max: 40, passed: ["test_a", "test_b"], at: 5 })
   })
 })
+
+describe("mayRecord and paths that are not files", () => {
+  const rules: Rules = {
+    files: { "tri.py": { id: "a", kind: "text", size: 0, protected: true }, "tri.test.py": { id: "t", kind: "text", size: 0, hidden: true } },
+    folders: {},
+    frozen: false,
+    tournaments: {},
+  }
+  const writer: Member = { level: "write", roles: [] }
+
+  it("does not take another spelling of a protected file for a free one", () => {
+    expect(mayRecord(writer, "./tri.py", "tri.test.py", rules)).toBe(false)
+  })
+
+  it("refuses a solution or a test that does not exist", () => {
+    expect(mayRecord(writer, "nothing.py", "tri.test.py", rules)).toBe(false)
+    const open: Rules = { ...rules, files: { ...rules.files, "free.py": { id: "f", kind: "text", size: 0 } } }
+    expect(mayRecord(writer, "free.py", "tri.test.py", open)).toBe(true)
+    expect(mayRecord(writer, "free.py", "no.test.py", open)).toBe(false)
+  })
+})
+
+describe("tableName", () => {
+  it("keeps a plain name", () => {
+    expect(tableName("Ann", "fallback")).toBe("Ann")
+  })
+  it("cuts a long one", () => {
+    expect(tableName("x".repeat(5000), "fallback")).toBe("x".repeat(40))
+  })
+  it("replaces what is not a name", () => {
+    for (const bad of [undefined, null, 5, { a: 1 }, ["x"], "", "   "]) expect(tableName(bad, "fallback")).toBe("fallback")
+  })
+})
+

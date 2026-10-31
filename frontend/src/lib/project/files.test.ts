@@ -2,7 +2,7 @@ import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, addLanguagesFor, createFile, deletePath, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf } from "./project"
+import { addFiles, addLanguagesFor, createFile, deletePath, ensureTournament, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, replaceProject, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf, tournamentsOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -228,5 +228,36 @@ describe("testPathOf", () => {
     expect(testPathOf("t.test.py", files)).toBeNull()
     expect(testPathOf("lib.hpp", ["lib.test.py"])).toBeNull()
     expect(testPathOf("README.md", ["README.test.py"])).toBeNull()
+  })
+})
+
+describe("tournaments", () => {
+  it("reset and replace clear the tournaments", () => {
+    const s = new ProjectStore(false)
+    tournamentsOf(s).set("a", { private: false })
+    resetProject(s)
+    expect(tournamentsOf(s).size).toBe(0)
+    tournamentsOf(s).set("b", { private: true })
+    replaceProject(s, { "x.py": "" })
+    expect(tournamentsOf(s).size).toBe(0)
+  })
+
+  it("ensureTournament writes when absent or when the flag changes", () => {
+    const s = new ProjectStore(false)
+    ensureTournament(s, "a", false)
+    expect(tournamentsOf(s).get("a")).toEqual({ private: false })
+    ensureTournament(s, "a", true)
+    expect(tournamentsOf(s).get("a")).toEqual({ private: true })
+  })
+
+  it("ensureTournament does not touch the map when nothing changes", () => {
+    const s = new ProjectStore(false)
+    ensureTournament(s, "a", true)
+    let calls = 0
+    tournamentsOf(s).observe(() => calls++)
+    ensureTournament(s, "a", true)
+    expect(calls).toBe(0)
+    ensureTournament(s, "a", false)
+    expect(calls).toBe(1)
   })
 })

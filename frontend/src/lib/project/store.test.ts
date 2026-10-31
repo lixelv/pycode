@@ -62,6 +62,17 @@ describe("ProjectStore", () => {
     expect(snapshotFiles(s)).toEqual({ "new.py": "n" })
   })
 
+  it("opens a tournament's document when it appears in the structure and drops it with the entry", () => {
+    const s = new ProjectStore(false)
+    const tournaments = s.structure.getMap<{ private: boolean }>("tournaments")
+    tournaments.set("abc", { private: false })
+    expect(s.has("t:abc")).toBe(true)
+    expect(s.ids()).toContain("t:abc")
+    tournaments.delete("abc")
+    expect(s.ids()).not.toContain("t:abc")
+    expect(s.has("t:abc")).toBe(false)
+  })
+
   it("gives every document the same client id", () => {
     const s = new ProjectStore(false)
     createFile(s, "x.py", "")

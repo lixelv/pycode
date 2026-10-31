@@ -25,6 +25,8 @@ export interface Rules {
   /** Folder path -> role name: only that role (and admins) may see inside. */
   folders: Record<string, string>
   frozen: boolean
+  /** Tournament id -> whether its table is hidden from students. */
+  tournaments: Record<string, { private: boolean }>
 }
 
 export const RESERVED = ".polycode.env"
@@ -57,6 +59,10 @@ export function docAccess(m: Member, docId: string, r: Rules): Access {
     const id = docId.slice(2)
     const path = Object.keys(r.files).find((p) => r.files[p].id === id)
     return path === undefined ? "none" : fileAccess(m, path, r)
+  }
+  if (docId.startsWith("t:")) {
+    const tournament = r.tournaments[docId.slice(2)]
+    return tournament && !tournament.private ? "read" : "none"
   }
   return "none"
 }

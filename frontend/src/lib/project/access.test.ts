@@ -16,6 +16,7 @@ const rules = (over: Partial<Rules> = {}): Rules => ({
   },
   folders: { "s/ivan": "ivan" },
   frozen: false,
+  tournaments: {},
   ...over,
 })
 
@@ -89,6 +90,24 @@ describe("docAccess", () => {
     expect(docAccess(writer, "f:tt", rules())).toBe("none")
     expect(docAccess(ivan, "f:i", rules())).toBe("write")
     expect(docAccess(writer, "f:unknown", rules())).toBe("none")
+  })
+})
+
+describe("docAccess for tournaments", () => {
+  const withTournaments = rules({ tournaments: { open: { private: false }, closed: { private: true } } })
+
+  it("opens a public tournament to everyone for reading", () => {
+    expect(docAccess(reader, "t:open", withTournaments)).toBe("read")
+    expect(docAccess(writer, "t:open", withTournaments)).toBe("read")
+  })
+
+  it("hides a private or unknown tournament from members", () => {
+    expect(docAccess(reader, "t:closed", withTournaments)).toBe("none")
+    expect(docAccess(reader, "t:unknown", withTournaments)).toBe("none")
+  })
+
+  it("lets an admin write", () => {
+    expect(docAccess(admin, "t:closed", withTournaments)).toBe("write")
   })
 })
 

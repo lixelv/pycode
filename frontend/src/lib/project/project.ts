@@ -32,7 +32,16 @@ export function rulesOf(s: ProjectStore): Rules {
     files: metasOf(s).toJSON() as Record<string, FileMeta>,
     folders: foldersOf(s).toJSON() as Record<string, string>,
     frozen: !!stateOf(s).get("frozen"),
+    tournaments: tournamentsOf(s).toJSON() as Rules["tournaments"],
   }
+}
+
+export const tournamentsOf = (s: ProjectStore) => s.structure.getMap<{ private: boolean }>("tournaments")
+
+/** Declares a tournament's table, or changes who sees it. */
+export function ensureTournament(s: ProjectStore, id: string, isPrivate: boolean) {
+  const tournaments = tournamentsOf(s)
+  if (tournaments.get(id)?.private !== isPrivate) tournaments.set(id, { private: isPrivate })
 }
 
 export const foldersOf = (s: ProjectStore) => s.structure.getMap<string>("folders")
@@ -276,6 +285,7 @@ export function replaceProject(
     const cpp = cppPackagesOf(s)
     cpp.delete(0, cpp.length)
     cpp.push(cppPackages)
+    tournamentsOf(s).clear()
   })
   for (const [id, content] of fresh) if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
   s.runtime.transact(() => {

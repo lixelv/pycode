@@ -19,6 +19,7 @@ export interface FileMeta {
  *   runtime    terminal, run, debug
  *   board      the whiteboard
  *   f:<id>     one text file ("t": Y.Text)
+ *   t:<id>     one tournament's table (lib/tournament.ts)
  * All of them use the same client id, so "who did this" is one number.
  */
 export class ProjectStore {
@@ -38,6 +39,7 @@ export class ProjectStore {
     this.board = this.open("board")
     const metas = this.structure.getMap<FileMeta>("files")
     metas.observe(() => this.follow())
+    this.structure.getMap("tournaments").observe(() => this.follow())
     this.ready = Promise.all([...this.stores.values()].map((p) => p.whenSynced)).then(async () => {
       this.follow()
       await Promise.all([...this.stores.values()].map((p) => p.whenSynced))
@@ -91,15 +93,16 @@ export class ProjectStore {
     return doc
   }
 
-  /** Text documents follow structure.files: one per text file, dropped with the file. */
+  /** Text documents follow structure.files, tables structure.tournaments: one each, dropped with their entry. */
   private follow() {
     const live = new Set<string>()
     this.structure.getMap<FileMeta>("files").forEach((meta) => {
       if (meta.kind === "text") live.add(`f:${meta.id}`)
     })
+    for (const id of this.structure.getMap("tournaments").keys()) live.add(`t:${id}`)
     for (const id of live) if (!this.docs.has(id)) this.open(id)
     for (const [id, doc] of this.docs) {
-      if (!id.startsWith("f:") || live.has(id)) continue
+      if ((!id.startsWith("f:") && !id.startsWith("t:")) || live.has(id)) continue
       this.docs.delete(id)
       const store = this.stores.get(id)
       this.stores.delete(id)

@@ -13,6 +13,7 @@ import { docAccess, fileAccess, type Level, type Member } from "@/lib/project/ac
 import { getBlob, putBlob, sha256 } from "@/lib/project/blobs"
 import { metasOf, rulesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
+import type { CheckTournamentInfo } from "@/lib/tournament"
 import type { CheckResult } from "@/workers/protocol"
 
 import { colorFor, nameFor } from "./identity"
@@ -45,7 +46,7 @@ export type Signal =
   | { type: "stop"; to: number }
   /** Asks an admin to check a solution against its hidden tests. */
   | { type: "check"; to: number; from: number; path: string }
-  | { type: "check-result"; to: number; path: string; results: CheckResult[]; error?: string }
+  | { type: "check-result"; to: number; path: string; results: CheckResult[]; error?: string; tournament?: CheckTournamentInfo; unrecorded?: boolean }
 
 export type ProviderStatus = "connecting" | "synced" | "offline" | "ended"
 export type LinkMode = "direct" | "relay"

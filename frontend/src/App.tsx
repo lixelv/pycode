@@ -65,18 +65,21 @@ import {
   stateOf,
   isCpp,
   testPathOf,
+  ensureTournament,
   textOf,
   type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { cppClient, useCppStatus } from "@/lib/cpp/client"
 import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
-import { fileAccess } from "@/lib/project/access"
+import { nameFor } from "@/lib/collab/identity"
+import { fileAccess, type Member } from "@/lib/project/access"
+import { maxPoints, recordCheck } from "@/lib/tournament"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
-import type { DebugCommand } from "@/workers/protocol"
+import type { CheckOutcome, DebugCommand } from "@/workers/protocol"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
 import { memberLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
@@ -444,22 +447,35 @@ function Workspace() {
 
   /** Runs the tests of `path` here (we are an admin, or alone). */
   const checkHere = useCallback(
-    async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
+    async (path: string): Promise<Pick<CheckState, "results" | "error" | "tournament"> & { testFile?: string }> => {
       const testFile = testPathOf(path, Object.keys(rulesOf(store).files))
       const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
       if (test === undefined) return { results: null, error: t("check.noTests") }
+      const finished = ({ results, tournament }: CheckOutcome) => {
+        if (tournament) ensureTournament(store, tournament.id, tournament.private)
+        return { results, testFile: testFile!, tournament: tournament && { ...tournament, max: maxPoints(results) } }
+      }
       try {
         const files = await projectFiles(store, provider, path)
-        if (!isCpp(path)) return await new RunnerClient().check(files, path, test, pkgs.activeSpecs)
+        if (!isCpp(path)) return finished(await new RunnerClient().check(files, path, test, pkgs.activeSpecs))
         const { wasm, log } = await cppClient.compile(files, path, await loadCppPackages(cppPackages, cppPkgs.fail))
         if (!wasm) return { results: null, error: t("check.compileFailed", { log: log.split("\n").slice(0, 5).join("\n") }) }
-        return await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm)
+        return finished(await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm))
       } catch (err) {
         const message = (err as Error).message
         return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }
       }
     },
     [store, provider, pkgs.activeSpecs, t, cppPackages, cppPkgs.fail],
+  )
+
+  /** Puts a finished check into its tournament's table; true if it was refused. */
+  const recordIn = useCallback(
+    (path: string, done: Awaited<ReturnType<typeof checkHere>>, who: { userId: string; name: string }, member: Member | null) => {
+      if (!done.tournament || !done.results || !done.testFile) return false
+      return recordCheck(store.doc(`t:${done.tournament.id}`), done.results, path, done.testFile, who, member, rulesOf(store), Date.now())
+    },
+    [store],
   )
 
   const startCheck = useCallback(async () => {
@@ -473,8 +489,12 @@ function Workspace() {
       else provider.signal({ type: "check", to, from: provider.clientID, path: active })
       return
     }
-    setCheck({ path: active, ...(await checkHere(active)) })
-  }, [hasTest, canRun, active, provider, checkHere, t])
+    const done = await checkHere(active)
+    // In a session an admin's own check is only a try: the table is for students' runs.
+    const userId = collab.me ?? "local"
+    const unrecorded = provider ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
+    setCheck({ path: active, ...done, unrecorded })
+  }, [hasTest, canRun, active, provider, checkHere, t, collab.me, recordIn])
 
   const checks = useRef(serial())
   const lastCheck = useRef(new Map<number, number>())
@@ -486,7 +506,7 @@ function Workspace() {
       if (signal.type === "check-result" && from.level !== "admin") return
       if (signal.type === "check" && !from.clients.has(signal.from)) return
       if (signal.type === "check-result") {
-        setCheck({ path: signal.path, results: signal.results, error: signal.error })
+        setCheck({ path: signal.path, results: signal.results, error: signal.error, tournament: signal.tournament, unrecorded: signal.unrecorded })
         setConsoleOpen(true)
         setLowerTab("tests")
         return
@@ -503,9 +523,15 @@ function Workspace() {
       lastCheck.current.set(signal.from, now)
       void checks
         .current(() => checkHere(signal.path))
-        .then((r) => provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error }))
+        .then((r) => {
+          // After the check: the student's role may have changed while it waited its turn.
+          const member = provider.memberOf(signal.from) ?? from
+          const name = (provider.awareness.getStates().get(signal.from)?.user as { name?: string } | undefined)?.name ?? nameFor(from.userId)
+          const unrecorded = recordIn(signal.path, r, { userId: from.userId, name }, member)
+          provider.signal({ type: "check-result", to: signal.from, path: signal.path, results: r.results ?? [], error: r.error, tournament: r.tournament, unrecorded })
+        })
     })
-  }, [provider, store, checkHere, t])
+  }, [provider, store, checkHere, t, recordIn])
 
   const lowerTabList = [
     ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),

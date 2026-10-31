@@ -4,12 +4,16 @@ import type { ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
+import type { CheckTournamentInfo } from "@/lib/tournament"
 import type { CheckResult } from "@/workers/protocol"
 
 export interface CheckState {
   path: string
   results: CheckResult[] | null // null: still checking
   error?: string
+  tournament?: CheckTournamentInfo
+  /** A tournament's run that did not go into the table. */
+  unrecorded?: boolean
 }
 
 /** The result of checking a solution: one line per test, green or red. */

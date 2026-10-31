@@ -41,9 +41,9 @@ export function taskOf(testPath: string): string {
 
 export const maxPoints = (results: CheckResult[]) => results.reduce((sum, r) => sum + (r.points ?? 0), 0)
 
-/** What a run earned; null for a file without tests, which earns no line in the table. */
+/** What a run earned; null for a file without tests or with an error (its one line has no points), which earn no line in the table. */
 export function entryOf(results: CheckResult[], name: string, at: number): TournamentEntry | null {
-  if (!results.length) return null
+  if (!results.length || results.some((r) => r.points === undefined)) return null
   const passed = results.filter((r) => r.ok)
   return { name, score: maxPoints(passed), max: maxPoints(results), passed: passed.map((r) => r.name), at }
 }
@@ -81,4 +81,25 @@ export function standings(results: Record<string, TournamentEntry>): Standing[] 
 /** A run counts only for a solution its author may change, against tests they may not. */
 export function mayRecord(member: Member, solution: string, testFile: string, rules: Rules): boolean {
   return fileAccess(member, solution, rules) === "write" && fileAccess(member, testFile, rules) !== "write"
+}
+
+/**
+ * Puts a run into the table. `member` is who asked for it; null without a session, where it is
+ * our own project. True if the run was refused: the student should know it did not count.
+ */
+export function recordCheck(
+  doc: Y.Doc,
+  results: CheckResult[],
+  solution: string,
+  testFile: string,
+  who: { userId: string; name: string },
+  member: Member | null,
+  rules: Rules,
+  at: number,
+): boolean {
+  const entry = entryOf(results, who.name, at)
+  if (!entry) return false
+  if (member && !mayRecord(member, solution, testFile, rules)) return true
+  recordRun(doc, who.userId, taskOf(testFile), entry)
+  return false
 }

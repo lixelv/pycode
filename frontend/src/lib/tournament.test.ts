@@ -4,7 +4,7 @@ import * as Y from "yjs"
 import type { CheckResult } from "@/workers/protocol"
 import type { Member, Rules } from "./project/access"
 import type { FileMeta } from "./project/store"
-import { entryOf, mayRecord, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
+import { entryOf, mayRecord, recordCheck, recordRun, resultsOf, standings, taskOf, type TournamentEntry } from "./tournament"
 
 const r = (name: string, ok: boolean, points = 0, skipped = false): CheckResult => ({ name, ok, message: "", points, ...(skipped && { skipped }) })
 
@@ -66,5 +66,95 @@ describe("mayRecord", () => {
     expect(mayRecord(ivan, "s/ivan/a.py", "s/a.test.py", rules({ protected: true }))).toBe(false)
     const insideOwnFolder: Rules = { ...rules(), files: { "s/ivan/a.py": meta("a"), "s/ivan/a.test.py": meta("t") } }
     expect(mayRecord(ivan, "s/ivan/a.py", "s/ivan/a.test.py", insideOwnFolder)).toBe(false) // can change the test
+  })
+})
+
+describe("entryOf and an error of the test file", () => {
+  it("makes no entry: the file's one line has no points", () => {
+    expect(entryOf([{ name: "tests", ok: false, message: "points(amount): amount is a positive number" }], "Ann", 7)).toBeNull()
+  })
+})
+
+describe("recordCheck", () => {
+  const meta = (id: string, extra: Partial<FileMeta> = {}): FileMeta => ({ id, kind: "text", size: 0, ...extra })
+  const rules = (files: Record<string, FileMeta>, extra: Partial<Rules> = {}): Rules => ({
+    files,
+    folders: { "s/ivan": "ivan", "s/petr": "petr" },
+    frozen: false,
+    tournaments: {},
+    ...extra,
+  })
+  // Hidden tests at the root, a solution in each student's own folder.
+  const base = rules({
+    "s/ivan/tri.py": meta("a"),
+    "s/petr/tri.py": meta("b"),
+    "tri.test.py": meta("t", { hidden: true }),
+    "s/lab.test.py": meta("l", { hidden: true }),
+  })
+  const ivan: Member = { level: "read", roles: ["ivan"] }
+  const who = { userId: "u1", name: "Ivan" }
+  const results = [r("test_a", true, 10), r("test_b", false, 30)]
+
+  it("records a student's run under userId/task and says it was recorded", () => {
+    const doc = new Y.Doc()
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, ivan, base, 5)).toBe(false)
+    expect(resultsOf(doc).toJSON()).toEqual({ "u1/tri": { name: "Ivan", score: 10, max: 40, passed: ["test_a"], at: 5 } })
+  })
+
+  it("takes the task from the test file, wherever it lies", () => {
+    const doc = new Y.Doc()
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "s/lab.test.py", who, ivan, base, 5)).toBe(false)
+    expect(Object.keys(resultsOf(doc).toJSON())).toEqual(["u1/lab"])
+  })
+
+  it("refuses a member who has no access to the solution", () => {
+    const doc = new Y.Doc()
+    const petr: Member = { level: "read", roles: ["petr"] }
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, petr, base, 5)).toBe(true)
+    const writer: Member = { level: "write", roles: [] } // a public-files writer without the folder's role
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, writer, base, 5)).toBe(true)
+    expect(resultsOf(doc).size).toBe(0)
+  })
+
+  it("refuses a solution the member may read but not change", () => {
+    const doc = new Y.Doc()
+    const frozen = { ...base, frozen: true }
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, ivan, frozen, 5)).toBe(true)
+    expect(resultsOf(doc).size).toBe(0)
+  })
+
+  it("refuses a member who can change the test", () => {
+    const doc = new Y.Doc()
+    const open = rules({ "s/ivan/tri.py": meta("a"), "tri.test.py": meta("t") }) // a public test
+    const writer: Member = { level: "write", roles: ["ivan"] }
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, writer, open, 5)).toBe(true)
+    const inside = rules({ "s/ivan/tri.py": meta("a"), "s/ivan/tri.test.py": meta("t") })
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "s/ivan/tri.test.py", who, ivan, inside, 5)).toBe(true)
+    const admin: Member = { level: "admin", roles: [] }
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, admin, base, 5)).toBe(true)
+    expect(resultsOf(doc).size).toBe(0)
+  })
+
+  it("records without a session whatever the rules say", () => {
+    const doc = new Y.Doc()
+    const nothing = rules({ "s/ivan/tri.py": meta("a", { protected: true }), "tri.test.py": meta("t") }, { frozen: true })
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, null, nothing, 5)).toBe(false)
+    expect(resultsOf(doc).get("u1/tri")).toEqual({ name: "Ivan", score: 10, max: 40, passed: ["test_a"], at: 5 })
+  })
+
+  it("records nothing for a file without tests", () => {
+    const doc = new Y.Doc()
+    expect(recordCheck(doc, [], "s/ivan/tri.py", "tri.test.py", who, ivan, base, 5)).toBe(false)
+    expect(recordCheck(doc, [], "s/ivan/tri.py", "tri.test.py", who, null, base, 5)).toBe(false)
+    expect(resultsOf(doc).size).toBe(0)
+  })
+
+  it("keeps the first run when a later one is worse, and says it was not refused", () => {
+    const doc = new Y.Doc()
+    const good = [r("test_a", true, 10), r("test_b", true, 30)]
+    expect(recordCheck(doc, good, "s/ivan/tri.py", "tri.test.py", who, ivan, base, 5)).toBe(false)
+    expect(recordCheck(doc, results, "s/ivan/tri.py", "tri.test.py", who, ivan, base, 9)).toBe(false)
+    expect(recordCheck(doc, good, "s/ivan/tri.py", "tri.test.py", who, ivan, base, 12)).toBe(false) // equal: `at` stays
+    expect(resultsOf(doc).get("u1/tri")).toEqual({ name: "Ivan", score: 40, max: 40, passed: ["test_a", "test_b"], at: 5 })
   })
 })

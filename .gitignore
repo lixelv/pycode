@@ -10,3 +10,6 @@ __pycache__/
 # Built VS Code extensions (rebuild with vsce)
 *.vsix
 .superpowers/
+
+# Precompiled C++ standard library (scripts/build-cpp-pch.mjs)
+frontend/src/generated/std.pch*

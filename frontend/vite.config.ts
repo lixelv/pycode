@@ -26,7 +26,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 6000,
     // Clang fetches its .wasm/.tar by URL: never inline them as data: URLs (the CSP has no data: in connect-src).
-    assetsInlineLimit: (file) => (/\.(wasm|tar)$/.test(file) ? false : undefined),
+    assetsInlineLimit: (file) => (/\.(wasm|tar|pch)$/.test(file) ? false : undefined),
   },
   // Pre-bundling would move @yowasp/clang away from the files it loads by relative URL.
   optimizeDeps: { exclude: ['@astral-sh/ruff-wasm-web', '@yowasp/clang'] },

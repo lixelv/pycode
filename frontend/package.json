@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs && node scripts/copy-tree-sitter.mjs",
+    "predev": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs && node scripts/copy-tree-sitter.mjs && node scripts/build-cpp-pch.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs && node scripts/copy-tree-sitter.mjs",
+    "prebuild": "node scripts/copy-pyodide.mjs && node scripts/copy-excalidraw.mjs && node scripts/copy-tree-sitter.mjs && node scripts/build-cpp-pch.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",

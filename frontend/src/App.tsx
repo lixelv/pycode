@@ -70,6 +70,7 @@ import {
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { cppClient, useCppStatus } from "@/lib/cpp/client"
+import { cppCompleter } from "@/lib/cpp/completer"
 import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
 import { fileAccess } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
@@ -243,7 +244,17 @@ function Workspace() {
     async (source: string) => {
       const files = await projectFiles(store, provider, active)
       files[active] = source
-      return cppClient.lint(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))
+      const pkgs = await loadCppPackages(cppPackages, cppPkgs.fail)
+      // Only someone who can type here needs suggestions.
+      if (canWrite) cppCompleter.prepare(files, active, source, pkgs)
+      return cppClient.lint(files, active, pkgs)
+    },
+    [store, provider, active, cppPackages, cppPkgs.fail, canWrite],
+  )
+  const completeCpp = useCallback(
+    async (source: string, line: number, column: number) => {
+      const files = await projectFiles(store, provider, active)
+      return cppCompleter.complete(files, active, source, line, column, await loadCppPackages(cppPackages, cppPkgs.fail))
     },
     [store, provider, active, cppPackages, cppPkgs.fail],
   )
@@ -1005,6 +1016,7 @@ function Workspace() {
                 breakpoints={language === "python" ? (breakpoints[active] ?? []) : undefined}
                 onToggleBreakpoint={language === "python" ? toggleBreakpoint : undefined}
                 lintCpp={language === "cpp" ? lintCpp : undefined}
+                completeCpp={language === "cpp" && canWrite ? completeCpp : undefined}
                 debugLine={sharedConsole.debugging && consoleActive && sharedConsole.debug?.file === active ? sharedConsole.debug.line : null}
                 path={active}
                 available={activeExists}

@@ -2,9 +2,9 @@
 
 ![polycode: editor, file tree and console after running a program](docs/screenshot.png)
 
-A small web IDE for learning Python. Python (Pyodide, CPython 3.14 compiled
-to WebAssembly) and Ruff run in the browser, so no user code ever runs on a
-server. A small Go backend (with Postgres) adds:
+A small web IDE for learning Python and C++. Python (Pyodide, CPython 3.14
+compiled to WebAssembly), Ruff and clang (LLVM compiled to WebAssembly) run in
+the browser, so no user code ever runs on a server. A small Go backend (with Postgres) adds:
 
 - **User ids:** a UUIDv7 kept in a cookie (`pc_uid`), issued on the first
   request.
@@ -37,7 +37,8 @@ cd frontend && npm install && npm run dev   # proxies /api to :8090
 ```
 
 `npm run dev` and `npm run build` first copy the Pyodide runtime into
-`public/pyodide/v<version>/`.
+`public/pyodide/v<version>/`, and the whiteboard fonts and the tree-sitter
+files into `public/`.
 
 ## Live sessions
 
@@ -64,18 +65,21 @@ link or by typing the code under **Share → Join**.
 
 - **Files:** open the file tree with the button at the top left. You can
   create files and folders and delete them.
-- **Formats:** Python, JSON, YAML/YML and Markdown get syntax highlighting.
+- **Language:** a new project asks for Python or C++ and starts with `main.py`
+  or `main.cpp`. A project can hold both.
+- **Formats:** Python, C++, JSON, YAML/YML and Markdown get syntax highlighting.
   JSON also gets error checking and formatting. Anything else opens as
   plain text.
 - **Run:** runs the open `.py` file, and the other project files can be
-  imported. For a `.md` file, Run shows a rendered preview in the console
+  imported. A `.cpp` file is compiled as C++20 first; its console takes
+  input the same way. A header does not run. For a `.md` file, Run shows a rendered preview in the console
   area.
 - **Saving:** the project is saved automatically in IndexedDB. ⌘S / Ctrl+S
   or the download button exports it as a `.zip`.
 - **Archives:** the upload button opens a `.zip`. Every file in it is read as
   text.
-- **Reset:** asks for confirmation, then starts your own project over with
-  `main.py`.
+- **Reset:** asks for confirmation, then starts your own project over and
+  asks for the language again.
 
 Configuration (`.env` next to `docker-compose.yml`):
 
@@ -92,8 +96,9 @@ Configuration (`.env` next to `docker-compose.yml`):
 | Editor | Monaco |
 | Linting and formatting | Ruff (WASM), errors only |
 | Running code | Pyodide in a Web Worker. `input()` blocks on a `SharedArrayBuffer`. Stop and the 120 s timeout raise `KeyboardInterrupt`; if that doesn't work, the interpreter is replaced. |
-| Code hints, flowchart, syntax tree | A second Pyodide worker (Jedi, `ast`), so hints still work while a program waits for input |
-| Packages | `micropip`. Packages built for Pyodide (numpy, pandas…) come from cdn.jsdelivr.net; anything else comes straight from PyPI (both serve CORS). The resolved version is pinned after the first install. |
+| Code hints, flowchart, syntax tree | A second Pyodide worker (Jedi, `ast`), so hints still work while a program waits for input. For C++: tree-sitter on the page (flowchart and tree, no hints) |
+| C++ | clang in a Web Worker for errors as you type and for compiling; the program runs as WebAssembly in another worker. The compiler is downloaded on first use (about 27 MB gzipped), and only for a project with C++. No debugger or formatter. Exceptions can be thrown but not caught: an uncaught `throw` ends the program, and so does a `throw` inside `try`. |
+| Packages | `micropip`. Packages built for Pyodide (numpy, pandas…) come from cdn.jsdelivr.net; anything else comes straight from PyPI (both serve CORS). The resolved version is pinned after the first install. C++: header-only libraries from GitHub through jsDelivr. |
 
 ### Downloaded once
 

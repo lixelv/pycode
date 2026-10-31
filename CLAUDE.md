@@ -1,9 +1,9 @@
 # polycode
 
-A web IDE for teaching Python to beginners: a Monaco editor, a console
-with interactive `input()`, a step-by-step flowchart of the program, a
-project file tree and live sessions with students. Python (Pyodide) and
-Ruff run **in the browser**. The Go backend only issues user ids, proxies
+A web IDE for teaching Python and C++ to beginners: a Monaco editor, a console
+with interactive input, a step-by-step flowchart of the program, a project
+file tree and live sessions with students. Python (Pyodide), Ruff and clang
+(WebAssembly) run **in the browser**. The Go backend only issues user ids, proxies
 network requests and does signaling/relay for live sessions. It never
 runs user code.
 
@@ -25,6 +25,7 @@ cd frontend && npx tsc -b                 # type-check (run after every change)
 cd frontend && npx oxlint src             # lint
 cd frontend && npx vitest run             # unit tests (project model, access, archives, web preview, Prettier, C++ tree/flowchart, clang diagnostics and client, C++ runner and output decoding, console error lines)
 cd frontend && npm run dev                # dev server, proxies /api to :8090
+/opt/homebrew/bin/python3.14 -m unittest discover -s frontend/src/python/tests   # checker and other Python sources (unittest only)
 cd backend && gofmt -w . && go vet ./... && go test ./...
 ```
 
@@ -101,7 +102,10 @@ sites. Do not set it on a real server.
   - **C++ solutions** (`name.cpp` + `name.test.py`, `testPathOf`): `checkHere` compiles with the project's C++ packages (a failure becomes the error `check.compileFailed` with the log's first 5 lines); `RunnerClient.check(..., wasm)` keeps the wasm on the page. `polycode_test.run` is then `_run_cpp` → `_run_wasm` → the worker's `polycode_run_wasm`: it posts `run_wasm` with a fresh result SAB (`BATCH_*` in `protocol.ts`) and blocks in `Atomics.wait`; the page runs `cpp-run.worker` in `batch` mode (stdin is the test's text, then EOF, so reading too much does not hang). On timeout the worker posts `kill_wasm` and the page terminates it. Without `timeout` the wait is what is left of 30 s. `memory` is the linear memory at the end; time is measured around the hook, so it includes starting the worker. Prompts are part of the output. `run()` raises, whatever was printed, after the time and memory limits and in this order: cut by the output limit (`output limit exceeded`), did not start, including a cpp-run worker that failed to load (`the program did not start`), non-zero exit or a trap (`exit code <n>`). The header's state says which (`BATCH_EXITED`/`_OUTPUT_LIMIT`/`_NOT_STARTED`); the messages are fixed text or the integer, and no argument allows a non-zero exit.
   - A student sends signal `check` to `provider.checker()` (the acting owner if admin, else the earliest admin) and gets `check-result` back.
   - The admin runs checks one at a time, at most one per student every 3 s.
-  - Only the tests' own failed asserts carry a message. Errors raised by the solution report only a built-in type name, so the solution cannot send anything back. Results come from code the student controls: they help learning, they are not grades.
+  - **C++ solutions**: `checkHere` compiles on the admin's page (`cppClient.compile`, with the project's packages, outside the 30 s limit; a failed compile is the check's error with the first 5 log lines), then runs the tests in a fresh `RunnerClient` with `kind="cpp"`. `run()` (`_run_cpp`) blocks on the JS global `polycode_run_wasm(stdin, ms)`, which runs the wasm on the page. Input past `stdin` is EOF; the output includes prompts, since they are ordinary `cout`. Without `timeout` it may use what is left of the check.
+    - Exit status: a program that exits non-zero or crashes (`ExitCodeError`, `exit code N`), is cut by the output limit (`OutputLimitExceeded`) or does not start (`ProgramNotStarted`) fails the test, whatever it printed. Time and memory limits are checked first.
+    - `memory` can read low: `-O1` removes an unused allocation.
+  - Only the tests' own failed asserts carry a message. Other errors raised by the solution report only a built-in type name, or `error`. The exception: a Python solution can reach the checker through `sys.modules` and raise its limit and exit errors itself, so digits of its choosing can come back, up to the `_short` cap. The C++ path builds these errors in the checker from the run's numbers, and no program output gets into them. Results come from code the student controls: they help learning, they are not grades.
 - **What a run sees** (`runVisible` in `access.ts`, used by `projectFiles`): every run, check and preview gets public files plus the role folders the entry file is in, never hidden files. A teacher running a student's program therefore does not expose tests or other students' work.
 - **Web files**:
   - Monaco's HTML, CSS and TypeScript services are registered in `monaco-core.ts`. `MonacoEnvironment.getWorker` must route by label (css/html/typescript); otherwise the services fail silently.

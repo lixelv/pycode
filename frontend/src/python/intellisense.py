@@ -5,6 +5,8 @@ Jedi only analyses source code; the user's program is never executed here.
 
 from __future__ import annotations
 
+import sys
+
 import jedi
 from jedi.api.environment import InterpreterEnvironment
 
@@ -16,6 +18,10 @@ jedi.settings.case_insensitive_completion = False
 MAX_COMPLETIONS = 150
 DOCUMENTED_COMPLETIONS = 25
 MAX_DOC = 1200
+# Where our package lives, not for the user's eyes, and the hints for test files.
+_HOME = "/home/pyodide"
+_STUBS = f"{_HOME}/polycode_stubs"
+_PROJECT = "/tmp/jedi-project"  # an empty folder: Jedi also imports from the file's own
 
 
 def _doc(text: str) -> str:
@@ -23,13 +29,17 @@ def _doc(text: str) -> str:
     return text if len(text) <= MAX_DOC else text[: MAX_DOC - 1] + "…"
 
 
-def _script(code: str) -> jedi.Script:
-    return jedi.Script(code, path="main.py", environment=_ENV)
+def _script(code: str, path: str) -> jedi.Script:
+    sys_path = [entry for entry in sys.path if entry and entry != _HOME]
+    if path.endswith(".test.py"):
+        sys_path.insert(0, _STUBS)
+    project = jedi.Project(_PROJECT, sys_path=sys_path, smart_sys_path=False)
+    return jedi.Script(code, path=f"{_PROJECT}/main.py", environment=_ENV, project=project)
 
 
-def complete(code: str, line: int, column: int) -> list[dict]:
+def complete(code: str, line: int, column: int, path: str = "") -> list[dict]:
     items = []
-    for index, c in enumerate(_script(code).complete(line, column)):
+    for index, c in enumerate(_script(code, path).complete(line, column)):
         if index >= MAX_COMPLETIONS:
             break
         # Skip private/dunder names unless the user started typing them.
@@ -49,9 +59,9 @@ def complete(code: str, line: int, column: int) -> list[dict]:
     return items
 
 
-def signatures(code: str, line: int, column: int) -> list[dict]:
+def signatures(code: str, line: int, column: int, path: str = "") -> list[dict]:
     out = []
-    for sig in _script(code).get_signatures(line, column):
+    for sig in _script(code, path).get_signatures(line, column):
         out.append(
             {
                 "label": sig.to_string(),
@@ -63,8 +73,8 @@ def signatures(code: str, line: int, column: int) -> list[dict]:
     return out
 
 
-def hover(code: str, line: int, column: int) -> dict | None:
-    for name in _script(code).help(line, column):
+def hover(code: str, line: int, column: int, path: str = "") -> dict | None:
+    for name in _script(code, path).help(line, column):
         doc = name.docstring(raw=True)
         try:
             sigs = name.get_signatures()

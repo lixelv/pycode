@@ -30,7 +30,7 @@ async function ask<T>(
 ): Promise<T | null> {
   try {
     // Jedi columns are 0-based, Monaco's are 1-based.
-    const result = await callTool<T>(kind, { code: model.getValue(), line: position.lineNumber, column: position.column - 1 })
+    const result = await callTool<T>(kind, { code: model.getValue(), line: position.lineNumber, column: position.column - 1, path: model.uri.path })
     return token.isCancellationRequested ? null : result
   } catch {
     return null

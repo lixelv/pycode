@@ -8,7 +8,7 @@ import checkerSrc from "@/python/checker.py?raw"
 import debuggerSrc from "@/python/debugger.py?raw"
 import runnerSrc from "@/python/runner.py?raw"
 
-import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
+import { bootPyodide, hideSources, installSources, type PyodideInterface } from "./pyodide"
 import {
   BATCH_EXITED,
   BATCH_HEADER_BYTES,
@@ -93,6 +93,8 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, 
 const post = (event: RunnerEvent) => postMessage(event)
 
 let py: PyodideInterface | null = null
+// Our Python modules, kept here: the user's code cannot import them (hideSources).
+let polycode: Record<"runner" | "packages" | "checker" | "debugger", ReturnType<PyodideInterface["pyimport"]>>
 let buffers: { control: Int32Array; data: Uint8Array; interrupt: Uint8Array } | null = null
 const installed = new Set<string>()
 let deadlines = 0 // generations of polycode_test.run's timers
@@ -141,7 +143,14 @@ async function boot() {
   py = await bootPyodide()
   installSources(py, "polycode", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
-  py.pyimport("polycode.runner").install_sleep()
+  polycode = {
+    runner: py.pyimport("polycode.runner"),
+    packages: py.pyimport("polycode.packages"),
+    checker: py.pyimport("polycode.checker"),
+    debugger: py.pyimport("polycode.debugger"),
+  }
+  polycode.runner.install_sleep()
+  hideSources(py, "polycode")
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
   py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), stderr.write(b), b.length), isatty: true })
@@ -186,8 +195,7 @@ async function installPackages(specs: string[]): Promise<InstallResult[]> {
   if (!todo.length) return specs.map((spec) => ({ spec }))
   if (!py) throw new Error("Python is not ready")
   await py.loadPackage(["micropip", "packaging"], { messageCallback: () => {} })
-  const install = py.pyimport("polycode.packages").install
-  const proxy = await install(py.toPy(todo))
+  const proxy = await polycode.packages.install(py.toPy(todo))
   const results = proxy.toJs({ dict_converter: Object.fromEntries }) as InstallResult[]
   proxy.destroy()
   for (const r of results) if (!r.error) installed.add(r.spec)
@@ -250,7 +258,6 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   }
 
   await loadImported(files)
-  const runner = py.pyimport("polycode.runner")
   writeProject(files)
   outputBytes = 0
   outputLimited = false
@@ -264,9 +271,9 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   try {
     if (breakpoints) {
       const points = py.toPy(breakpoints)
-      exitCode = py.pyimport("polycode.debugger").run_debug(entry, points, pause, startProgram) as number
+      exitCode = polycode.debugger.run_debug(entry, points, pause, startProgram) as number
       points.destroy()
-    } else exitCode = runner.run_main.callKwargs(entry, { arm: startProgram }) as number
+    } else exitCode = polycode.runner.run_main.callKwargs(entry, { arm: startProgram }) as number
   } catch (err) {
     stderr.flush()
     post({ type: "stderr", data: `\n${String(err)}\n` })
@@ -284,7 +291,7 @@ function writeProject(files: ProjectFiles) {
   const text: Record<string, string> = {}
   for (const [path, content] of Object.entries(files)) if (typeof content === "string") text[path] = content
   const filesPy = py.toPy(text)
-  py.pyimport("polycode.runner").write_project(filesPy)
+  polycode.runner.write_project(filesPy)
   filesPy.destroy()
   // Binary files (images, data) go next to the code as they are.
   for (const [path, content] of Object.entries(files)) {
@@ -337,9 +344,8 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
     return fired
   }
   if (cpp) (self as { polycode_run_wasm?: typeof runWasmOnPage }).polycode_run_wasm = runWasmOnPage
-  const checker = py.pyimport("polycode.checker")
   armInterrupts() // a check's time limit is an interrupt
-  const results = checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
+  const results = polycode.checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()
   post({ type: "checked", id, results: list })

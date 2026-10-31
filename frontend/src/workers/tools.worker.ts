@@ -5,6 +5,7 @@ import astTreeSrc from "@/python/ast_tree.py?raw"
 import flowSrc from "@/python/flow.py?raw"
 import intellisenseSrc from "@/python/intellisense.py?raw"
 import packagesSrc from "@/python/packages.py?raw"
+import polycodeTestStub from "@/python/stubs/polycode_test.py?raw"
 import viewsSrc from "@/python/views.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
@@ -23,6 +24,7 @@ function python() {
       "packages.py": packagesSrc,
       "views.py": viewsSrc,
     })
+    installSources(py, "polycode_stubs", { "polycode_test.py": polycodeTestStub })
     py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
     return py
   })
@@ -60,7 +62,7 @@ async function handle(req: ToolRequest): Promise<unknown> {
       await jediReady
       const mod = py.pyimport("polycode.intellisense")
       const fn = req.kind === "complete" ? mod.complete : req.kind === "signature" ? mod.signatures : mod.hover
-      return toJs(fn(code, req.line, req.column)) ?? null
+      return toJs(fn(code, req.line, req.column, req.path ?? "")) ?? null
     }
   }
 }

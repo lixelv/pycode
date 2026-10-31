@@ -117,6 +117,8 @@ export interface ToolRequest {
   code?: string
   line?: number
   column?: number
+  /** The file hints are for: a test file (*.test.py) also sees polycode_test. */
+  path?: string
   specs?: string[]
   /** Interface language for generated text (flowchart captions). */
   lang?: string

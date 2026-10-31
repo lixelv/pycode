@@ -2,12 +2,13 @@
 
 from importlib import metadata
 
-import micropip
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
-
 
 async def install(specs: list[str]) -> list[dict]:
+    # Loaded by the worker just before this call; this module is imported at boot.
+    import micropip
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
     results = []
     for spec in specs:
         try:

@@ -26,3 +26,14 @@ export function installSources(py: PyodideInterface, pkg: string, files: Record<
   py.FS.writeFile(`${dir}/__init__.py`, "")
   for (const [name, source] of Object.entries(files)) py.FS.writeFile(`${dir}/${name}`, source)
 }
+
+/** The user's code must not find our package: call once its modules are imported and their proxies kept. */
+export function hideSources(py: PyodideInterface, pkg: string) {
+  py.runPython(`
+import shutil, sys
+sys.path.remove("/home/pyodide")
+for name in [n for n in sys.modules if n == "${pkg}" or n.startswith("${pkg}.")]:
+    del sys.modules[name]
+shutil.rmtree("/home/pyodide/${pkg}")
+`)
+}

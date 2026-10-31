@@ -94,6 +94,10 @@ describe("docAccess", () => {
 })
 
 describe("docAccess for tournaments", () => {
+  it("does not take a name of Object for a tournament", () => {
+    expect(docAccess(reader, "t:constructor", rules())).toBe("none")
+  })
+
   const withTournaments = rules({ tournaments: { open: { private: false }, closed: { private: true } } })
 
   it("opens a public tournament to everyone for reading", () => {

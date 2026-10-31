@@ -44,8 +44,10 @@ export type RunnerRequest =
   | { type: "install"; id: number; specs: string[] }
   | { type: "run"; id: number; files: ProjectFiles; entry: string; specs: string[]; breakpoints?: Record<string, number[]> }
   | { type: "check"; id: number; files: ProjectFiles; solution: string; test: string; specs: string[]; cpp?: boolean }
+  /** Gets a tournament solution's interpreter ready for its runs. */
+  | { type: "prepare"; files: ProjectFiles; specs: string[] }
   /** A tournament's solution, one run: fixed input, the answer goes into `result` (BATCH_* below). */
-  | { type: "batch"; files: ProjectFiles; entry: string; specs: string[]; stdin: string; traceMemory: boolean; result: SharedArrayBuffer }
+  | { type: "batch"; files: ProjectFiles; entry: string; stdin: string; traceMemory: boolean; result: SharedArrayBuffer }
 
 export type RunnerEvent =
   | { type: "ready"; python: string }
@@ -55,9 +57,16 @@ export type RunnerEvent =
   | { type: "input_request" }
   | { type: "installed"; id: number; results: InstallResult[] }
   | { type: "exit"; id: number; code: number; duration: number; reason: "output_limit" | null }
-  | { type: "checked"; id: number; results: CheckResult[]; tournament?: CheckTournament }
-  /** The test file is a tournament's: the check gets the longer limit. */
-  | { type: "tournament" }
+  | { type: "checked"; id: number; results: CheckResult[] }
+  /** This worker's Python exited or failed for good (a program's os._exit): replace the worker. */
+  | { type: "dead" }
+  /**
+   * A check's first event, before any student's code exists in the worker: is the test file a tournament's?
+   * Only the first one counts: in an ordinary check the solution shares this worker and can post anything.
+   */
+  | { type: "tournament"; tournament: CheckTournament | null }
+  /** Packages are in and the network is gone: the solution's clock can start. Comes before any program ran here. */
+  | { type: "prepared" }
   /** The debugged program stopped (state) or goes on (null). */
   | { type: "paused"; state: DebugState | null }
   /** polycode_test.run(timeout=…): interrupt the program after ms if timer gen is still armed (lib/python/deadline.ts). */
@@ -83,7 +92,8 @@ export interface ProgramRunner {
 /**
  * A batch run's result: Int32 header [state, stdout length, memory, exit code, started],
  * then the output. State goes from 0 to a BATCH_* below at the end (Atomics.notify);
- * started goes to 1 when the program begins, or on failure: time counts from there.
+ * started goes to 1 when the page sends the program off, or on failure: time counts from there,
+ * and the program has no hand in it (its interpreter may be someone's second run).
  * Each run has its own buffer, so a run that was killed late cannot touch the next one.
  */
 export const BATCH_EXITED = 1

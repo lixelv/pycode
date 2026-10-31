@@ -61,8 +61,8 @@ export function docAccess(m: Member, docId: string, r: Rules): Access {
     return path === undefined ? "none" : fileAccess(m, path, r)
   }
   if (docId.startsWith("t:")) {
-    const tournament = r.tournaments[docId.slice(2)]
-    return tournament && !tournament.private ? "read" : "none"
+    const id = docId.slice(2)
+    return Object.hasOwn(r.tournaments, id) && !r.tournaments[id].private ? "read" : "none"
   }
   return "none"
 }

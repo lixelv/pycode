@@ -12,6 +12,7 @@ import {
   STDIN_MAX_BYTES,
   STDIN_READY,
   type CheckOutcome,
+  type CheckTournament,
   type DebugCommand,
   type InstallResult,
   type ProgramRunner,
@@ -49,6 +50,7 @@ export class RunnerClient implements ProgramRunner {
   private deadline: ReturnType<typeof setTimeout> | undefined
   private wasmWorker: Worker | null = null
   private solution: RunnerClient | null = null // a tournament's solution, apart from the tests
+  private prepared: Promise<void> | null = null
   python: string | null = null
 
   static supported() {
@@ -71,6 +73,7 @@ export class RunnerClient implements ProgramRunner {
     this.control = new Int32Array(control)
     this.data = new Uint8Array(data)
     this.interruptFlag = new Uint8Array(interrupt)
+    this.worker?.terminate() // one that crashed; a program may also still be running in it
     const worker = new RunnerWorker()
     this.worker = worker
     this.readyPromise = new Promise((resolve, reject) => {
@@ -80,8 +83,12 @@ export class RunnerClient implements ProgramRunner {
           this.python = event.python
           resolve(event.python)
         } else if (event.type === "boot-error") {
+          // Once started, this can only be a program posting it.
+          if (this.python !== null) return
           this.readyPromise = null
           reject(new Error(event.message))
+        } else if (event.type === "dead") {
+          this.restart()
         } else if (event.type === "deadline") {
           clearTimeout(this.deadline)
           const control = this.control
@@ -162,11 +169,25 @@ export class RunnerClient implements ProgramRunner {
     worker.postMessage({ type: "batch", wasm, files, cwd, stdin, result })
   }
 
-  /** A tournament's solution, one run in this interpreter; the answer goes straight into `result`. */
+  /**
+   * A tournament's solution, one run in this interpreter; the answer goes straight into `result`.
+   * Its time starts here, not in the worker: from its second run on, a program can have replaced anything there.
+   */
   async batch(files: ProjectFiles, entry: string, specs: string[], stdin: string, traceMemory: boolean, result: SharedArrayBuffer) {
     try {
       await this.ready()
-      this.worker!.postMessage({ type: "batch", files, entry, specs, stdin, traceMemory, result })
+      await (this.prepared ??= new Promise<void>((resolve) => {
+        const off = this.on((event) => {
+          if (event.type !== "prepared") return
+          off()
+          resolve()
+        })
+        this.worker!.postMessage({ type: "prepare", files, specs })
+      }))
+      const header = new Int32Array(result, 0, 5)
+      Atomics.store(header, BATCH_STARTED, 1)
+      Atomics.notify(header, BATCH_STARTED)
+      this.worker!.postMessage({ type: "batch", files, entry, stdin, traceMemory, result })
     } catch {
       failBatch(result)
     }
@@ -189,10 +210,14 @@ export class RunnerClient implements ProgramRunner {
       return await new Promise<CheckOutcome>((resolve, reject) => {
         const timeout = () => reject(new Error("timeout"))
         let timer = setTimeout(timeout, timeoutMs)
+        let kind: CheckTournament | null | undefined // the first event's: nothing else can set it
         const off = this.on((event) => {
-          if (event.type === "tournament") {
-            clearTimeout(timer)
-            timer = setTimeout(timeout, TOURNAMENT_TIMEOUT_MS)
+          if (event.type === "tournament" && kind === undefined) {
+            kind = event.tournament
+            if (kind) {
+              clearTimeout(timer)
+              timer = setTimeout(timeout, TOURNAMENT_TIMEOUT_MS)
+            }
           }
           if (event.type === "run_outside") {
             if (wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
@@ -205,7 +230,7 @@ export class RunnerClient implements ProgramRunner {
           if (event.type !== "checked" || event.id !== id) return
           clearTimeout(timer)
           off()
-          resolve({ results: event.results, tournament: event.tournament })
+          resolve({ results: event.results, tournament: kind ?? undefined })
         })
         this.worker!.postMessage({ type: "check", id, files, solution, test, specs, cpp: !!wasm })
       })
@@ -223,6 +248,7 @@ export class RunnerClient implements ProgramRunner {
     this.worker?.terminate()
     this.worker = null
     this.readyPromise = null
+    this.prepared = null
     this.python = null
     this.pendingInstalls.forEach((resolve) => resolve([]))
     this.pendingInstalls.clear()

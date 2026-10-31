@@ -154,6 +154,7 @@ class BatchOutput {
 }
 
 let sink: BatchOutput | null = null
+let sinkInput: string | null = null // what a batch run's descriptor 0 gives (open(0), os.read), once
 
 function countOutput(n: number) {
   outputBytes += n
@@ -190,7 +191,12 @@ let eofRepeat = false
 /** Blocks the worker until the page sends a line (or EOF / Stop). */
 function readLine(): string | null {
   if (!buffers || !py) return null
-  if (sink) return null // a batch run's input is run_batch's own: anything else reads EOF, never blocks
+  if (sink) {
+    // sys.stdin and input() are run_batch's own; this is for open(0) and os.read. It never blocks.
+    const text = sinkInput || null
+    sinkInput = null
+    return text
+  }
   // input() on a tty reads once more after an empty read: without this, Ctrl+D has to be pressed twice.
   if (eofRepeat) {
     eofRepeat = false
@@ -363,20 +369,22 @@ function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean) {
  */
 async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[], cpp = false) {
   if (!py) return
+  // First of all, before a solution can post anything (see the event).
   const found = polycode.checker.tournament_of(test)
   const declared = found?.toJs({ dict_converter: Object.fromEntries }) as (CheckTournament & { error?: string }) | undefined
   found?.destroy()
+  const tournament = declared && !declared.error ? { id: declared.id, private: declared.private } : null
+  post({ type: "tournament", tournament })
   if (declared?.error) {
     post({ type: "checked", id, results: [{ name: "tests", ok: false, message: declared.error }] })
     return
   }
-  if (declared) post({ type: "tournament" })
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) await installPackages(missing)
   // The tests may import Pyodide's packages too (before the network goes away).
-  await loadImported(declared ? { "tests.py": test } : { ...files, "tests.py": test })
+  await loadImported(tournament ? { "tests.py": test } : { ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
-  writeProject(declared ? {} : files)
+  writeProject(tournament ? {} : files)
   // polycode_test.run(timeout=…) asks the page for a timer that interrupts it;
   // ms 0 cancels it at once and says whether it fired.
   ;(self as { polycode_deadline?: (ms: number) => boolean }).polycode_deadline = (ms) => {
@@ -387,17 +395,28 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
     }
     return fired
   }
-  if (cpp || declared) (self as { polycode_run_outside?: typeof runOutside }).polycode_run_outside = runOutside
+  if (cpp || tournament) (self as { polycode_run_outside?: typeof runOutside }).polycode_run_outside = runOutside
   armInterrupts() // a check's time limit is an interrupt
-  const results = polycode.checker.run_tests.callKwargs("/home/pyodide/project", solution, test, cpp ? "cpp" : "python", { tournament: !!declared })
+  const results = polycode.checker.run_tests.callKwargs("/home/pyodide/project", solution, test, cpp ? "cpp" : "python", { tournament: !!tournament })
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()
-  post({ type: "checked", id, results: list, tournament: declared })
+  post({ type: "checked", id, results: list })
 }
 
 // ---- a tournament's solution ------------------------------------------------
 
-let batchPrepared = false
+/** Before the solution's clock starts, and before any program ran here. A failure shows up when the program imports. */
+async function prepare(files: ProjectFiles, specs: string[]) {
+  try {
+    const missing = specs.filter((s) => !installed.has(s))
+    if (missing.length) await installPackages(missing)
+    await loadImported(files)
+  } catch {
+    // The run reports it.
+  }
+  for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
+  post({ type: "prepared" })
+}
 
 /**
  * One run of a tournament's solution, in an interpreter that never sees the tests.
@@ -409,23 +428,17 @@ async function batch(req: Extract<RunnerRequest, { type: "batch" }>) {
   let state = BATCH_NOT_STARTED
   let code = 1
   let memory = 0
+  let began = false
   const output = new BatchOutput(new Uint8Array(req.result, BATCH_HEADER_BYTES))
   try {
-    if (!batchPrepared) {
-      const missing = req.specs.filter((s) => !installed.has(s))
-      if (missing.length) await installPackages(missing)
-      await loadImported(req.files)
-      for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
-      batchPrepared = true
-    }
     writeProject(req.files)
     outputBytes = 0
     outputLimited = false
     sink = output
+    sinkInput = req.stdin
     const startProgram = () => {
+      began = true
       armInterrupts()
-      Atomics.store(header, BATCH_STARTED, 1)
-      Atomics.notify(header, BATCH_STARTED)
       py?.checkInterrupt()
     }
     const proxy = polycode.runner.run_batch.callKwargs(req.entry, req.stdin, { arm: startProgram, trace_memory: req.traceMemory })
@@ -436,19 +449,22 @@ async function batch(req: Extract<RunnerRequest, { type: "batch" }>) {
     state = BATCH_EXITED
   } catch {
     // Before the program: it did not start. After: it failed, like a crash.
-    if (Atomics.load(header, BATCH_STARTED)) state = BATCH_EXITED
+    if (began) state = BATCH_EXITED
   }
   if (outputLimited) state = BATCH_OUTPUT_LIMIT
   sink = null
-  py.setInterruptBuffer(undefined as unknown as Uint8Array)
-  buffers.interrupt[0] = 0
   header[1] = output.length
-  header[2] = memory
-  header[3] = code
-  Atomics.store(header, BATCH_STARTED, 1)
-  Atomics.notify(header, BATCH_STARTED)
+  header[2] = Math.min(Number(memory), 0x7fffffff)
+  // sys.exit(2**64) comes as a BigInt, and 2**32 must not wrap to a clean exit.
+  header[3] = Math.abs(Number(code)) <= 0x7fffffff ? Number(code) : 1
   Atomics.store(header, 0, state)
   Atomics.notify(header, 0)
+  buffers.interrupt[0] = 0
+  try {
+    py.setInterruptBuffer(undefined as unknown as Uint8Array)
+  } catch {
+    post({ type: "dead" }) // the program ended Python itself (os._exit): the next run needs a new one
+  }
 }
 
 // ---- messages -------------------------------------------------------------
@@ -479,6 +495,8 @@ self.onmessage = (msg: MessageEvent<RunnerRequest>) => {
       await run(req.id, req.files, req.entry, req.specs, req.breakpoints)
     } else if (req.type === "check") {
       await check(req.id, req.files, req.solution, req.test, req.specs, req.cpp)
+    } else if (req.type === "prepare") {
+      await prepare(req.files, req.specs)
     } else if (req.type === "batch") {
       await batch(req)
     }

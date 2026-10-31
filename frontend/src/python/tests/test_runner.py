@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -139,21 +140,71 @@ class Batch(unittest.TestCase):
         self.argv = sys.argv
         self.addCleanup(setattr, sys, "argv", self.argv)
         os.chdir(self.dir.name)
-        self.stdout = io.StringIO()
-        self.stderr = io.StringIO()
+        self.output = ""
 
     def write(self, source):
         with open("main.py", "w") as f:
             f.write(source)
 
     def run_batch(self, stdin, **kw):
-        self.stdout = io.StringIO()
-        self.stderr = io.StringIO()
-        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
-            return runner.run_batch("main.py", stdin, **kw)
+        """Like the worker: the program's streams end at descriptors 1 and 2."""
+        sys.stdout.flush()
+        sys.stderr.flush()
+        saved = os.dup(1), os.dup(2)
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            os.dup2(out.fileno(), 1)
+            os.dup2(err.fileno(), 2)
+            try:
+                return runner.run_batch("main.py", stdin, **kw)
+            finally:
+                os.dup2(saved[0], 1)
+                os.dup2(saved[1], 2)
+                os.close(saved[0])
+                os.close(saved[1])
+                out.seek(0)
+                self.output = out.read().decode()
 
     def out(self):
-        return self.stdout.getvalue()
+        return self.output
+
+    def test_program_may_wrap_stdout_again_on_every_run(self):
+        self.write("import io, sys\nsys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')\nprint(input())\n")
+        for text in ("a", "b", "c"):
+            self.assertEqual(self.run_batch(text + "\n")["exitCode"], 0, text)
+            self.assertEqual(self.out(), text + "\n")
+
+    def test_replaced_stdout_does_not_reach_the_next_run(self):
+        self.write("import io, sys\nsys.stdout = io.StringIO()\n")
+        before = sys.stdout
+        self.run_batch("")
+        self.assertIs(sys.stdout, before)
+        self.write("print('seen')\n")
+        self.run_batch("")
+        self.assertEqual(self.out(), "seen\n")
+
+    def test_closed_stdout_does_not_change_the_exit_code(self):
+        self.write("import sys\nprint(1)\nsys.stdout.close()\n")
+        self.assertEqual(self.run_batch("")["exitCode"], 0)
+        self.assertEqual(self.out(), "1\n")
+        self.write("print(2)\n")
+        self.assertEqual(self.run_batch("")["exitCode"], 0)
+        self.assertEqual(self.out(), "2\n")
+
+    def test_stdin_buffer_gets_the_bytes(self):
+        self.write("import sys\nprint(sys.stdin.buffer.read().split())\n")
+        self.assertEqual(self.run_batch("1 2\n")["exitCode"], 0)
+        self.assertEqual(self.out(), "[b'1', b'2']\n")
+
+    def test_state_comes_back_when_the_run_raises(self):
+        self.write("pass\n")
+        saved = builtins.input, sys.stdin, sys.stdout
+
+        def boom(*args, **kw):
+            raise OSError("no")
+
+        with unittest.mock.patch.object(runner, "run_main", boom), self.assertRaises(OSError):
+            self.run_batch("")
+        self.assertEqual((builtins.input, sys.stdin, sys.stdout), saved)
 
     def test_prompt_is_not_printed_and_eof_is_an_error(self):
         self.write('print(input("? "))\ninput()\n')

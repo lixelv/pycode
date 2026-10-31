@@ -74,11 +74,15 @@ def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> di
 
     input() prompts are not printed, reading past ``stdin`` raises EOFError.
     ``memory`` is the tracemalloc peak in bytes, 0 unless ``trace_memory``.
+    Each run has streams of its own: a program may replace or close them
+    (``io.TextIOWrapper(sys.stdout.buffer)``), and the next run must not notice.
     """
     import io
     import tracemalloc
 
-    lines = io.StringIO(stdin)
+    lines = io.TextIOWrapper(io.BytesIO(stdin.encode("utf-8", "replace")), encoding="utf-8")
+    out = open(1, "w", encoding="utf-8", closefd=False)
+    err = open(2, "w", encoding="utf-8", errors="backslashreplace", closefd=False)
 
     def fake_input(prompt=""):
         line = lines.readline()
@@ -86,8 +90,8 @@ def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> di
             raise EOFError("the program asked for more input than the test gave")
         return line.rstrip("\n")
 
-    saved = builtins.input, sys.stdin
-    builtins.input, sys.stdin = fake_input, lines
+    saved = builtins.input, sys.stdin, sys.stdout, sys.stderr
+    builtins.input, sys.stdin, sys.stdout, sys.stderr = fake_input, lines, out, err
     memory = 0
     if trace_memory:
         tracemalloc.start()
@@ -98,8 +102,18 @@ def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> di
     finally:
         if trace_memory and tracemalloc.is_tracing():
             tracemalloc.stop()
-        builtins.input, sys.stdin = saved
+        _flush(out)
+        _flush(err)
+        builtins.input, sys.stdin, sys.stdout, sys.stderr = saved
     return {"exitCode": code, "memory": memory}
+
+
+def _flush(stream) -> None:
+    """A program may have closed its streams; that does not change how it ended."""
+    try:
+        stream.flush()
+    except (ValueError, OSError):
+        pass
 
 
 def without_internal_frames(tb, folder: str = os.path.dirname(os.path.abspath(__file__))):
@@ -167,6 +181,6 @@ def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
         traceback.print_exception(type(exc), exc, without_internal_frames(exc.__traceback__.tb_next))
         return 1
     finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
+        _flush(sys.stdout)
+        _flush(sys.stderr)
     return 0

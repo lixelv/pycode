@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { cppRunner } from "@/lib/cpp/runner-client"
 import { translate } from "@/lib/i18n"
 import { runner, RunnerClient } from "@/lib/python/runner-client"
+import { createRunLimit } from "@/lib/run-limit"
 import type { DebugCommand, DebugState, ProgramRunner, ProjectFiles } from "@/workers/protocol"
 
 export type ChunkKind = "stdout" | "stderr" | "stdin" | "system"
@@ -73,7 +74,7 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const generation = useRef(0)
   const timers = useRef<{ timeout?: number; kill?: number }>({})
   const reason = useRef<ExitInfo["reason"]>(null)
-  const startedAt = useRef<number[]>([])
+  const [runLimit] = useState(() => createRunLimit(MAX_RUNS_PER_SEC, 1000))
   const rateLimited = useRef(onRateLimited)
   useEffect(() => {
     rateLimited.current = onRateLimited
@@ -188,7 +189,18 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
     [finish],
   )
 
-  /** Starts a run on `next`: the new generation, or null when the browser cannot run it or runs come too fast. */
+  /**
+   * Asks whether a run may start now (it counts as started). The caller asks
+   * before touching the shared run state: a refused run must leave it alone,
+   * or the console would stay "connecting" with nothing behind it.
+   */
+  const allowRun = useCallback(() => {
+    if (runLimit.allow(performance.now())) return true
+    rateLimited.current?.(translate("toast.slowDown", { n: MAX_RUNS_PER_SEC }))
+    return false
+  }, [runLimit])
+
+  /** Starts a run on `next`: the new generation, or null when the browser cannot run it. */
   const begin = useCallback(
     (next: ProgramRunner, what: string): number | null => {
       if (!RunnerClient.supported()) {
@@ -197,14 +209,6 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
         setStatus("finished")
         return null
       }
-      const now = performance.now()
-      startedAt.current = startedAt.current.filter((t) => now - t < 1000)
-      if (startedAt.current.length >= MAX_RUNS_PER_SEC) {
-        rateLimited.current?.(translate("toast.slowDown", { n: MAX_RUNS_PER_SEC }))
-        return null
-      }
-      startedAt.current.push(now)
-
       // A run still going is replaced by the new one.
       if (current.current !== null) {
         clearTimers()
@@ -295,5 +299,5 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const active = isBusy(status)
   const debug = useCallback((command: DebugCommand) => runner.debug(command), [])
 
-  return { status, active, chunks, exit, runCount, python, booting, run, runCpp, stop, sendInput, sendEof, clear, debugState, debug }
+  return { status, active, chunks, exit, runCount, python, booting, allowRun, run, runCpp, stop, sendInput, sendEof, clear, debugState, debug }
 }

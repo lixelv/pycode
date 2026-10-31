@@ -89,9 +89,11 @@ export class RunnerClient implements ProgramRunner {
 
   /** Runs `entry`; with `breakpoints` (path -> lines), under the debugger. */
   async run(files: ProjectFiles, entry: string, specs: string[], breakpoints?: Record<string, number[]>): Promise<number> {
-    await this.ready()
-    const id = this.nextId++
+    const ready = this.ready()
+    // Before the wait, so a Stop during boot stays pending for this run.
     this.interruptFlag[0] = 0
+    await ready
+    const id = this.nextId++
     this.worker!.postMessage({ type: "run", id, files, entry, specs, breakpoints })
     return id
   }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { cppRunner } from "@/lib/cpp/runner-client"
 import { translate } from "@/lib/i18n"
 import { runner, RunnerClient } from "@/lib/python/runner-client"
+import { createRunLimit } from "@/lib/run-limit"
 import type { DebugCommand, DebugState, ProgramRunner, ProjectFiles } from "@/workers/protocol"
 
 export type ChunkKind = "stdout" | "stderr" | "stdin" | "system"
@@ -73,7 +74,8 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const generation = useRef(0)
   const timers = useRef<{ timeout?: number; kill?: number }>({})
   const reason = useRef<ExitInfo["reason"]>(null)
-  const startedAt = useRef<number[]>([])
+  const waitingForFiles = useRef(false)
+  const [runLimit] = useState(() => createRunLimit(MAX_RUNS_PER_SEC, 1000))
   const rateLimited = useRef(onRateLimited)
   useEffect(() => {
     rateLimited.current = onRateLimited
@@ -172,8 +174,8 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
       if (current.current === null) return
       reason.current = why
       const target = client.current
-      if (target === cppRunner && current.current === -1) {
-        finish({ code: null, duration: 0, reason: why }) // still compiling: its result is dropped
+      if (current.current === -1 && (target === cppRunner || waitingForFiles.current)) {
+        finish({ code: null, duration: 0, reason: why }) // nothing has started: what it waits for is dropped
         return
       }
       window.clearTimeout(timers.current.kill)
@@ -188,7 +190,18 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
     [finish],
   )
 
-  /** Starts a run on `next`: the new generation, or null when the browser cannot run it or runs come too fast. */
+  /**
+   * Asks whether a run may start now (it counts as started). The caller asks
+   * before touching the shared run state: a refused run must leave it alone,
+   * or the console would stay "connecting" with nothing behind it.
+   */
+  const allowRun = useCallback(() => {
+    if (runLimit.allow(performance.now())) return true
+    rateLimited.current?.(translate("toast.slowDown", { n: MAX_RUNS_PER_SEC }))
+    return false
+  }, [runLimit])
+
+  /** Starts a run on `next`: the new generation, or null when the browser cannot run it. */
   const begin = useCallback(
     (next: ProgramRunner, what: string): number | null => {
       if (!RunnerClient.supported()) {
@@ -197,14 +210,6 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
         setStatus("finished")
         return null
       }
-      const now = performance.now()
-      startedAt.current = startedAt.current.filter((t) => now - t < 1000)
-      if (startedAt.current.length >= MAX_RUNS_PER_SEC) {
-        rateLimited.current?.(translate("toast.slowDown", { n: MAX_RUNS_PER_SEC }))
-        return null
-      }
-      startedAt.current.push(now)
-
       // A run still going is replaced by the new one.
       if (current.current !== null) {
         clearTimers()
@@ -223,20 +228,28 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   )
 
   const run = useCallback(
-    async (files: ProjectFiles, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>, fresh = false) => {
-      if (begin(runner, "Python") === null) return
+    async (files: Promise<ProjectFiles>, entry: string, specs: string[] = [], breakpoints?: Record<string, number[]>, fresh = false) => {
+      const gen = begin(runner, "Python")
+      if (gen === null) return
       // `fresh` asks for a new interpreter (nothing a previous program changed survives into this one).
       if (fresh) runner.restart()
       setStatus("connecting")
-      if (!runner.python) setBooting(true)
 
+      // The files can take a while (binary files from the session): Stop must already work.
+      waitingForFiles.current = true
       try {
-        const id = await runner.run(files, entry, specs, breakpoints)
+        const ready = await files
+        if (gen !== generation.current || current.current !== -1) return // stopped or replaced meanwhile
+        waitingForFiles.current = false
+        if (!runner.python) setBooting(true)
+        const id = await runner.run(ready, entry, specs, breakpoints)
+        if (gen !== generation.current) return
         current.current = id
         setStatus("running")
         // A program being debugged waits for the person, so it has no time limit.
         if (!breakpoints) timers.current.timeout = window.setTimeout(() => stopWith("timeout"), RUN_TIMEOUT_SEC * 1000)
       } catch (err) {
+        if (gen !== generation.current || current.current === null) return
         finish({ code: null, duration: 0, reason: "error", message: `Python failed to start: ${(err as Error).message}` })
       }
     },
@@ -245,15 +258,18 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
 
   /** Compiles (`compile`, in the clang worker) and runs a C++ program; a failed compile shows clang's log. */
   const runCpp = useCallback(
-    async (files: ProjectFiles, entry: string, compile: () => Promise<CppBuild>) => {
+    async (files: Promise<ProjectFiles>, entry: string, compile: (files: ProjectFiles) => Promise<CppBuild>) => {
       const gen = begin(cppRunner, "C++")
       if (gen === null) return
       // Always emitted: a Run during a compile leaves the local status as it is, but the doc was reset.
       setStatusState("compiling")
       emit.current?.({ type: "status", status: "compiling" })
       let build: CppBuild
+      let ready: ProjectFiles
       try {
-        build = await compile()
+        ready = await files
+        if (gen !== generation.current || current.current !== -1) return // stopped or replaced meanwhile
+        build = await compile(ready)
       } catch (err) {
         if (gen === generation.current && current.current === -1) {
           finish({ code: null, duration: 0, reason: "error", message: (err as Error).message })
@@ -266,7 +282,7 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
         finish({ code: 1, duration: 0, reason: null })
         return
       }
-      current.current = await cppRunner.run(build.wasm, files, entry)
+      current.current = await cppRunner.run(build.wasm, ready, entry)
       setStatus("running")
       timers.current.timeout = window.setTimeout(() => stopWith("timeout"), RUN_TIMEOUT_SEC * 1000)
     },
@@ -295,5 +311,5 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
   const active = isBusy(status)
   const debug = useCallback((command: DebugCommand) => runner.debug(command), [])
 
-  return { status, active, chunks, exit, runCount, python, booting, run, runCpp, stop, sendInput, sendEof, clear, debugState, debug }
+  return { status, active, chunks, exit, runCount, python, booting, allowRun, run, runCpp, stop, sendInput, sendEof, clear, debugState, debug }
 }

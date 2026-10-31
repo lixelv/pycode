@@ -11,6 +11,47 @@ import traceback
 PROJECT = "/home/pyodide/project"
 
 
+SLEEP_STEP = 0.05
+
+
+def sliced_sleep(seconds, sleep, check, step: float = SLEEP_STEP) -> None:
+    """Sleeps in slices, checking for an interrupt after each.
+
+    Pyodide looks at the interrupt buffer only every so many eval-breaker
+    checks, so a long sleep would notice a Stop seconds late.
+    """
+    if not isinstance(seconds, (int, float)) or seconds != seconds or seconds == float("inf"):
+        sleep(seconds)  # time.sleep's own answer: TypeError, ValueError, OverflowError
+        check()
+        return
+    if seconds < 0:
+        raise ValueError("sleep length must be non-negative")
+    remaining = seconds
+    while True:
+        part = min(remaining, step)
+        sleep(part)
+        check()
+        remaining -= part
+        if remaining <= 0:
+            return
+
+
+def install_sleep() -> None:
+    """Replaces time.sleep once per interpreter, for runs and checks alike."""
+    import functools
+    import time
+
+    import pyodide_js
+
+    original = time.sleep
+
+    @functools.wraps(original)
+    def sleep(seconds, /):
+        sliced_sleep(seconds, original, pyodide_js.checkInterrupt)
+
+    time.sleep = sleep
+
+
 def write_project(files: dict) -> None:
     """Lays the project out on disk, replacing the previous run's copy."""
     import os
@@ -26,8 +67,12 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
-def run_main(path: str = "main.py", debugger=None) -> int:
-    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it."""
+def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
+    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it.
+
+    ``arm`` turns interrupts on just before the program starts and raises
+    KeyboardInterrupt for a Stop that came earlier.
+    """
     import bdb
     import os
 
@@ -52,6 +97,8 @@ def run_main(path: str = "main.py", debugger=None) -> int:
     sys.argv = [path]
     namespace = {"__name__": "__main__", "__file__": path, "__builtins__": builtins}
     try:
+        if arm:
+            arm()
         if debugger:
             debugger.run(code, namespace)
         else:

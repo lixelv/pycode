@@ -2,6 +2,7 @@
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
 import { arm, disarm } from "@/lib/python/deadline"
+import { signalBuffer } from "@/lib/python/signal-buffer"
 import packagesSrc from "@/python/packages.py?raw"
 import checkerSrc from "@/python/checker.py?raw"
 import debuggerSrc from "@/python/debugger.py?raw"
@@ -140,11 +141,11 @@ async function boot() {
   py = await bootPyodide()
   installSources(py, "polycode", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
+  py.pyimport("polycode.runner").install_sleep()
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
   py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), stderr.write(b), b.length), isatty: true })
   py.setStdin({ stdin: readLine, isatty: true })
-  if (buffers) py.setInterruptBuffer(buffers.interrupt)
 
   post({ type: "ready", python: py.runPython("import sys; sys.version.split()[0]") as string })
 }
@@ -206,6 +207,15 @@ async function loadImported(files: ProjectFiles) {
 
 // ---- run ------------------------------------------------------------------
 
+/**
+ * Turns interrupts on. Until then a Stop stays in the buffer: raised in
+ * Pyodide's own Python (boot, package load, writing the project), it would show
+ * a traceback or a false ModuleNotFoundError instead of stopping anything.
+ */
+function armInterrupts() {
+  if (py && buffers) py.setInterruptBuffer(signalBuffer(buffers.interrupt) as unknown as Uint8Array)
+}
+
 /** The debugger stopped: show where, and block until the page says how to go on. */
 function pause(state: string): DebugCommand {
   if (!buffers) return "continue"
@@ -234,21 +244,26 @@ async function run(id: number, files: ProjectFiles, entry: string, specs: string
   writeProject(files)
   outputBytes = 0
   outputLimited = false
-  buffers.interrupt[0] = 0
+  // Called by run_main just before the program: a Stop that waited is raised here.
+  const startProgram = () => {
+    armInterrupts()
+    py?.checkInterrupt()
+  }
   const started = performance.now()
   let exitCode = 1
   try {
     if (breakpoints) {
       const points = py.toPy(breakpoints)
-      exitCode = py.pyimport("polycode.debugger").run_debug(entry, points, pause) as number
+      exitCode = py.pyimport("polycode.debugger").run_debug(entry, points, pause, startProgram) as number
       points.destroy()
-    } else exitCode = runner.run_main(entry) as number
+    } else exitCode = runner.run_main.callKwargs(entry, { arm: startProgram }) as number
   } catch (err) {
     stderr.flush()
     post({ type: "stderr", data: `\n${String(err)}\n` })
   }
   stdout.flush()
   stderr.flush()
+  py.setInterruptBuffer(undefined as unknown as Uint8Array)
   buffers.interrupt[0] = 0
   post({ type: "exit", id, code: exitCode, duration: (performance.now() - started) / 1000, reason: outputLimited ? "output_limit" : null })
 }
@@ -313,6 +328,7 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
   }
   if (cpp) (self as { polycode_run_wasm?: typeof runWasmOnPage }).polycode_run_wasm = runWasmOnPage
   const checker = py.pyimport("polycode.checker")
+  armInterrupts() // a check's time limit is an interrupt
   const results = checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()

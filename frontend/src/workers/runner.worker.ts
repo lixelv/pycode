@@ -2,6 +2,7 @@
 // Executes the user's program. Runs off the main thread so a busy or blocked
 // program (waiting for input(), an endless loop) never freezes the page.
 import { arm, disarm } from "@/lib/python/deadline"
+import { signalBuffer } from "@/lib/python/signal-buffer"
 import packagesSrc from "@/python/packages.py?raw"
 import checkerSrc from "@/python/checker.py?raw"
 import debuggerSrc from "@/python/debugger.py?raw"
@@ -144,7 +145,7 @@ async function boot() {
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
   py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), stderr.write(b), b.length), isatty: true })
   py.setStdin({ stdin: readLine, isatty: true })
-  if (buffers) py.setInterruptBuffer(buffers.interrupt)
+  if (buffers) py.setInterruptBuffer(signalBuffer(buffers.interrupt) as unknown as Uint8Array)
 
   post({ type: "ready", python: py.runPython("import sys; sys.version.split()[0]") as string })
 }

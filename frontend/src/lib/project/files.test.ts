@@ -1,7 +1,8 @@
+import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, createFile, exportZip, importZip, isText, metasOf, openArchive, projectSize, PROJECT_LIMIT, textOf } from "./project"
+import { addFiles, addLanguagesFor, createFile, deletePath, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -99,5 +100,127 @@ describe("openArchive", () => {
     })
     expect(seen).toContain("alice/a.py:false:alice")
     expect(seen).toContain("notes.txt:true:alice")
+  })
+})
+
+describe("legacy .pycode.env", () => {
+  it("still hides files when an archive has only the old env name", async () => {
+    const s = new ProjectStore(false)
+    const zip = zipSync({ ".pycode.env": strToU8("hidden t.test.py\n"), "t.test.py": strToU8("x = 1") })
+    await openArchive(s, importZip(zip))
+    expect(metasOf(s).get("t.test.py")?.hidden).toBe(true)
+  })
+})
+
+describe("exportZip", () => {
+  it("leaves out (and reports) binary files it cannot get, instead of empty ones", async () => {
+    const s = new ProjectStore(false)
+    metasOf(s).set("gone.png", { id: "g", kind: "binary", size: 10, hash: "f".repeat(64), mime: "image/png" })
+    const missing: string[] = []
+    const zip = importZip(await exportZip(s, undefined, missing))
+    expect(missing).toEqual(["gone.png"])
+    expect(zip.entries.map((e) => e.path)).not.toContain("gone.png")
+  })
+})
+
+describe("packages by language", () => {
+  it("tells which packages system a file uses", () => {
+    expect(packagesKind("a/b.py")).toBe("python")
+    expect(packagesKind("x.hpp")).toBe("cpp")
+    expect(packagesKind("index.html")).toBeNull()
+  })
+
+  it("knows C++ by extension", () => {
+    expect(languageOf("main.cc")).toBe("cpp")
+    expect(isCpp("x.hpp")).toBe(true)
+    expect(isCpp("a.py")).toBe(false)
+  })
+})
+
+describe("project languages", () => {
+  it("an empty project needs a language and defaults to python", () => {
+    const s = new ProjectStore(false)
+    expect(needsLanguage(s)).toBe(true)
+    expect(languagesOf(s)).toEqual(["python"])
+  })
+
+  it("starters: main.py and main.cpp", () => {
+    expect(STARTERS.python.path).toBe("main.py")
+    expect(STARTERS.cpp.path).toBe("main.cpp")
+    expect(STARTERS.cpp.code).toContain("std::getline")
+  })
+
+  it("startProject writes the language and the starter file", () => {
+    const s = new ProjectStore(false)
+    startProject(s, "cpp")
+    expect(metasOf(s).has("main.cpp")).toBe(true)
+    expect(languagesOf(s)).toEqual(["cpp"])
+    expect(needsLanguage(s)).toBe(false)
+  })
+
+  it("adds languages in order and never removes them", () => {
+    const s = new ProjectStore(false)
+    startProject(s, "cpp")
+    createFile(s, "a.py", "")
+    expect(languagesOf(s)).toEqual(["cpp", "python"])
+    deletePath(s, "a.py")
+    expect(languagesOf(s)).toEqual(["cpp", "python"])
+  })
+
+  it("infers both languages for an old project without languages", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "x.cpp", "")
+    createFile(s, "y.py", "")
+    s.structure.transact(() => stateOf(s).delete("languages"))
+    expect(languagesOf(s).sort()).toEqual(["cpp", "python"])
+  })
+
+  it("reset leaves no files and asks for a language again", () => {
+    const s = new ProjectStore(false)
+    startProject(s, "python")
+    resetProject(s)
+    expect(metasOf(s).size).toBe(0)
+    expect(needsLanguage(s)).toBe(true)
+  })
+
+  it("a C++ header added to a python project adds cpp", async () => {
+    const s = new ProjectStore(false)
+    startProject(s, "python")
+    createFile(s, "lib.hpp", "")
+    expect(languagesOf(s)).toEqual(["python", "cpp"])
+    const t = new ProjectStore(false)
+    startProject(t, "python")
+    await addFiles(t, "", [{ path: "lib.hpp", bytes: utf8("") }])
+    expect(languagesOf(t)).toEqual(["python", "cpp"])
+    addLanguagesFor(t, ["b.py"])
+    expect(languagesOf(t)).toEqual(["python", "cpp"])
+  })
+
+  it("an opened archive replaces the languages with its own", async () => {
+    const s = new ProjectStore(false)
+    startProject(s, "python")
+    const zip = importZip(zipSync({ "main.cpp": strToU8("int main() {}\n"), "lib.h": strToU8("") }))
+    await openArchive(s, zip)
+    expect(languagesOf(s)).toEqual(["cpp"])
+    expect(needsLanguage(s)).toBe(false)
+    const t = new ProjectStore(false)
+    startProject(t, "cpp")
+    await openArchive(t, importZip(zipSync({ "notes.md": strToU8("# hi\n") })))
+    expect(languagesOf(t)).toEqual(["python"])
+    expect(needsLanguage(t)).toBe(false)
+  })
+})
+
+describe("testPathOf", () => {
+  it("maps solutions to their test file", () => {
+    expect(testPathOf("a/b.py")).toBe("a/b.test.py")
+    expect(testPathOf("a/b.cpp")).toBe("a/b.test.py")
+    expect(testPathOf("x.cc")).toBe("x.test.py")
+  })
+
+  it("gives null for tests, headers and other files", () => {
+    expect(testPathOf("t.test.py")).toBeNull()
+    expect(testPathOf("README.md")).toBeNull()
+    expect(testPathOf("lib.hpp")).toBeNull()
   })
 })

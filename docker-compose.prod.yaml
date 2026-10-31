@@ -9,7 +9,7 @@
 # (service worker) only work in a secure context.
 #
 #   POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yaml up -d --build
-name: python-coder-prod
+name: polycode-prod
 
 x-hardening: &hardening
   read_only: true
@@ -40,7 +40,7 @@ services:
     <<: *hardening
     build: ./backend
     environment:
-      DATABASE_URL: postgres://pycoder:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/pycoder?sslmode=disable
+      DATABASE_URL: postgres://polycode:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/polycode?sslmode=disable
       LISTEN_ADDR: ":8090"
       # No PROXY_ALLOW_CIDRS here: on a server every special-purpose range stays blocked.
     depends_on:
@@ -51,13 +51,13 @@ services:
     image: postgres:17-alpine
     restart: always
     environment:
-      POSTGRES_USER: pycoder
+      POSTGRES_USER: polycode
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      POSTGRES_DB: pycoder
+      POSTGRES_DB: polycode
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pycoder -d pycoder"]
+      test: ["CMD-SHELL", "pg_isready -U polycode -d polycode"]
       interval: 5s
       timeout: 3s
       retries: 10

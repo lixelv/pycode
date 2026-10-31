@@ -43,19 +43,19 @@ function inlineCss(files: Files, path: string, css: string, depth = 0): string {
   return css.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/g, (_, q: string, ref: string) => `url(${q}${inline(files, path, ref, depth)}${q})`)
 }
 
-/** Forwards console.* and errors to the parent as {pycode: token, kind, text}. */
+/** Forwards console.* and errors to the parent as {polycode: token, kind, text}. */
 function bridge(token: string): string {
   return `<script>(() => {
   const token = ${JSON.stringify(token)}
   const show = (v) => { if (typeof v === "string") return v; try { return JSON.stringify(v) ?? String(v) } catch { return String(v) } }
-  const send = (kind, args) => parent.postMessage({ pycode: token, kind, text: [...args].map(show).join(" ") + "\\n" }, "*")
+  const send = (kind, args) => parent.postMessage({ polycode: token, kind, text: [...args].map(show).join(" ") + "\\n" }, "*")
   for (const [name, kind] of [["log", "stdout"], ["info", "stdout"], ["debug", "stdout"], ["warn", "stderr"], ["error", "stderr"]]) {
     const original = console[name].bind(console)
     console[name] = (...args) => { send(kind, args); original(...args) }
   }
   addEventListener("error", (e) => send("stderr", [e.message + (e.lineno ? " (line " + e.lineno + ")" : "")]))
   addEventListener("unhandledrejection", (e) => send("stderr", ["Uncaught (in promise) " + show(e.reason?.message ?? e.reason)]))
-  addEventListener("load", () => parent.postMessage({ pycode: token, kind: "loaded" }, "*"))
+  addEventListener("load", () => parent.postMessage({ polycode: token, kind: "loaded" }, "*"))
 })()</script>`
 }
 

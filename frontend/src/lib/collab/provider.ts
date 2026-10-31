@@ -53,18 +53,22 @@ export type LinkMode = "direct" | "relay"
 interface PeerInfo {
   peer: number
   userId: string
-  role: string
   level: Level
+  roles: string[]
+  owner?: boolean
 }
 
 type Control =
   | { type: "welcome"; you: PeerInfo; session: SessionInfo; peers?: PeerInfo[]; owner?: number }
   | { type: "owner"; owner?: number }
-  | { type: "join" | "leave"; peer: PeerInfo }
+  | { type: "join" | "leave" | "role"; peer: PeerInfo }
   | { type: "signal"; from: number; data: SignalData }
   | { type: "reset"; from: number }
   | { type: "error"; error: string }
   | { type: "ended" }
+
+/** Who sent a signal, as the server and the link know it (not as the signal claims). */
+export type Sender = PeerInfo & { clients: ReadonlySet<number> }
 
 type SignalData = { sdp: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateInit }
 
@@ -72,8 +76,10 @@ type Events = {
   status: (status: ProviderStatus) => void
   /** The owner reset the session's project (announced by the server). */
   reset: () => void
-  /** A signal addressed to us, with who sent it (their role). */
-  signal: (signal: Signal, from: Member) => void
+  /** A signal addressed to us, with who sent it (their role and awareness client). */
+  signal: (signal: Signal, from: Sender) => void
+  /** The server refused something we asked for (its message). */
+  error: (message: string) => void
   /** Links, roles or the acting owner changed. */
   links: () => void
 }
@@ -279,7 +285,7 @@ class Link {
 export class CollabProvider {
   readonly store: ProjectStore
   readonly awareness: Awareness
-  member: Member = { role: "read", level: "read" }
+  member: Member = { level: "read", roles: [] }
   /** Our member number in the room (from the server). */
   peerId = 0
   /** Who acts as the owner (the owner, or an admin while the owner is away); 0: nobody. */
@@ -289,7 +295,7 @@ export class CollabProvider {
   readonly links = new Map<number, Link>()
 
   private ws: WebSocket | null = null
-  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set() }
+  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set(), error: new Set() }
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
@@ -305,12 +311,8 @@ export class CollabProvider {
 
     for (const id of store.ids()) this.watch(id, store.doc(id))
     // Documents we may now read (a test shown, a folder given to our role): ask for them.
-    let readable = this.readable()
-    const onStructure = () => {
-      const now = this.readable()
-      for (const id of now) if (!readable.has(id)) this.broadcast(this.syncStep1(id, store.doc(id)))
-      readable = now
-    }
+    this.readableNow = this.readable()
+    const onStructure = () => this.requestReadable()
     store.structure.on("update", onStructure)
     this.detach.push(() => store.structure.off("update", onStructure))
     this.detach.push(
@@ -372,6 +374,20 @@ export class CollabProvider {
     return docAccess(member, docId, rulesOf(this.store))
   }
 
+  private readableNow = new Set<string>()
+
+  /** Asks for the documents we may read now but could not before. */
+  private requestReadable() {
+    const now = this.readable()
+    for (const id of now) if (!this.readableNow.has(id)) this.broadcast(this.syncStep1(id, this.store.doc(id)))
+    this.readableNow = now
+  }
+
+  /** Changes a member's level and custom roles (the server checks who may). */
+  setRole(peer: number, level: Level, roles: string[]) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "setRole", to: peer, level, roles }))
+  }
+
   private readable() {
     return new Set(this.store.ids().filter((id) => this.access(this.member, id) !== "none"))
   }
@@ -383,11 +399,11 @@ export class CollabProvider {
     }
   }
 
-  /** A member's role, and whether they act as the owner (for the members list). */
-  roleOf(clientId: number): { role: string; owner: boolean } | null {
-    if (clientId === this.clientID) return { role: this.member.role, owner: this.isOwner }
+  /** A member's level and roles, their peer number, and whether they act as the owner (for the members list). */
+  memberOf(clientId: number): (Member & { peer: number; acting: boolean }) | null {
+    if (clientId === this.clientID) return { ...this.member, peer: this.peerId, acting: this.isOwner }
     for (const link of this.links.values()) {
-      if (link.clients.has(clientId)) return { role: link.info.role, owner: link.info.peer === this.owner }
+      if (link.clients.has(clientId)) return { ...link.info, acting: link.info.peer === this.owner }
     }
     return null
   }
@@ -399,11 +415,15 @@ export class CollabProvider {
     return out
   }
 
+  /** Sends a signal to the member it is addressed to (to everyone while we do not know who that is). */
   signal(signal: Signal) {
     const enc = encoding.createEncoder()
     encoding.writeVarUint(enc, MSG_SIGNAL)
     encoding.writeVarString(enc, JSON.stringify(signal))
-    this.broadcast(encoding.toUint8Array(enc))
+    const message = encoding.toUint8Array(enc)
+    const target = [...this.links.values()].find((l) => l.clients.has(signal.to))
+    if (target) target.send(message)
+    else this.broadcast(message)
   }
 
   destroy() {
@@ -454,7 +474,7 @@ export class CollabProvider {
   private onControl(msg: Control) {
     switch (msg.type) {
       case "welcome":
-        this.member = { role: msg.you.role, level: msg.you.level }
+        this.member = { level: msg.you.level, roles: msg.you.roles ?? [], owner: msg.you.owner }
         this.peerId = msg.you.peer
         this.owner = msg.owner ?? 0
         // Keep our own code: it is what we reconnect with (each role has its own).
@@ -472,6 +492,18 @@ export class CollabProvider {
         this.owner = msg.owner ?? 0
         this.emitLinks()
         break
+      case "role": {
+        // Someone's level or roles changed (maybe ours): access follows at once.
+        const next = { level: msg.peer.level, roles: msg.peer.roles ?? [], owner: msg.peer.owner }
+        if (msg.peer.peer === this.peerId) this.member = next
+        else {
+          const link = this.links.get(msg.peer.peer)
+          if (link) Object.assign(link.info, next)
+        }
+        this.requestReadable()
+        this.emitLinks()
+        break
+      }
       case "leave": {
         const link = this.links.get(msg.peer.peer)
         if (link) {
@@ -489,7 +521,7 @@ export class CollabProvider {
         this.listeners.reset.forEach((fn) => fn())
         break
       case "error":
-        console.warn("session:", msg.error)
+        this.listeners.error.forEach((fn) => fn(msg.error))
         break
       case "ended":
         this.setStatus("ended")
@@ -576,13 +608,21 @@ export class CollabProvider {
       if (encoding.length(enc) > header) link.send(encoding.toUint8Array(enc))
     } else if (kind === MSG_AWARENESS) {
       const update = decoding.readVarUint8Array(dec)
-      // Remember which awareness clients this link speaks for.
+      // A member speaks for one awareness client: the first it names, if that
+      // is not us or someone else's. Updates about any other client are dropped
+      // (no one can pose as another member).
       const d2 = decoding.createDecoder(update)
       const n = decoding.readVarUint(d2)
       for (let i = 0; i < n; i++) {
-        link.clients.add(decoding.readVarUint(d2))
+        const client = decoding.readVarUint(d2)
         decoding.readVarUint(d2) // clock
         decoding.readVarString(d2) // state
+        if (link.clients.size === 0) {
+          const taken = client === this.clientID || [...this.links.values()].some((l) => l !== link && l.clients.has(client))
+          if (taken) return
+          link.clients.add(client)
+        }
+        if (!link.clients.has(client)) return
       }
       applyAwarenessUpdate(this.awareness, update, link)
       this.emitLinks()
@@ -598,7 +638,7 @@ export class CollabProvider {
     } else if (kind === MSG_SIGNAL) {
       if (this.access(link.info, "runtime") !== "write") return
       const signal = JSON.parse(decoding.readVarString(dec)) as Signal
-      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, link.info))
+      if (signal.to === this.clientID) this.listeners.signal.forEach((fn) => fn(signal, { ...link.info, clients: link.clients }))
     }
   }
 
@@ -720,7 +760,7 @@ export function createSession(askName: boolean, roles: { name: string; level: "r
 }
 
 export function getSession(code: string) {
-  return api<{ session: SessionInfo & { endedAt?: string }; role: string; level: Level }>(`/api/sessions/${encodeURIComponent(code)}`)
+  return api<{ session: SessionInfo & { endedAt?: string }; level: Level; roles: string[]; owner: boolean }>(`/api/sessions/${encodeURIComponent(code)}`)
 }
 
 export function listCodes(code: string) {

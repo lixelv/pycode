@@ -4,9 +4,10 @@ import { Doc as YDoc } from "yjs"
 import type * as Y from "yjs"
 
 import type { PackageEntry } from "@/hooks/use-packages"
+import { cppPackagesOf, type CppPackage } from "@/lib/cpp/packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
-import { isTest, parseEnv, renameRules, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
+import { isTest, parseEnv, renameRules, isReserved, LEGACY_ENV, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
 import { ensureBlob, putBlob, sha256 } from "./blobs"
 import { ProjectStore, type FileMeta } from "./store"
 
@@ -42,7 +43,7 @@ export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
 export const DEFAULT_FILE = "main.py"
 
-export type Language = "python" | "json" | "yaml" | "markdown" | "html" | "css" | "javascript" | "plaintext"
+export type Language = "python" | "json" | "yaml" | "markdown" | "html" | "css" | "javascript" | "cpp" | "plaintext"
 
 export function languageOf(path: string): Language {
   const ext = path.toLowerCase().split(".").pop() ?? ""
@@ -53,7 +54,25 @@ export function languageOf(path: string): Language {
   if (ext === "html" || ext === "htm") return "html"
   if (ext === "css") return "css"
   if (ext === "js" || ext === "mjs") return "javascript"
+  if (CPP_EXTENSIONS.includes(ext)) return "cpp"
   return "plaintext"
+}
+
+const CPP_EXTENSIONS = ["cpp", "cc", "cxx", "h", "hpp"]
+
+export const isCpp = (path: string) => languageOf(path) === "cpp"
+
+/** The test file of a solution (`a/b.py`, `a/b.cpp` → `a/b.test.py`); null for anything else, headers included. */
+export function testPathOf(path: string): string | null {
+  if (isTest(path)) return null
+  const match = /\.(py|cpp|cc|cxx)$/i.exec(path)
+  return match ? `${path.slice(0, match.index)}.test.py` : null
+}
+
+/** Which packages system a file uses; null when it has none. */
+export function packagesKind(path: string): "python" | "cpp" | null {
+  const language = languageOf(path)
+  return language === "python" ? "python" : language === "cpp" ? "cpp" : null
 }
 
 /** Normalizes a user-typed path: forward slashes, no leading/trailing or empty parts. */
@@ -66,13 +85,86 @@ export function cleanPath(raw: string): string | null {
 export const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "")
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1)
 
+// ---- project languages -------------------------------------------------------
+
+export type ProjectLanguage = "python" | "cpp"
+
+/** The language a file brings into the project, if any. */
+function projectLanguageOf(path: string): ProjectLanguage | null {
+  const language = languageOf(path)
+  return language === "python" || language === "cpp" ? language : null
+}
+
+/** Languages found in the files (an old project has no `languages`). */
+function inferLanguages(s: ProjectStore): ProjectLanguage[] {
+  const found = new Set<ProjectLanguage>()
+  for (const path of metasOf(s).keys()) {
+    const language = projectLanguageOf(path)
+    if (language) found.add(language)
+  }
+  return (["python", "cpp"] as const).filter((l) => found.has(l))
+}
+
+const storedLanguages = (s: ProjectStore) => stateOf(s).get("languages") as ProjectLanguage[] | undefined
+
+/** The project's languages: as chosen and added, else from its files; python when empty. */
+export function languagesOf(s: ProjectStore): ProjectLanguage[] {
+  const languages = storedLanguages(s) ?? inferLanguages(s)
+  return languages.length ? languages : ["python"]
+}
+
+/** Adds the languages these files bring (in order). Deleting a file never removes one. */
+export function addLanguagesFor(s: ProjectStore, paths: string[]) {
+  const languages = storedLanguages(s) ?? inferLanguages(s)
+  const next = [...languages]
+  for (const path of paths) {
+    const language = projectLanguageOf(path)
+    if (language && !next.includes(language)) next.push(language)
+  }
+  if (next.length > languages.length) stateOf(s).set("languages", next)
+}
+
+/** A new project without files: its owner chooses the language first. */
+export const needsLanguage = (s: ProjectStore) => metasOf(s).size === 0 && !stateOf(s).has("languages")
+
+export const STARTERS: Record<ProjectLanguage, { path: string; code: string }> = {
+  python: { path: DEFAULT_FILE, code: DEFAULT_CODE },
+  cpp: {
+    path: "main.cpp",
+    code: `// Welcome to polycode!
+// Press Run (⌘/Ctrl + Enter) to compile and run.
+
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string name;
+    std::cout << "What is your name? ";
+    std::getline(std::cin, name);
+    std::cout << "Hello, " << name << "!" << std::endl;
+}
+`,
+  },
+}
+
+/** Starts an empty project in a language: its starting file. */
+export function startProject(s: ProjectStore, lang: ProjectLanguage) {
+  s.structure.transact(() => {
+    stateOf(s).set("languages", [lang])
+    createFile(s, STARTERS[lang].path, STARTERS[lang].code)
+  })
+}
+
 /** `flags` overrides the default (tests are created hidden). */
 export function createFile(s: ProjectStore, path: string, content = "", flags?: Pick<FileMeta, "protected" | "hidden">) {
   const metas = metasOf(s)
   if (metas.has(path)) return
   const id = newId()
-  // Tests are hidden from students until an admin shows them.
-  metas.set(path, { id, kind: "text", size: content.length, ...(flags ?? (isTest(path) ? { hidden: true as const } : {})) })
+  s.structure.transact(() => {
+    // Tests are hidden from students until an admin shows them.
+    metas.set(path, { id, kind: "text", size: content.length, ...(flags ?? (isTest(path) ? { hidden: true as const } : {})) })
+    addLanguagesFor(s, [path])
+  })
   if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
 }
 
@@ -149,8 +241,14 @@ export async function projectFiles(s: ProjectStore, provider: { fetchBlob: (hash
   return files
 }
 
-/** Replaces the whole project content (files, folders, packages) and clears the console. */
-export function replaceProject(s: ProjectStore, files: Record<string, string>, dirs: string[] = [], packages: PackageEntry[] = []) {
+/** Replaces the whole project content (files, folders, packages, C++ packages) and clears the console. */
+export function replaceProject(
+  s: ProjectStore,
+  files: Record<string, string>,
+  dirs: string[] = [],
+  packages: PackageEntry[] = [],
+  cppPackages: CppPackage[] = [],
+) {
   const fresh: [string, string][] = []
   s.structure.transact(() => {
     const metas = metasOf(s)
@@ -166,6 +264,9 @@ export function replaceProject(s: ProjectStore, files: Record<string, string>, d
     const pkgs = packagesOf(s)
     pkgs.delete(0, pkgs.length)
     pkgs.push(packages)
+    const cpp = cppPackagesOf(s)
+    cpp.delete(0, cpp.length)
+    cpp.push(cppPackages)
   })
   for (const [id, content] of fresh) if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
   s.runtime.transact(() => {
@@ -175,11 +276,28 @@ export function replaceProject(s: ProjectStore, files: Record<string, string>, d
   })
 }
 
+/** A fresh project: no files (the language is chosen again), folder rules, freeze or presentation (roles stay). */
 export function resetProject(s: ProjectStore) {
-  replaceProject(s, { [DEFAULT_FILE]: DEFAULT_CODE })
+  replaceProject(s, {})
+  s.structure.transact(() => {
+    foldersOf(s).clear()
+    stateOf(s).delete("frozen")
+    stateOf(s).delete("presentation")
+    stateOf(s).delete("languages")
+  })
 }
 
-/** The project's access rules, as written to .pycode.env. */
+/**
+ * First start of a local project: `fill` it from an older version's data
+ * once. Without such data it stays empty, so its language is asked for.
+ */
+export async function setUp(s: ProjectStore, fill: (s: ProjectStore) => Promise<void>) {
+  if (stateOf(s).get("setUp")) return
+  if (metasOf(s).size === 0) await fill(s)
+  stateOf(s).set("setUp", true)
+}
+
+/** The project's access rules, as written to .polycode.env. */
 export function envOf(s: ProjectStore): EnvRules {
   const metas = metasOf(s).toJSON() as Record<string, FileMeta>
   return {
@@ -271,7 +389,7 @@ export async function addFiles(
   let grow = 0
   for (const { path, bytes } of entries) {
     const full = cleanPath(dir ? `${dir}/${path}` : path)
-    if (!full || full === RESERVED) continue
+    if (!full || isReserved(full)) continue
     if (isText(full, bytes)) {
       const text = new TextDecoder().decode(bytes)
       grow += text.length
@@ -288,12 +406,15 @@ export async function addFiles(
   if (projectSize(s) + grow > PROJECT_LIMIT) return { error: "limit" }
   for (const p of prepared) if (p.bytes) await putBlob(p.bytes, p.meta!.hash)
   const added: string[] = []
-  for (const p of prepared) {
-    const path = freePath(s, p.path)
-    if (p.meta) metasOf(s).set(path, p.meta)
-    else createFile(s, path, p.text, flags(p.path))
-    added.push(path)
-  }
+  s.structure.transact(() => {
+    for (const p of prepared) {
+      const path = freePath(s, p.path)
+      if (p.meta) metasOf(s).set(path, p.meta)
+      else createFile(s, path, p.text, flags(p.path))
+      added.push(path)
+    }
+    addLanguagesFor(s, added)
+  })
   return { added }
 }
 
@@ -327,12 +448,18 @@ export function mimeOf(path: string) {
 
 // ---- archive --------------------------------------------------------------
 
-/** Packs the project; binary files are fetched first if this browser lacks them. */
-export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promise<Uint8Array>): Promise<Uint8Array> {
+/**
+ * Packs the project; binary files are fetched first if this browser lacks
+ * them. Those nobody has are left out and their paths put into `missing`.
+ */
+export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promise<Uint8Array>, missing: string[] = []): Promise<Uint8Array> {
   const entries: Record<string, Uint8Array> = {}
   for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
   for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
-    if (meta.kind === "binary" && meta.hash) entries[path] = await ensureBlob(meta.hash, fetch).catch(() => new Uint8Array())
+    if (meta.kind !== "binary" || !meta.hash) continue
+    const bytes = await ensureBlob(meta.hash, fetch).catch(() => null)
+    if (bytes) entries[path] = bytes
+    else missing.push(path)
   }
   const env = envOf(s)
   if (Object.keys(env.roles).length || Object.keys(env.folders).length || env.protected.length || env.hidden.length) {
@@ -358,6 +485,7 @@ export function importZip(data: Uint8Array): Archive {
   const entries: Archive["entries"] = []
   const dirs: string[] = []
   let env: EnvRules | null = null
+  let legacy: EnvRules | null = null
   const paths = Object.keys(raw).filter((p) => !p.startsWith("__MACOSX/") && !p.split("/").some((part) => part === ".DS_Store"))
   // A zip of one folder ("project/…") is opened as that folder's content.
   const top = new Set(paths.map((p) => p.split("/")[0]))
@@ -373,9 +501,10 @@ export function importZip(data: Uint8Array): Archive {
     const path = cleanPath(rel)
     if (!path) continue
     if (path === RESERVED) env = parseEnv(strFromU8(raw[original]))
+    else if (path === LEGACY_ENV) legacy = parseEnv(strFromU8(raw[original]))
     else entries.push({ path, bytes: raw[original] })
   }
-  return { entries, dirs, env, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
+  return { entries, dirs, env: env ?? legacy, size: entries.reduce((n, e) => n + e.bytes.length, 0) }
 }
 
 /**
@@ -387,7 +516,9 @@ export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ adde
   let board = 0
   s.board.getMap<{ dataURL?: string }>("files").forEach((f) => (board += f.dataURL?.length ?? 0))
   if (zip.size + board > PROJECT_LIMIT) return { error: "limit" }
-  replaceProject(s, {}, zip.dirs, packagesOf(s).toArray())
+  // The archive's files decide the languages (none: python); set first, so the empty moment does not ask for one.
+  stateOf(s).set("languages", [])
+  replaceProject(s, {}, zip.dirs, packagesOf(s).toArray(), cppPackagesOf(s).toArray())
   if (zip.env) applyEnv(s, zip.env)
   return addFiles(s, "", zip.entries, zip.env)
 }
@@ -405,7 +536,7 @@ export function localStore(): ProjectStore {
   const s = new ProjectStore(true)
   local = s
   const ready = s.ready.then(async () => {
-    if (metasOf(s).size === 0) await migrate(s)
+    await setUp(s, migrate)
     // A run cannot survive a reload.
     const run = s.runtime.getMap("run")
     if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
@@ -433,7 +564,7 @@ async function migrate(s: ProjectStore) {
     } catch {
       // storage unavailable
     }
-    replaceProject(s, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
+    if (legacyCode !== null || legacyPackages.length) replaceProject(s, { [DEFAULT_FILE]: legacyCode ?? DEFAULT_CODE }, [], legacyPackages)
   }
   await persistence.clearData()
   old.destroy()

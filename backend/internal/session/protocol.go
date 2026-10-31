@@ -29,22 +29,25 @@ const (
 
 // peerInfo describes one connected member to the others.
 type peerInfo struct {
-	Peer   uint32 `json:"peer"`
-	UserID string `json:"userId"`
-	Role   string `json:"role"`
-	Level  string `json:"level"`
+	Peer   uint32   `json:"peer"`
+	UserID string   `json:"userId"`
+	Level  string   `json:"level"`
+	Roles  []string `json:"roles"` // custom roles (each opens its folders)
+	Owner  bool     `json:"owner,omitempty"`
 }
 
 // control is every JSON message in either direction.
 type control struct {
-	Type    string     `json:"type"`              // welcome | join | leave | signal | owner | reset | error | ended
+	Type    string     `json:"type"`              // welcome | join | leave | signal | owner | role | setRole | reset | error | ended
 	You     *peerInfo  `json:"you,omitempty"`     // welcome
 	Session *Session   `json:"session,omitempty"` // welcome
 	Peers   []peerInfo `json:"peers,omitempty"`   // welcome
-	Peer    *peerInfo  `json:"peer,omitempty"`    // join / leave
+	Peer    *peerInfo  `json:"peer,omitempty"`    // join / leave / role
 	To      uint32     `json:"to,omitempty"`      // signal (client -> server)
 	From    uint32     `json:"from,omitempty"`    // signal (server -> client)
 	Data    jsonRaw    `json:"data,omitempty"`    // signal payload (SDP / ICE), opaque
 	Error   string     `json:"error,omitempty"`   // error
 	Owner   *uint32    `json:"owner,omitempty"`   // welcome / owner: who acts as the owner (0: nobody)
+	Level   string     `json:"level,omitempty"`   // setRole (client -> server, with To): the new level
+	Roles   []string   `json:"roles,omitempty"`   // setRole: the new custom roles
 }

@@ -4,6 +4,7 @@ The source is written to ``main.py`` first so tracebacks show its lines.
 """
 
 import builtins
+import os
 import sys
 import traceback
 
@@ -11,9 +12,51 @@ import traceback
 PROJECT = "/home/pyodide/project"
 
 
+SLEEP_STEP = 0.05
+# Beyond this time.sleep has its own answer (OverflowError): 2**63 ns is about 9.2e9 s.
+SLEEP_RANGE = 1e10
+
+
+def sliced_sleep(seconds, sleep, check, step: float = SLEEP_STEP) -> None:
+    """Sleeps in slices, checking for an interrupt after each.
+
+    Pyodide looks at the interrupt buffer only every so many eval-breaker
+    checks, so a long sleep would notice a Stop seconds late.
+    """
+    if not isinstance(seconds, (int, float)) or seconds != seconds or abs(seconds) >= SLEEP_RANGE:
+        sleep(seconds)  # time.sleep's own answer: TypeError, ValueError, OverflowError
+        check()
+        return
+    if seconds < 0:
+        raise ValueError("sleep length must be non-negative")
+    remaining = seconds
+    while True:
+        part = min(remaining, step)
+        sleep(part)
+        check()
+        remaining -= part
+        if remaining <= 0:
+            return
+
+
+def install_sleep() -> None:
+    """Replaces time.sleep once per interpreter, for runs and checks alike."""
+    import functools
+    import time
+
+    import pyodide_js
+
+    original = time.sleep
+
+    @functools.wraps(original)
+    def sleep(seconds, /):
+        sliced_sleep(seconds, original, pyodide_js.checkInterrupt)
+
+    time.sleep = sleep
+
+
 def write_project(files: dict) -> None:
     """Lays the project out on disk, replacing the previous run's copy."""
-    import os
     import shutil
 
     shutil.rmtree(PROJECT, ignore_errors=True)
@@ -26,10 +69,24 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
-def run_main(path: str = "main.py", debugger=None) -> int:
-    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it."""
+def without_internal_frames(tb, folder: str = os.path.dirname(os.path.abspath(__file__))):
+    """Ends a traceback before our own wrappers (time.sleep), which mean nothing to a student."""
+    head = tb
+    while tb and tb.tb_next:
+        if tb.tb_next.tb_frame.f_code.co_filename.startswith(folder + os.sep):
+            tb.tb_next = None
+            break
+        tb = tb.tb_next
+    return head
+
+
+def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
+    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it.
+
+    ``arm`` turns interrupts on just before the program starts and raises
+    KeyboardInterrupt for a Stop that came earlier.
+    """
     import bdb
-    import os
 
     # Like `python path`: the script's folder (and the project root) are importable,
     # and modules from the previous run are imported fresh.
@@ -52,6 +109,8 @@ def run_main(path: str = "main.py", debugger=None) -> int:
     sys.argv = [path]
     namespace = {"__name__": "__main__", "__file__": path, "__builtins__": builtins}
     try:
+        if arm:
+            arm()
         if debugger:
             debugger.run(code, namespace)
         else:
@@ -72,7 +131,7 @@ def run_main(path: str = "main.py", debugger=None) -> int:
         return 130
     except BaseException as exc:
         # Drop this bootstrap's frame so the traceback starts in main.py.
-        traceback.print_exception(type(exc), exc, exc.__traceback__.tb_next)
+        traceback.print_exception(type(exc), exc, without_internal_frames(exc.__traceback__.tb_next))
         return 1
     finally:
         sys.stdout.flush()

@@ -86,7 +86,7 @@ export class ProjectStore {
     const doc = new Y.Doc()
     if (this.structure) doc.clientID = this.structure.clientID
     this.docs.set(docId, doc)
-    if (this.persist) this.stores.set(docId, new IndexeddbPersistence(`pycode:${docId}`, doc))
+    if (this.persist) this.stores.set(docId, new IndexeddbPersistence(`polycode:${docId}`, doc))
     this.listeners.forEach((fn) => fn(docId, doc))
     return doc
   }

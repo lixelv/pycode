@@ -32,3 +32,13 @@ CREATE TABLE IF NOT EXISTS session_codes (
     level       text NOT NULL CHECK (level IN ('read', 'write', 'admin')),
     UNIQUE (session_id, role)
 );
+
+-- Level and custom roles given by the owner or an admin during a session;
+-- they win over the join code, so reconnecting does not undo them.
+CREATE TABLE IF NOT EXISTS session_members (
+    session_id  uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    user_id     uuid NOT NULL,
+    level       text NOT NULL CHECK (level IN ('read', 'write', 'admin')),
+    roles       text[] NOT NULL DEFAULT '{}',
+    PRIMARY KEY (session_id, user_id)
+);

@@ -8,16 +8,18 @@ import { ConfirmDialog, type ConfirmRequest } from "@/components/confirm-dialog"
 import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
 import { MarkdownPreview } from "@/components/markdown-preview"
+import { CppPackagesPanel } from "@/components/cpp-packages-panel"
 import { PackagesPanel } from "@/components/packages-panel"
 import { DocViewer } from "@/components/doc-viewer"
 import { docKindOf } from "@/lib/project/project"
 import { CheckResults, type CheckState } from "@/components/check-results"
 import { DebugPanel } from "@/components/debug-panel"
 import { FileViewer } from "@/components/file-viewer"
-import { WebPreview, type WebRun } from "@/components/web-preview"
+import { LivePagePreview, WebPreview, type WebRun } from "@/components/web-preview"
 import { Presentation, type PresentationState } from "@/components/presentation"
 import { FollowButton } from "@/components/follow-button"
 import { FrostOverlay } from "@/components/frost-overlay"
+import { LanguageDialog } from "@/components/language-dialog"
 import { NameDialog } from "@/components/name-dialog"
 import { RemoteCursorStyles } from "@/components/remote-cursors"
 import { ShareDialog } from "@/components/share-dialog"
@@ -26,11 +28,13 @@ import { Kbd } from "@/components/ui/kbd"
 import { Toaster } from "@/components/ui/sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCollab } from "@/hooks/use-collab"
+import { useCppPackages } from "@/hooks/use-cpp-packages"
 import { usePackages } from "@/hooks/use-packages"
-import { RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
+import { isBusy, RUN_TIMEOUT_SEC, useRunner, type ExitInfo, type RunEvent, type RunStatus } from "@/hooks/use-runner"
 import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
+import { usePersisted } from "@/hooks/use-persisted"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedRun, sharedTerminal } from "@/lib/collab/doc"
@@ -44,8 +48,11 @@ import {
   exportZip,
   importZip,
   languageOf,
+  languagesOf,
   localStore,
   metasOf,
+  needsLanguage,
+  packagesKind,
   packagesOf,
   renamePath,
   resetProject,
@@ -53,29 +60,38 @@ import {
   PROJECT_LIMIT,
   projectFiles,
   rulesOf,
+  startProject,
+  STARTERS,
   stateOf,
+  isCpp,
+  testPathOf,
   textOf,
+  type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
-import { fileAccess, isTest } from "@/lib/project/access"
+import { cppClient, useCppStatus } from "@/lib/cpp/client"
+import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
+import { fileAccess } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import type { DebugCommand } from "@/workers/protocol"
 import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
-import { roleLabel } from "@/lib/roles"
+import { memberLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
 const MOD = IS_MAC ? "⌘" : "Ctrl"
-const THEME_KEY = "python-coder:theme"
-const LABELS_KEY = "pycode:cursor-labels"
-const MD_MODE_KEY = "pycode:md-mode"
-const BREAKPOINTS_KEY = "pycode:breakpoints"
+const THEME_KEY = "polycode:theme"
+const LABELS_KEY = "polycode:cursor-labels"
+
+const MD_MODE_KEY = "polycode:md-mode"
+const HTML_MODE_KEY = "polycode:html-mode"
+const BREAKPOINTS_KEY = "polycode:breakpoints"
 const CHECK_COOLDOWN_MS = 3000
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
-type MarkdownMode = "code" | "split" | "preview"
+type ViewMode = "code" | "split" | "preview"
 
 function loadTheme(): "dark" | "light" {
   try {
@@ -117,20 +133,7 @@ function Workspace() {
       // storage unavailable
     }
   }, [theme])
-  const [labels, setLabels] = useState(() => {
-    try {
-      return localStorage.getItem(LABELS_KEY) === "1"
-    } catch {
-      return false
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(LABELS_KEY, labels ? "1" : "0")
-    } catch {
-      // storage unavailable
-    }
-  }, [labels])
+  const [labels, setLabels] = usePersisted(LABELS_KEY, false)
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -139,14 +142,14 @@ function Workspace() {
   const [filesOpen, setFilesOpen] = useState(true)
   const [filesWidth, setFilesWidth] = useState(() => {
     try {
-      return Number(localStorage.getItem("python-coder:files-width")) || 240
+      return Number(localStorage.getItem("polycode:files-width")) || 240
     } catch {
       return 240
     }
   })
   useEffect(() => {
     try {
-      localStorage.setItem("python-coder:files-width", String(filesWidth))
+      localStorage.setItem("polycode:files-width", String(filesWidth))
     } catch {
       // storage unavailable
     }
@@ -169,10 +172,34 @@ function Workspace() {
   const isGuest = !!provider && provider.store !== localStore()
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
-    if (localStorage.getItem("pycode:e2e")) Object.assign(window, { __pycode: { store, provider } })
+    try {
+      if (localStorage.getItem("polycode:e2e")) Object.assign(window, { __polycode: { store, provider } })
+    } catch {
+      // storage unavailable
+    }
   }, [store, provider])
 
   const access = useAccess(store, provider, collab.version)
+  // The project's languages decide which runtimes load; an empty new project asks for one.
+  // Nothing loads until the project is there and has a language (a guest waits for the owner's).
+  const [languages, setLanguages] = useState<ProjectLanguage[]>([])
+  const [askLanguage, setAskLanguage] = useState(false)
+  useEffect(() => {
+    let ready = false
+    const read = () => {
+      const next = ready && !needsLanguage(store) ? languagesOf(store) : []
+      setLanguages((prev) => (prev.join() === next.join() ? prev : next))
+      setAskLanguage(ready && needsLanguage(store))
+    }
+    read()
+    store.structure.on("update", read)
+    void store.ready.then(() => {
+      ready = true
+      read()
+    })
+    return () => store.structure.off("update", read)
+  }, [store])
+  const hasPython = languages.includes("python")
   const [allFiles, setAllFiles] = useState<string[]>(() => [...metasOf(store).keys()])
   useEffect(() => {
     const map = metasOf(store)
@@ -190,6 +217,11 @@ function Workspace() {
     if (files.length && !files.includes(active)) setActive(files.includes(DEFAULT_FILE) ? DEFAULT_FILE : files[0])
   }, [files, active])
   const activeExists = files.includes(active)
+  const packagesTab = packagesKind(active)
+  const hasPackages = packagesTab !== null
+  useEffect(() => {
+    if (view === "packages" && !hasPackages) setView("editor")
+  }, [view, hasPackages])
   const activeMeta = activeExists ? metasOf(store).get(active) : undefined
   const canWrite = activeExists && activeMeta?.kind === "text" && access.can(active) === "write"
   const docKind = activeMeta?.kind === "binary" ? docKindOf(active) : null
@@ -198,21 +230,23 @@ function Workspace() {
   const fetchBlob = useMemo(() => (provider ? (hash: string) => provider.fetchBlob(hash) : undefined), [provider])
   const canRun = access.canRun
   const language = languageOf(active)
-  const [mdMode, setMdMode] = useState<MarkdownMode>(() => {
-    try {
-      return (localStorage.getItem(MD_MODE_KEY) as MarkdownMode) || "split"
-    } catch {
-      return "split"
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(MD_MODE_KEY, mdMode)
-    } catch {
-      // storage unavailable
-    }
-  }, [mdMode])
-  const markdownMode = language === "markdown" && activeExists ? mdMode : null
+  // Markdown and HTML: the code, the result, or both side by side (each remembers its own).
+  const [mdMode, setMdMode] = usePersisted<ViewMode>(MD_MODE_KEY, "split")
+  const [htmlMode, setHtmlMode] = usePersisted<ViewMode>(HTML_MODE_KEY, "split")
+  const viewMode = !activeExists ? null : language === "markdown" ? mdMode : language === "html" ? htmlMode : null
+  const setViewMode = language === "html" ? setHtmlMode : setMdMode
+  // Clang checks the open C++ file against the files a run would see.
+  const cppStatus = useCppStatus()
+  const cppPkgs = useCppPackages(useMemo(() => cppPackagesOf(store), [store]))
+  const cppPackages = cppPkgs.packages
+  const lintCpp = useCallback(
+    async (source: string) => {
+      const files = await projectFiles(store, provider, active)
+      files[active] = source
+      return cppClient.lint(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))
+    },
+    [store, provider, active, cppPackages, cppPkgs.fail],
+  )
   const follow = useFollow({
     provider,
     editor: editorInstance,
@@ -224,8 +258,8 @@ function Workspace() {
   })
 
   useEffect(() => {
-    ruffVersion().then(setRuff).catch(() => {})
-  }, [])
+    if (hasPython) ruffVersion().then(setRuff).catch(() => {})
+  }, [hasPython])
 
   // ---- running ------------------------------------------------------------------
   const sharedConsole = useSharedConsole(doc, awareness)
@@ -244,13 +278,14 @@ function Workspace() {
     else if (event.type === "debug") sharedRun(d).set("debug", event.state)
   }, [])
 
-  const runner = useRunner({ onRateLimited: (message) => toast.warning(message), onEvent: mirrorRun })
+  const runner = useRunner({ onRateLimited: (message) => toast.warning(message, { id: "rate-limited" }), onEvent: mirrorRun, warm: hasPython })
   const runnerRef = useRef(runner)
   useEffect(() => {
     runnerRef.current = runner
   })
   const packagesArray = useMemo(() => packagesOf(store), [store])
   const pkgs = usePackages(packagesArray)
+  const shownPackages = packagesTab === "cpp" ? cppPackages : pkgs.packages
 
   // Input and Stop from other members reach us when we are the one running.
   useEffect(() => {
@@ -276,7 +311,7 @@ function Workspace() {
   const consoleView: { status: RunStatus; exit: ExitInfo | null } = sharedConsole.executorGone
     ? { status: "finished", exit: { code: null, duration: 0, reason: "error", message: t("console.executorLeft") } }
     : { status: sharedConsole.status, exit: sharedConsole.exit }
-  const consoleActive = consoleView.status === "connecting" || consoleView.status === "running" || consoleView.status === "waiting"
+  const consoleActive = isBusy(consoleView.status)
 
   const sendInput = useCallback(
     (line: string) => {
@@ -295,31 +330,20 @@ function Workspace() {
     else provider?.signal({ type: "stop", to: executorClient! })
   }, [amExecutor, executorClient, provider, runner])
 
-  const runnable = language === "python" || language === "html" || language === "javascript"
+  // Programs run in the console (C++ headers are not programs); web files in a frame.
+  const consoleProgram = language === "python" || (language === "cpp" && !/\.(h|hpp)$/i.test(active))
+  const runnable = consoleProgram || language === "html" || language === "javascript"
 
   // ---- debugger -------------------------------------------------------------------
   // Breakpoints are this browser's own (not shared): path -> lines.
-  const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(BREAKPOINTS_KEY) ?? "{}")
-    } catch {
-      return {}
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(BREAKPOINTS_KEY, JSON.stringify(breakpoints))
-    } catch {
-      // storage unavailable
-    }
-  }, [breakpoints])
+  const [breakpoints, setBreakpoints] = usePersisted<Record<string, number[]>>(BREAKPOINTS_KEY, {})
   const toggleBreakpoint = useCallback(
     (line: number) =>
       setBreakpoints((all) => {
         const lines = all[active] ?? []
         return { ...all, [active]: lines.includes(line) ? lines.filter((l) => l !== line) : [...lines, line].sort((a, b) => a - b) }
       }),
-    [active],
+    [active, setBreakpoints],
   )
   const debugCommand = useCallback(
     (command: DebugCommand) => {
@@ -351,19 +375,21 @@ function Workspace() {
   const [webRun, setWebRun] = useState<WebRun | null>(null)
   const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug">("console")
   const webStarted = useRef(0)
+  const lastEntry = useRef<string | null>(null)
   const startRun = useCallback((debug: boolean) => {
     if (!activeExists) return
     setView("editor")
-    if (language !== "python" && language !== "html" && language !== "javascript") {
+    if (!runnable) {
       toast.message(t("toast.onlyPython"))
       return
     }
     if (!canRun) return
+    if (consoleProgram && !runner.allowRun()) return
     setConsoleOpen(true)
     // We become the one running the project's program; a run going on
     // elsewhere is stopped (its owner stops mirroring when we take over).
     const prev = readRun(doc)
-    const busy = prev.status === "running" || prev.status === "waiting" || prev.status === "connecting"
+    const busy = isBusy(prev.status)
     if (provider && busy && prev.executorClient !== null && prev.executorClient !== doc.clientID) {
       provider.signal({ type: "stop", to: prev.executorClient })
     }
@@ -374,7 +400,18 @@ function Workspace() {
       if (debug) setLowerTab("debug")
       // Breakpoints of the project's files (an empty set still pauses on line 1).
       const points = debug ? Object.fromEntries(Object.entries(breakpoints).filter(([p]) => allFiles.includes(p))) : undefined
-      void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points))
+      // In a session, another file may be someone else's program: it gets its own interpreter.
+      const fresh = !!provider && lastEntry.current !== null && lastEntry.current !== active
+      lastEntry.current = active
+      void runner.run(projectFiles(store, provider, active), active, pkgs.activeSpecs, points, fresh)
+      return
+    }
+    if (language === "cpp") {
+      setWebRun(null)
+      setRunStatus(doc, "compiling") // resetRun's `connecting` means Python to the console
+      void runner.runCpp(projectFiles(store, provider, active), active, async (files) =>
+        cppClient.compile(files, active, await loadCppPackages(cppPackages, cppPkgs.fail)),
+      )
       return
     }
     // A web page or script runs here, in a sandboxed frame; its console is shared like Python's.
@@ -386,7 +423,7 @@ function Workspace() {
       setWebRun({ path: active, page, token, visible: language === "html" })
       setLowerTab(language === "html" ? "web" : "console")
     })
-  }, [activeExists, language, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles])
+  }, [activeExists, language, runnable, consoleProgram, active, canRun, doc, store, provider, collab.me, runner, pkgs.activeSpecs, t, breakpoints, allFiles, cppPackages, cppPkgs.fail])
   const run = useCallback(() => startRun(false), [startRun])
   const debugRun = useCallback(() => startRun(true), [startRun])
 
@@ -402,24 +439,28 @@ function Workspace() {
   }, [doc])
   // ---- automatic checks: name.py against name.test.py, run in an admin's browser ----
   const [check, setCheck] = useState<CheckState | null>(null)
-  const testPath = language === "python" && !isTest(active) ? active.replace(/\.py$/, ".test.py") : null
+  const testPath = testPathOf(active)
   const hasTest = !!testPath && allFiles.includes(testPath)
   const canCheck = !provider || provider.isAdmin || provider.adminOnline
 
   /** Runs the tests of `path` here (we are an admin, or alone). */
   const checkHere = useCallback(
     async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
-      const test = textOf(store, path.replace(/\.py$/, ".test.py"))?.toString()
-      if (test === undefined) return { results: null, error: t("check.failed", { error: "no tests" }) }
+      const testFile = testPathOf(path)
+      const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
+      if (test === undefined) return { results: null, error: t("check.noTests") }
       try {
         const files = await projectFiles(store, provider, path)
-        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+        if (!isCpp(path)) return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+        const { wasm, log } = await cppClient.compile(files, path, await loadCppPackages(cppPackages, cppPkgs.fail))
+        if (!wasm) return { results: null, error: t("check.compileFailed", { log: log.split("\n").slice(0, 5).join("\n") }) }
+        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm) }
       } catch (err) {
         const message = (err as Error).message
         return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }
       }
     },
-    [store, provider, pkgs.activeSpecs, t],
+    [store, provider, pkgs.activeSpecs, t, cppPackages, cppPkgs.fail],
   )
 
   const startCheck = useCallback(async () => {
@@ -442,8 +483,13 @@ function Workspace() {
   useEffect(() => {
     if (!provider) return
     return provider.on("signal", (signal, from) => {
+      // Results count only from an admin; requests answer only their real sender.
+      if (signal.type === "check-result" && from.level !== "admin") return
+      if (signal.type === "check" && !from.clients.has(signal.from)) return
       if (signal.type === "check-result") {
         setCheck({ path: signal.path, results: signal.results, error: signal.error })
+        setConsoleOpen(true)
+        setLowerTab("tests")
         return
       }
       if (signal.type !== "check" || !provider.isAdmin) return
@@ -489,9 +535,11 @@ function Workspace() {
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
-    const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined)
-    downloadBlob(zip, provider ? `python-coder-${provider.code}.zip` : "python-coder-project.zip")
-  }, [store, provider])
+    const missing: string[] = []
+    const zip = await exportZip(store, provider ? (hash) => provider.fetchBlob(hash) : undefined, missing)
+    if (missing.length) toast.warning(t("toast.zipMissing", { files: missing.join(", ") }))
+    downloadBlob(zip, provider ? `polycode-${provider.code}.zip` : "polycode-project.zip")
+  }, [store, provider, t])
 
   const upload = useCallback(
     async (file: File) => {
@@ -583,6 +631,17 @@ function Workspace() {
       },
     })
   }, [canReset, provider, store, t])
+
+  // A new project's language: only in our own store (a guest, even an admin standing in, waits for the owner's files).
+  const chooseLanguage = useCallback(
+    (lang: ProjectLanguage) => {
+      if (!needsLanguage(store)) return
+      startProject(store, lang)
+      setActive(STARTERS[lang].path)
+      setView("editor")
+    },
+    [store],
+  )
 
   // Everyone else follows the owner's reset.
   useEffect(() => {
@@ -744,7 +803,9 @@ function Workspace() {
                   ["board", t("tab.board")],
                   ["packages", t("tab.packages")],
                 ] as const
-              ).map(([value, label]) => (
+              )
+                .filter(([value]) => value !== "packages" || hasPackages)
+                .map(([value, label]) => (
                 <button
                   key={value}
                   role="tab"
@@ -759,13 +820,13 @@ function Workspace() {
                   )}
                 >
                   {label}
-                  {value === "packages" && pkgs.packages.length > 0 && (
-                    <span className="rounded-full bg-foreground/10 px-1.5 font-mono text-[10px]">{pkgs.packages.length}</span>
+                  {value === "packages" && shownPackages.length > 0 && (
+                    <span className="rounded-full bg-foreground/10 px-1.5 font-mono text-[10px]">{shownPackages.length}</span>
                   )}
                 </button>
               ))}
             </nav>
-            {markdownMode && view === "editor" && (
+            {viewMode && view === "editor" && (
               <nav role="radiogroup" aria-label={t("md.mode")} className="inline-flex shrink-0 rounded-md border border-border bg-muted p-0.5">
                 {(
                   [
@@ -777,13 +838,13 @@ function Workspace() {
                   <button
                     key={value}
                     role="radio"
-                    aria-checked={mdMode === value}
+                    aria-checked={viewMode === value}
                     title={label}
                     aria-label={label}
-                    onClick={() => setMdMode(value)}
+                    onClick={() => setViewMode(value)}
                     className={cn(
                       "inline-flex items-center rounded-[5px] px-2 py-1 transition-colors [&_svg]:size-3.5",
-                      mdMode === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                      viewMode === value ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
                     <Icon />
@@ -808,7 +869,7 @@ function Workspace() {
               </TooltipTrigger>
               <TooltipContent>{language === "json" ? t("btn.format.json") : language === "python" ? t("btn.format.ruff") : t("btn.format.prettier")}</TooltipContent>
             </Tooltip>
-            <Button variant="outline" size="sm" onClick={() => setTreeOpen(true)} disabled={language !== "python"}>
+            <Button variant="outline" size="sm" onClick={() => setTreeOpen(true)} disabled={language !== "python" && language !== "cpp"}>
               <Network /> <span className="hidden sm:inline">{t("btn.tree")}</span>
             </Button>
             <span aria-hidden className="mx-1 h-5 w-px self-center bg-border" />
@@ -843,7 +904,7 @@ function Workspace() {
                 onStop={follow.stop}
               />
             )}
-            <ShareButton live={!!provider} peers={collab.peers} role={provider?.member.role} onClick={() => setShareOpen(true)} />
+            <ShareButton live={!!provider} peers={collab.peers} role={provider ? memberLabel(provider.member) : undefined} onClick={() => setShareOpen(true)} />
             {hasTest && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -866,12 +927,12 @@ function Workspace() {
                 <TooltipContent>{t("debug.hint")}</TooltipContent>
               </Tooltip>
             )}
-            {consoleActive && canRun && language === "python" ? (
+            {consoleActive && canRun && consoleProgram ? (
               <Button size="sm" variant="secondary" onClick={stop} className="min-w-24">
                 <Square className="fill-current" /> {t("btn.stop")}
               </Button>
             ) : (
-              <Button size="sm" onClick={() => run()} disabled={!runnable || (language === "python" && !canRun)} className="min-w-24">
+              <Button size="sm" onClick={() => run()} disabled={!runnable || (consoleProgram && !canRun)} className="min-w-24">
                 <Play className="fill-current" /> {t("btn.run")}
                 <Kbd className="ml-1 hidden h-4 bg-primary-foreground/15 px-1 text-[10px] text-primary-foreground sm:inline-flex">{MOD}↵</Kbd>
               </Button>
@@ -928,17 +989,22 @@ function Workspace() {
           )}
           {view === "packages" && (
             <main className="min-h-0 min-w-0 flex-1">
-              <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
+              {packagesTab === "cpp" ? (
+                <CppPackagesPanel packages={cppPackages} readOnly={!access.isAdmin} onAdd={cppPkgs.add} onRemove={cppPkgs.remove} onRetry={cppPkgs.retry} />
+              ) : (
+                <PackagesPanel packages={pkgs.packages} readOnly={!access.isAdmin} onAdd={pkgs.add} onRemove={pkgs.remove} onRetry={pkgs.retry} />
+              )}
             </main>
           )}
           {/* The editor stays mounted (hidden) so its state survives tab switches. */}
           <main ref={split} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", view !== "editor" && "hidden")}>
             <div className="flex min-h-0 flex-1">
-            <div className={cn("relative min-h-0 min-w-0 flex-1", markdownMode === "preview" && "hidden")}>
+            <div className={cn("relative min-h-0 min-w-0 flex-1", viewMode === "preview" && "hidden")}>
               <CodeEditor
                 store={store}
                 breakpoints={language === "python" ? (breakpoints[active] ?? []) : undefined}
                 onToggleBreakpoint={language === "python" ? toggleBreakpoint : undefined}
+                lintCpp={language === "cpp" ? lintCpp : undefined}
                 debugLine={sharedConsole.debugging && consoleActive && sharedConsole.debug?.file === active ? sharedConsole.debug.line : null}
                 path={active}
                 available={activeExists}
@@ -975,9 +1041,13 @@ function Workspace() {
                 </div>
               )}
             </div>
-            {markdownMode && markdownMode !== "code" && (
-              <div className={cn("min-h-0 min-w-0 border-l border-console-border", markdownMode === "split" ? "w-1/2" : "flex-1")}>
-                <MarkdownPreview path={active} source={text} store={store} fetch={fetchBlob} />
+            {viewMode && viewMode !== "code" && (
+              <div className={cn("min-h-0 min-w-0 border-l border-console-border", viewMode === "split" ? "w-1/2" : "flex-1")}>
+                {language === "html" ? (
+                  <LivePagePreview path={active} source={text} files={() => projectFiles(store, provider, active)} />
+                ) : (
+                  <MarkdownPreview path={active} source={text} store={store} fetch={fetchBlob} />
+                )}
               </div>
             )}
             </div>
@@ -1036,7 +1106,7 @@ function Workspace() {
                     chunks={sharedConsole.chunks}
                     exit={consoleView.exit}
                     canInput={canRun}
-                    draft={sharedConsole.draft}
+                    doc={doc}
                     onDraft={(value) => canRun && setDraft(doc, value)}
                     timeoutSec={RUN_TIMEOUT_SEC}
                     onInput={sendInput}
@@ -1070,9 +1140,14 @@ function Workspace() {
             {t("footer.position", { line: cursor.line, col: cursor.column })}
           </span>
           <span className="hidden sm:inline">{LANGUAGE_LABEL[language]}</span>
-          <span className="hidden md:inline">
-            {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
-          </span>
+          {hasPython && (
+            <span className="hidden md:inline">
+              {runner.python ? t("footer.python", { v: runner.python }) : runner.booting ? t("footer.loadingPython") : t("footer.pythonIdle")}
+            </span>
+          )}
+          {(language === "cpp" || cppStatus !== "idle") && (
+            <span className="hidden md:inline">{t(cppStatus === "loading" ? "footer.loadingCpp" : cppStatus === "failed" ? "footer.cppFailed" : "footer.cpp")}</span>
+          )}
           {ruff && <span className="hidden lg:inline">Ruff {ruff}</span>}
           <button
             onClick={() => setLang(lang === "ru" ? "en" : "ru")}
@@ -1106,7 +1181,14 @@ function Workspace() {
         </footer>
       </div>
 
-      <AstDialog open={treeOpen} onOpenChange={setTreeOpen} code={text} theme={theme} onReveal={reveal} />
+      <AstDialog
+        open={treeOpen}
+        onOpenChange={setTreeOpen}
+        code={text}
+        theme={theme}
+        onReveal={reveal}
+        language={language === "cpp" ? "cpp" : "python"}
+      />
       <ShareDialog
         open={shareOpen}
         onOpenChange={setShareOpen}
@@ -1135,6 +1217,7 @@ function Workspace() {
         />
       )}
       <FrostOverlay frozen={!!provider && access.frozen} admin={access.isAdmin} />
+      <LanguageDialog open={askLanguage && !isGuest} onChoose={chooseLanguage} />
       <NameDialog key={collab.nameAsk ? "ask" : "idle"} initial={collab.nameAsk?.initial ?? null} onSubmit={collab.nameAsk?.resolve ?? null} />
       <Toaster position="bottom-right" theme={theme} />
     </TooltipProvider>
@@ -1149,6 +1232,7 @@ const LANGUAGE_LABEL = {
   html: "HTML",
   css: "CSS",
   javascript: "JavaScript",
+  cpp: "C++",
   plaintext: "Plain text",
 } as const
 
@@ -1199,7 +1283,7 @@ function ShareButton({
         ))}
       </span>
       <span className="font-mono text-xs">{peers.length > 4 ? `+${peers.length - 4}` : peers.length}</span>
-      <span className="hidden text-xs sm:inline">{role ? roleLabel(role) : translate("btn.live")}</span>
+      <span className="hidden text-xs sm:inline">{role ?? translate("btn.live")}</span>
     </Button>
   )
 }

@@ -37,14 +37,19 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
             <Loader2 className="size-4 animate-spin" /> {t("check.running")}
           </div>
         )}
-        {check.error && <div className="p-2 text-[#ff6166]">{check.error}</div>}
-        {check.results?.length === 0 && <div className="p-2 text-console-muted">{t("check.none")}</div>}
+        {check.error && <div className="whitespace-pre-wrap p-2 text-[#ff6166]">{check.error}</div>}
+        {check.results?.length === 0 && !check.error && <div className="p-2 text-console-muted">{t("check.none")}</div>}
         <ul>
           {check.results?.map((r) => (
             <li key={r.name} className="flex items-start gap-2 rounded px-2 py-1">
               {r.ok ? <CircleCheck className="mt-0.5 size-4 shrink-0 text-[#62c073]" /> : <CircleX className="mt-0.5 size-4 shrink-0 text-[#ff6166]" />}
               <span>{r.name}</span>
               {r.message && <span className="text-[#ff6166]">— {r.message}</span>}
+              {(r.time !== undefined || r.memory !== undefined) && (
+                <span title={t("check.measures")} className="ml-auto shrink-0 pl-2 text-console-muted">
+                  {[r.time !== undefined && `${r.time.toFixed(2)} s`, r.memory !== undefined && `${(r.memory / 1e6).toFixed(1)} MB`].filter(Boolean).join(" · ")}
+                </span>
+              )}
             </li>
           ))}
         </ul>

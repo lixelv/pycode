@@ -1,5 +1,5 @@
 // Generates themes/geist-{dark,light}-color-theme.json from one palette —
-// the same colours as the python-coder site.
+// the same colours as the polycode site.
 import { writeFileSync } from "node:fs"
 
 const palettes = {

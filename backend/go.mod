@@ -1,4 +1,4 @@
-module github.com/lixelv/python-coder/backend
+module github.com/lixelv/polycode/backend
 
 go 1.26.4
 

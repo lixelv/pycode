@@ -36,7 +36,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import type { AccessView } from "@/hooks/use-access"
-import { isTest, RESERVED } from "@/lib/project/access"
+import { isReserved, isTest } from "@/lib/project/access"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Peer } from "@/hooks/use-collab"
 import { useI18n } from "@/lib/i18n"
@@ -316,7 +316,7 @@ export function FileTree(props: FileTreeProps) {
   const validate = (parent: string, name: string, current?: string): { path?: string; error?: string } => {
     const path = cleanPath(parent ? `${parent}/${name}` : name)
     if (!path) return { error: t("tree.err.dots") }
-    if (path === RESERVED) return { error: t("tree.err.reserved") }
+    if (isReserved(path)) return { error: t("tree.err.reserved") }
     if (path !== current && exists(store, path)) return { error: t("tree.err.exists") }
     return { path }
   }

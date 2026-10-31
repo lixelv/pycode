@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/lixelv/polycode/backend/internal/identity"
 )
 
 // Session is one row of the sessions table. Code is the code it was looked
@@ -18,10 +21,19 @@ import (
 type Session struct {
 	ID      uuid.UUID  `json:"id"`
 	Code    string     `json:"code"`
-	OwnerID uuid.UUID  `json:"ownerId"`
+	OwnerID uuid.UUID  `json:"-"`
 	AskName bool       `json:"askName"`
 	EndedAt *time.Time `json:"endedAt,omitempty"`
 	Created time.Time  `json:"createdAt"`
+}
+
+// MarshalJSON names the owner by public id (see identity.Public).
+func (s Session) MarshalJSON() ([]byte, error) {
+	type plain Session
+	return json.Marshal(struct {
+		plain
+		Owner string `json:"ownerId"`
+	}{plain(s), identity.Public(s.OwnerID)})
 }
 
 // Code is the join code of one role.
@@ -145,6 +157,23 @@ func (s *Store) Codes(ctx context.Context, session uuid.UUID) ([]Code, error) {
 		var c Code
 		return c, row.Scan(&c.Role, &c.Level, &c.Code)
 	})
+}
+
+// SetMemberGrant records the level and roles given to a user in a session.
+func (s *Store) SetMemberGrant(ctx context.Context, session, user uuid.UUID, g grant) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO session_members (session_id, user_id, level, roles) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (session_id, user_id) DO UPDATE SET level = EXCLUDED.level, roles = EXCLUDED.roles`,
+		session, user, g.Level, g.Roles)
+	return err
+}
+
+// MemberGrant is what was given to a user in a session, if anything.
+func (s *Store) MemberGrant(ctx context.Context, session, user uuid.UUID) (grant, bool) {
+	var g grant
+	err := s.pool.QueryRow(ctx, `SELECT level, roles FROM session_members WHERE session_id = $1 AND user_id = $2`, session, user).
+		Scan(&g.Level, &g.Roles)
+	return g, err == nil
 }
 
 // ByCode finds a session by any of its codes, with the role that code gives.

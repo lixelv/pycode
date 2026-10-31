@@ -1,6 +1,6 @@
 {
-  "name": "python-coder",
-  "short_name": "python-coder",
+  "name": "polycode",
+  "short_name": "polycode",
   "description": "Learn Python in the browser: editor, console, flowcharts.",
   "start_url": "/",
   "display": "standalone",

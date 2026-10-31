@@ -23,8 +23,13 @@ export default defineConfig({
       { find: 'monaco-esm', replacement: path.resolve(import.meta.dirname, './node_modules/monaco-editor/esm/vs') },
     ],
   },
-  build: { chunkSizeWarningLimit: 6000 },
-  optimizeDeps: { exclude: ['@astral-sh/ruff-wasm-web'] },
+  build: {
+    chunkSizeWarningLimit: 6000,
+    // Clang fetches its .wasm/.tar by URL: never inline them as data: URLs (the CSP has no data: in connect-src).
+    assetsInlineLimit: (file) => (/\.(wasm|tar)$/.test(file) ? false : undefined),
+  },
+  // Pre-bundling would move @yowasp/clang away from the files it loads by relative URL.
+  optimizeDeps: { exclude: ['@astral-sh/ruff-wasm-web', '@yowasp/clang'] },
   worker: { format: 'es' },
   server: {
     headers: isolation,

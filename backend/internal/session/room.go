@@ -142,6 +142,41 @@ func (r *room) relay(from *member, frame []byte) {
 	}
 }
 
+// canSetRole: an admin may change the role of members below admin (but not
+// make admins); the owner may change anyone's but their own, admins too.
+func canSetRole(fromLevel string, fromOwner bool, targetLevel string, targetIsOwner bool, nextLevel string) bool {
+	if targetIsOwner || fromLevel != LevelAdmin {
+		return false
+	}
+	if fromOwner {
+		return true
+	}
+	return targetLevel != LevelAdmin && nextLevel != LevelAdmin
+}
+
+// member returns the member with this peer number (nil if gone).
+func (r *room) member(peer uint32) *member {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.members[peer]
+}
+
+// setRole gives a member a new level and roles and tells everyone.
+func (r *room) setRole(peer uint32, g grant) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m := r.members[peer]
+	if m == nil {
+		return
+	}
+	m.info.Level, m.info.Roles = g.Level, g.Roles
+	info := m.info
+	for _, other := range r.members {
+		other.enqueueJSON(control{Type: "role", Peer: &info})
+	}
+	r.updateOwner() // an admin less (or more) may change who stands in for the owner
+}
+
 // hasAdmin reports whether this user is connected with admin rights.
 func (r *room) hasAdmin(user uuid.UUID) bool {
 	r.mu.Lock()

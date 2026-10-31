@@ -9,10 +9,14 @@ import type { FileMeta } from "./store"
 export type Level = "read" | "write" | "admin"
 export type Access = "none" | "read" | "write"
 
-/** A member of a session: role is owner | admin | write | read | <custom role>. */
+/**
+ * A member of a session: a level (read < write < admin) and any number of
+ * custom roles, each opening the folders given to it. The owner is an admin.
+ */
 export interface Member {
-  role: string
   level: Level
+  roles: readonly string[]
+  owner?: boolean
 }
 
 /** What the rules are read from: the project's structure document. */
@@ -23,7 +27,12 @@ export interface Rules {
   frozen: boolean
 }
 
-export const RESERVED = ".pycode.env"
+export const RESERVED = ".polycode.env"
+/** The name before the rename: still read from archives. */
+export const LEGACY_ENV = ".pycode.env"
+export const isReserved = (path: string) => path === RESERVED || path === LEGACY_ENV
+/** Roles every session has; custom roles cannot take these names. */
+export const BUILT_IN_ROLES = new Set(["owner", "admin", "write", "read"])
 export const isTest = (path: string) => path.endsWith(".test.py")
 
 export function fileAccess(m: Member, path: string, r: Rules): Access {
@@ -31,10 +40,10 @@ export function fileAccess(m: Member, path: string, r: Rules): Access {
   const meta = r.files[path]
   if (meta?.hidden) return "none"
   let result: Access = m.level === "write" ? "write" : "read"
-  // Every role folder on the way must be the member's own.
+  // Every role folder on the way must be one of the member's roles.
   for (const [folder, role] of Object.entries(r.folders)) {
     if (!path.startsWith(folder + "/")) continue
-    if (role !== m.role) return "none"
+    if (!m.roles.includes(role)) return "none"
     result = "write"
   }
   return r.frozen || meta?.protected ? "read" : result
@@ -76,7 +85,7 @@ export function renameRules(folders: Record<string, string>, from: string, to: s
   return out
 }
 
-// ---- .pycode.env: the access rules of an archive --------------------------------
+// ---- .polycode.env: the access rules of an archive --------------------------------
 
 export interface EnvRules {
   roles: Record<string, "read" | "write">
@@ -86,7 +95,7 @@ export interface EnvRules {
 }
 
 export function serializeEnv(e: EnvRules): string {
-  const lines = ["# pycode access rules"]
+  const lines = ["# polycode access rules"]
   for (const [name, level] of Object.entries(e.roles)) lines.push(`role ${name} ${level}`)
   for (const [path, role] of Object.entries(e.folders)) lines.push(`folder ${role} ${path}`)
   for (const path of e.protected) lines.push(`protected ${path}`)
@@ -102,10 +111,11 @@ export function parseEnv(text: string): EnvRules {
     const rest = m[2]
     if (m[1] === "role") {
       const [name, level] = rest.split(" ")
-      if (level === "read" || level === "write") e.roles[name] = level
+      if ((level === "read" || level === "write") && !BUILT_IN_ROLES.has(name)) e.roles[name] = level
     } else if (m[1] === "folder") {
+      // A folder given to "write" (say) would open it to everyone with that code.
       const space = rest.indexOf(" ")
-      if (space > 0) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
+      if (space > 0 && !BUILT_IN_ROLES.has(rest.slice(0, space))) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
     } else e[m[1] as "protected" | "hidden"].push(rest)
   }
   return e

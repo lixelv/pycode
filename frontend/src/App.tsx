@@ -63,13 +63,15 @@ import {
   startProject,
   STARTERS,
   stateOf,
+  isCpp,
+  testPathOf,
   textOf,
   type ProjectLanguage,
 } from "@/lib/project/project"
 import { setLang, translate, useI18n } from "@/lib/i18n"
 import { cppClient, useCppStatus } from "@/lib/cpp/client"
 import { cppPackagesOf, loadCppPackages } from "@/lib/cpp/packages"
-import { fileAccess, isTest } from "@/lib/project/access"
+import { fileAccess } from "@/lib/project/access"
 import { RunnerClient } from "@/lib/python/runner-client"
 import { formatWith } from "@/lib/prettier"
 import { serial } from "@/lib/queue"
@@ -436,24 +438,28 @@ function Workspace() {
   }, [doc])
   // ---- automatic checks: name.py against name.test.py, run in an admin's browser ----
   const [check, setCheck] = useState<CheckState | null>(null)
-  const testPath = language === "python" && !isTest(active) ? active.replace(/\.py$/, ".test.py") : null
+  const testPath = testPathOf(active)
   const hasTest = !!testPath && allFiles.includes(testPath)
   const canCheck = !provider || provider.isAdmin || provider.adminOnline
 
   /** Runs the tests of `path` here (we are an admin, or alone). */
   const checkHere = useCallback(
     async (path: string): Promise<Pick<CheckState, "results" | "error">> => {
-      const test = textOf(store, path.replace(/\.py$/, ".test.py"))?.toString()
+      const testFile = testPathOf(path)
+      const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
       if (test === undefined) return { results: null, error: t("check.noTests") }
       try {
         const files = await projectFiles(store, provider, path)
-        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+        if (!isCpp(path)) return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+        const { wasm, log } = await cppClient.compile(files, path, await loadCppPackages(cppPackages, cppPkgs.fail))
+        if (!wasm) return { results: null, error: t("check.compileFailed", { log: log.split("\n").slice(0, 5).join("\n") }) }
+        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm) }
       } catch (err) {
         const message = (err as Error).message
         return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }
       }
     },
-    [store, provider, pkgs.activeSpecs, t],
+    [store, provider, pkgs.activeSpecs, t, cppPackages, cppPkgs.fail],
   )
 
   const startCheck = useCallback(async () => {

@@ -11,7 +11,7 @@ import {
   STDIN_INTERRUPT,
   STDIN_MAX_BYTES,
   STDIN_READY,
-  type CheckResult,
+  type CheckOutcome,
   type DebugCommand,
   type InstallResult,
   type ProgramRunner,
@@ -20,6 +20,9 @@ import {
 } from "@/workers/protocol"
 
 type Listener = (event: RunnerEvent) => void
+
+/** How long a tournament's whole check may take (python/checker.py, TOURNAMENT_LIMIT). */
+export const TOURNAMENT_TIMEOUT_MS = 120_000
 
 /** A batch run that cannot happen: whoever waits on `result` learns it did not start. A result already given stays. */
 function failBatch(result: SharedArrayBuffer) {
@@ -45,6 +48,7 @@ export class RunnerClient implements ProgramRunner {
   private readyPromise: Promise<string> | null = null
   private deadline: ReturnType<typeof setTimeout> | undefined
   private wasmWorker: Worker | null = null
+  private solution: RunnerClient | null = null // a tournament's solution, apart from the tests
   python: string | null = null
 
   static supported() {
@@ -175,21 +179,33 @@ export class RunnerClient implements ProgramRunner {
 
   /**
    * Runs tests against a solution, then throws this interpreter away (see
-   * check() in the worker). With `wasm` the solution is that C++ program.
+   * check() in the worker). With `wasm` the solution is that C++ program; a
+   * tournament's Python solution runs in another client of ours.
    */
-  async check(files: ProjectFiles, solution: string, test: string, specs: string[], wasm?: Uint8Array, timeoutMs = 30_000): Promise<CheckResult[]> {
+  async check(files: ProjectFiles, solution: string, test: string, specs: string[], wasm?: Uint8Array, timeoutMs = 30_000): Promise<CheckOutcome> {
     await this.ready()
     const id = this.nextId++
     try {
-      return await new Promise<CheckResult[]>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs)
+      return await new Promise<CheckOutcome>((resolve, reject) => {
+        const timeout = () => reject(new Error("timeout"))
+        let timer = setTimeout(timeout, timeoutMs)
         const off = this.on((event) => {
-          if (event.type === "run_outside" && wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
-          if (event.type === "kill_outside") this.killWasm()
+          if (event.type === "tournament") {
+            clearTimeout(timer)
+            timer = setTimeout(timeout, TOURNAMENT_TIMEOUT_MS)
+          }
+          if (event.type === "run_outside") {
+            if (wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
+            else void (this.solution ??= new RunnerClient()).batch(files, solution, specs, event.stdin, event.traceMemory, event.result)
+          }
+          if (event.type === "kill_outside") {
+            this.killWasm()
+            this.solution?.restart()
+          }
           if (event.type !== "checked" || event.id !== id) return
           clearTimeout(timer)
           off()
-          resolve(event.results)
+          resolve({ results: event.results, tournament: event.tournament })
         })
         this.worker!.postMessage({ type: "check", id, files, solution, test, specs, cpp: !!wasm })
       })
@@ -202,6 +218,8 @@ export class RunnerClient implements ProgramRunner {
   restart() {
     clearTimeout(this.deadline)
     this.killWasm()
+    this.solution?.restart()
+    this.solution = null
     this.worker?.terminate()
     this.worker = null
     this.readyPromise = null

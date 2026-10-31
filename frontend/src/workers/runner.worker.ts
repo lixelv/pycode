@@ -23,6 +23,7 @@ import {
   STDIN_INTERRUPT,
   STDIN_WAITING,
   type CheckResult,
+  type CheckTournament,
   type DebugCommand,
   type DebugState,
   type InstallResult,
@@ -32,6 +33,8 @@ import {
 } from "./protocol"
 
 const MAX_OUTPUT_BYTES = 1_000_000
+/** How long a run waits for the solution's own Python to start; not part of its time limit. */
+const SOLUTION_BOOT_MS = 60_000
 
 // ---- network --------------------------------------------------------------
 
@@ -333,6 +336,10 @@ function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean) {
   const result = new SharedArrayBuffer(BATCH_RESULT_BYTES)
   const header = new Int32Array(result, 0, 5)
   post({ type: "run_outside", stdin, timeoutMs, traceMemory, result })
+  if (Atomics.wait(header, BATCH_STARTED, 0, SOLUTION_BOOT_MS) === "timed-out") {
+    post({ type: "kill_outside" })
+    return { stdout: "", memory: 0, timedOut: false, exitCode: 0, failure: "not_started", elapsed: 0 }
+  }
   const started = performance.now()
   const waited = Atomics.wait(header, 0, 0, timeoutMs)
   const elapsed = (performance.now() - started) / 1000
@@ -350,16 +357,26 @@ function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean) {
 /**
  * Runs an admin's tests against a student's solution. This worker is made
  * for one check and thrown away; the student's code gets no network and no
- * browser storage here (it runs in the admin's browser).
+ * browser storage here (it runs in the admin's browser). In a tournament the
+ * student's code does not come here at all: no project on the disk, and run()
+ * goes through the page to another interpreter.
  */
 async function check(id: number, files: ProjectFiles, solution: string, test: string, specs: string[], cpp = false) {
   if (!py) return
+  const found = polycode.checker.tournament_of(test)
+  const declared = found?.toJs({ dict_converter: Object.fromEntries }) as (CheckTournament & { error?: string }) | undefined
+  found?.destroy()
+  if (declared?.error) {
+    post({ type: "checked", id, results: [{ name: "tests", ok: false, message: declared.error }] })
+    return
+  }
+  if (declared) post({ type: "tournament" })
   const missing = specs.filter((s) => !installed.has(s))
   if (missing.length) await installPackages(missing)
   // The tests may import Pyodide's packages too (before the network goes away).
-  await loadImported({ ...files, "tests.py": test })
+  await loadImported(declared ? { "tests.py": test } : { ...files, "tests.py": test })
   for (const name of ["fetch", "XMLHttpRequest", "importScripts"]) replaceGlobal(name, undefined)
-  writeProject(files)
+  writeProject(declared ? {} : files)
   // polycode_test.run(timeout=…) asks the page for a timer that interrupts it;
   // ms 0 cancels it at once and says whether it fired.
   ;(self as { polycode_deadline?: (ms: number) => boolean }).polycode_deadline = (ms) => {
@@ -370,12 +387,12 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
     }
     return fired
   }
-  if (cpp) (self as { polycode_run_outside?: typeof runOutside }).polycode_run_outside = runOutside
+  if (cpp || declared) (self as { polycode_run_outside?: typeof runOutside }).polycode_run_outside = runOutside
   armInterrupts() // a check's time limit is an interrupt
-  const results = polycode.checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
+  const results = polycode.checker.run_tests.callKwargs("/home/pyodide/project", solution, test, cpp ? "cpp" : "python", { tournament: !!declared })
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]
   results.destroy()
-  post({ type: "checked", id, results: list })
+  post({ type: "checked", id, results: list, tournament: declared })
 }
 
 // ---- a tournament's solution ------------------------------------------------

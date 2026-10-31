@@ -450,10 +450,10 @@ function Workspace() {
       if (test === undefined) return { results: null, error: t("check.noTests") }
       try {
         const files = await projectFiles(store, provider, path)
-        if (!isCpp(path)) return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs) }
+        if (!isCpp(path)) return await new RunnerClient().check(files, path, test, pkgs.activeSpecs)
         const { wasm, log } = await cppClient.compile(files, path, await loadCppPackages(cppPackages, cppPkgs.fail))
         if (!wasm) return { results: null, error: t("check.compileFailed", { log: log.split("\n").slice(0, 5).join("\n") }) }
-        return { results: await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm) }
+        return await new RunnerClient().check(files, path, test, pkgs.activeSpecs, wasm)
       } catch (err) {
         const message = (err as Error).message
         return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }

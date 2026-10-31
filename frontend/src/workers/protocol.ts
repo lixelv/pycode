@@ -55,7 +55,9 @@ export type RunnerEvent =
   | { type: "input_request" }
   | { type: "installed"; id: number; results: InstallResult[] }
   | { type: "exit"; id: number; code: number; duration: number; reason: "output_limit" | null }
-  | { type: "checked"; id: number; results: CheckResult[] }
+  | { type: "checked"; id: number; results: CheckResult[]; tournament?: CheckTournament }
+  /** The test file is a tournament's: the check gets the longer limit. */
+  | { type: "tournament" }
   /** The debugged program stopped (state) or goes on (null). */
   | { type: "paused"; state: DebugState | null }
   /** polycode_test.run(timeout=…): interrupt the program after ms if timer gen is still armed (lib/python/deadline.ts). */
@@ -109,6 +111,21 @@ export interface CheckResult {
   time?: number
   /** Peak bytes of the test's run(ram_usage=…) calls. */
   memory?: number
+  /** In a tournament: not run, an earlier test failed. */
+  skipped?: boolean
+  /** In a tournament: what the test is worth. */
+  points?: number
+}
+
+/** The tournament a test file declares (python/checker.py, tournament_of). */
+export interface CheckTournament {
+  id: string
+  private: boolean
+}
+
+export interface CheckOutcome {
+  results: CheckResult[]
+  tournament?: CheckTournament
 }
 
 // ---- tools worker ---------------------------------------------------------

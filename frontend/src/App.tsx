@@ -403,14 +403,14 @@ function Workspace() {
       // In a session, another file may be someone else's program: it gets its own interpreter.
       const fresh = !!provider && lastEntry.current !== null && lastEntry.current !== active
       lastEntry.current = active
-      void projectFiles(store, provider, active).then((files) => runner.run(files, active, pkgs.activeSpecs, points, fresh))
+      void runner.run(projectFiles(store, provider, active), active, pkgs.activeSpecs, points, fresh)
       return
     }
     if (language === "cpp") {
       setWebRun(null)
       setRunStatus(doc, "compiling") // resetRun's `connecting` means Python to the console
-      void projectFiles(store, provider, active).then((files) =>
-        runner.runCpp(files, active, async () => cppClient.compile(files, active, await loadCppPackages(cppPackages, cppPkgs.fail))),
+      void runner.runCpp(projectFiles(store, provider, active), active, async (files) =>
+        cppClient.compile(files, active, await loadCppPackages(cppPackages, cppPkgs.fail)),
       )
       return
     }

@@ -26,8 +26,12 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
-def run_main(path: str = "main.py", debugger=None) -> int:
-    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it."""
+def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
+    """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it.
+
+    ``arm`` turns interrupts on just before the program starts and raises
+    KeyboardInterrupt for a Stop that came earlier.
+    """
     import bdb
     import os
 
@@ -52,6 +56,8 @@ def run_main(path: str = "main.py", debugger=None) -> int:
     sys.argv = [path]
     namespace = {"__name__": "__main__", "__file__": path, "__builtins__": builtins}
     try:
+        if arm:
+            arm()
         if debugger:
             debugger.run(code, namespace)
         else:

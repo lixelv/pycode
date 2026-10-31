@@ -94,8 +94,8 @@ class Debugger(bdb.Bdb):
             self.set_continue()
 
 
-def run_debug(path: str, breakpoints, pause) -> int:
+def run_debug(path: str, breakpoints, pause, arm=None) -> int:
     """Runs the project's ``path`` like ``run_main``, stopping as the page asks."""
     if hasattr(breakpoints, "to_py"):
         breakpoints = breakpoints.to_py()
-    return run_main(path, Debugger(pause, dict(breakpoints)))
+    return run_main(path, Debugger(pause, dict(breakpoints)), arm)

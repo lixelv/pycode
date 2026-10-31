@@ -3,6 +3,7 @@ import { cwdOf } from "@/lib/cpp/wasi"
 import CppRunWorker from "@/workers/cpp-run.worker?worker"
 import RunnerWorker from "@/workers/runner.worker?worker"
 import {
+  BATCH_NOT_STARTED,
   DEBUG_COMMANDS,
   DEBUG_GO,
   STDIN_EOF,
@@ -138,10 +139,9 @@ export class RunnerClient implements ProgramRunner {
     const worker = new CppRunWorker()
     this.wasmWorker = worker
     worker.onerror = () => {
-      // Never started: the check goes on with an empty output and exit code 1.
+      // The worker failed to load: the test fails. A result it has already given stays.
       const header = new Int32Array(result, 0, 4)
-      header[3] = 1
-      Atomics.store(header, 0, 1)
+      if (Atomics.compareExchange(header, 0, 0, BATCH_NOT_STARTED) !== 0) return
       Atomics.notify(header, 0)
     }
     worker.postMessage({ type: "batch", wasm, files, cwd, stdin, result })

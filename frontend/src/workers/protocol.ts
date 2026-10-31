@@ -78,9 +78,12 @@ export interface ProgramRunner {
 
 /**
  * A batch run's result: Int32 header [state, stdout length, memory, exit code],
- * then the output. State goes from 0 to 1 at the end (Atomics.notify). Each run
- * has its own buffer, so a run that was killed late cannot touch the next one.
+ * then the output. State goes from 0 to a BATCH_* below at the end (Atomics.notify).
+ * Each run has its own buffer, so a run that was killed late cannot touch the next one.
  */
+export const BATCH_EXITED = 1
+export const BATCH_OUTPUT_LIMIT = 2
+export const BATCH_NOT_STARTED = 3
 export const BATCH_HEADER_BYTES = 16
 export const BATCH_RESULT_BYTES = BATCH_HEADER_BYTES + 1_000_000
 

@@ -3,7 +3,7 @@
 // the page stops it by terminating this worker (CppRunnerClient.interrupt).
 // It sees only the shim's imports: no network, files under /project only.
 import { runWasm, Stdin, Utf8Out } from "@/lib/cpp/wasi"
-import { BATCH_HEADER_BYTES, type CppRunRequest, type RunnerEvent } from "@/workers/protocol"
+import { BATCH_EXITED, BATCH_HEADER_BYTES, BATCH_NOT_STARTED, BATCH_OUTPUT_LIMIT, type CppRunRequest, type RunnerEvent } from "@/workers/protocol"
 
 const post = (event: RunnerEvent) => postMessage(event)
 
@@ -19,15 +19,18 @@ async function batch(msg: Extract<CppRunRequest, { type: "batch" }>) {
   }
   let memory = 0
   let code = 1
+  let state = BATCH_NOT_STARTED // runWasm throws only if the module could not be compiled or instantiated
   try {
-    ;({ memory, code } = await runWasm(msg.wasm, msg.files, msg.cwd, new Stdin(msg.stdin), write))
+    const result = await runWasm(msg.wasm, msg.files, msg.cwd, new Stdin(msg.stdin), write)
+    ;({ memory, code } = result)
+    state = result.outputLimited ? BATCH_OUTPUT_LIMIT : BATCH_EXITED
   } catch {
-    // Reported as exit code 1: the tests see the output so far.
+    // The check fails on the state, whatever was written.
   }
   header[1] = length
   header[2] = memory
   header[3] = code
-  Atomics.store(header, 0, 1)
+  Atomics.store(header, 0, state)
   Atomics.notify(header, 0)
   close()
 }

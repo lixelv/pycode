@@ -9,7 +9,9 @@ import runnerSrc from "@/python/runner.py?raw"
 
 import { bootPyodide, installSources, type PyodideInterface } from "./pyodide"
 import {
+  BATCH_EXITED,
   BATCH_HEADER_BYTES,
+  BATCH_OUTPUT_LIMIT,
   BATCH_RESULT_BYTES,
   DEBUG_COMMANDS,
   DEBUG_WAITING,
@@ -277,11 +279,13 @@ function runWasmOnPage(stdin: string, timeoutMs: number) {
   post({ type: "run_wasm", stdin, timeoutMs, result })
   if (Atomics.wait(header, 0, 0, timeoutMs) === "timed-out") {
     post({ type: "kill_wasm" })
-    return { stdout: "", memory: 0, timedOut: true }
+    return { stdout: "", memory: 0, timedOut: true, exitCode: 0, failure: "" }
   }
   // TextDecoder refuses a view of shared memory: slice() copies it out.
   const stdout = new TextDecoder().decode(new Uint8Array(result, BATCH_HEADER_BYTES, header[1]).slice())
-  return { stdout, memory: header[2], timedOut: false }
+  const state = Atomics.load(header, 0)
+  const failure = state === BATCH_OUTPUT_LIMIT ? "output_limit" : state === BATCH_EXITED ? "" : "not_started"
+  return { stdout, memory: header[2], timedOut: false, exitCode: header[3], failure }
 }
 
 /**

@@ -16,7 +16,8 @@ and shown with the test's result.
 A C++ solution (``kind="cpp"``) is already compiled: its ``run()`` has the same
 limits and runs the program through the page (``_run_wasm``). Its output
 includes prompts, since they are ordinary ``cout``; input past the end of
-``stdin`` is EOF.
+``stdin`` is EOF. ``run()`` fails the test if the program exits non-zero, crashes,
+is cut by the output limit or does not start, whatever it printed.
 
 ``polycode_test.module`` holds the solution's declarations (imports, defs,
 classes, constants without calls); the program itself is not run.
@@ -56,6 +57,20 @@ class MemoryLimitExceeded(MemoryError):
         super().__init__(used, limit)
         self.used = used
         self.limit = limit
+
+
+class ExitCodeError(RuntimeError):
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+class OutputLimitExceeded(RuntimeError):
+    pass
+
+
+class ProgramNotStarted(RuntimeError):
+    pass
 
 
 def _deadline(ms: int) -> bool:
@@ -153,6 +168,16 @@ def _failure(err: BaseException, tests: str) -> str:
         if isinstance(err, TimeLimitExceeded):
             return _short(f"time limit {limit:g} s exceeded: {used:.2f} s")
         return _short(f"memory limit {limit / 1e6:g} MB exceeded: {used / 1e6:.1f} MB")
+    # Fixed text or an integer: the program's output never gets here.
+    if isinstance(err, OutputLimitExceeded):
+        return "output limit exceeded"
+    if isinstance(err, ProgramNotStarted):
+        return "the program did not start"
+    if isinstance(err, ExitCodeError):
+        try:
+            return _short(f"exit code {int(err.code)}")
+        except BaseException:  # noqa: BLE001
+            return type(err).__name__
     kind = type(err)
     return kind.__name__ if kind.__module__ == "builtins" else "error"
 
@@ -171,11 +196,19 @@ def _measured() -> dict:
 
 
 def _run_wasm(stdin: str, timeout_ms: int) -> dict:
-    """Runs the C++ solution on the page, blocking: {stdout, memory, timedOut}."""
+    """Runs the C++ solution on the page, blocking: {stdout, memory, timedOut, exitCode, failure}.
+    ``failure`` is "", "output_limit" or "not_started"; exitCode alone cannot tell
+    them apart (a program may return 130 or 1 itself)."""
     import js  # Pyodide only; the unit tests replace this hook
 
     result = js.polycode_run_wasm(stdin, timeout_ms)
-    return {"stdout": result.stdout, "memory": result.memory, "timedOut": result.timedOut}
+    return {
+        "stdout": result.stdout,
+        "memory": result.memory,
+        "timedOut": result.timedOut,
+        "exitCode": result.exitCode,
+        "failure": result.failure,
+    }
 
 
 def _run_cpp(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
@@ -195,6 +228,12 @@ def _run_cpp(stdin: str = "", timeout: float | None = None, ram_usage: float | N
         raise TimeLimitExceeded(float(max(used, limit)), float(limit))
     if ram_usage and memory > ram_usage * 1e6:
         raise MemoryLimitExceeded(float(memory), float(ram_usage * 1e6))
+    if result["failure"] == "output_limit":
+        raise OutputLimitExceeded()
+    if result["failure"]:
+        raise ProgramNotStarted()
+    if result["exitCode"] != 0:
+        raise ExitCodeError(result["exitCode"])
     return result["stdout"]
 
 

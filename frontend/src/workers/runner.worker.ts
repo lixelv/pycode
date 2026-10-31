@@ -141,6 +141,7 @@ async function boot() {
   py = await bootPyodide()
   installSources(py, "polycode", { "runner.py": runnerSrc, "packages.py": packagesSrc, "checker.py": checkerSrc, "debugger.py": debuggerSrc })
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide')")
+  py.pyimport("polycode.runner").install_sleep()
 
   py.setStdout({ write: (b: Uint8Array) => (countOutput(b.length), stdout.write(b), b.length), isatty: true })
   py.setStderr({ write: (b: Uint8Array) => (countOutput(b.length), stderr.write(b), b.length), isatty: true })

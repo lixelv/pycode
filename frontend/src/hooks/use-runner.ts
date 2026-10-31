@@ -234,7 +234,6 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
       // `fresh` asks for a new interpreter (nothing a previous program changed survives into this one).
       if (fresh) runner.restart()
       setStatus("connecting")
-      if (!runner.python) setBooting(true)
 
       // The files can take a while (binary files from the session): Stop must already work.
       waitingForFiles.current = true
@@ -242,6 +241,7 @@ export function useRunner({ onRateLimited, onEvent, warm = true }: RunnerOptions
         const ready = await files
         if (gen !== generation.current || current.current !== -1) return // stopped or replaced meanwhile
         waitingForFiles.current = false
+        if (!runner.python) setBooting(true)
         const id = await runner.run(ready, entry, specs, breakpoints)
         if (gen !== generation.current) return
         current.current = id

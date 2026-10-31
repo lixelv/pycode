@@ -7,6 +7,7 @@ import * as Y from "yjs"
 import { useI18n } from "@/lib/i18n"
 import { registerPythonIntellisense } from "@/lib/intellisense"
 import type { ClangDiagnostic } from "@/lib/cpp/diagnostics"
+import { byteColumn, wantsCompletion, type CppCompletion } from "@/lib/cpp/completion"
 import { monaco, type MonacoApi } from "@/lib/monaco"
 import { languageOf, metasOf, textOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
@@ -40,6 +41,8 @@ interface CodeEditorProps {
   debugLine?: number | null
   /** C++ only: clang's problems for the file's text (see lib/cpp/client.ts). */
   lintCpp?: (text: string) => Promise<ClangDiagnostic[]>
+  /** Suggestions at a position (clang's line and byte column). */
+  completeCpp?: (text: string, line: number, column: number) => Promise<CppCompletion[]>
 }
 
 let modelCounter = 0
@@ -63,12 +66,42 @@ export function CodeEditor({
   onToggleBreakpoint,
   debugLine,
   lintCpp,
+  completeCpp,
 }: CodeEditorProps) {
   const { t } = useI18n()
   const [editor, setEditor] = useState<EditorInstance | null>(null)
   const [text, setText] = useState("")
   // Keep the latest callbacks without re-registering Monaco commands.
   const handlers = useRef({ onRun, onCursor, onSave, onText, onToggleBreakpoint })
+  // The provider is global to the language: it stands only while a C++ file is open here.
+  useEffect(() => {
+    if (!completeCpp || !editor) return
+    const KIND = { function: monaco.languages.CompletionItemKind.Function, variable: monaco.languages.CompletionItemKind.Variable, type: monaco.languages.CompletionItemKind.Class, keyword: monaco.languages.CompletionItemKind.Keyword }
+    const provider = monaco.languages.registerCompletionItemProvider("cpp", {
+      triggerCharacters: [".", ">", ":"],
+      async provideCompletionItems(model, position, context, token) {
+        if (model !== editor.getModel()) return { suggestions: [] }
+        const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1)
+        if (!wantsCompletion(before, context.triggerCharacter)) return { suggestions: [] }
+        const word = model.getWordUntilPosition(position)
+        const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn }
+        const list = await completeCpp(model.getValue(), position.lineNumber, byteColumn(before, word.startColumn)).catch(() => [])
+        if (token.isCancellationRequested) return { suggestions: [] }
+        return {
+          suggestions: list.map((c) => ({
+            label: c.name,
+            kind: KIND[c.kind],
+            detail: c.overloads ? `${c.detail} (+${c.overloads})` : c.detail,
+            insertText: c.snippet,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+          })),
+        }
+      },
+    })
+    return () => provider.dispose()
+  }, [completeCpp, editor])
+
   useEffect(() => {
     handlers.current = { onRun, onCursor, onSave, onText, onToggleBreakpoint }
   }, [onRun, onCursor, onSave, onText, onToggleBreakpoint])

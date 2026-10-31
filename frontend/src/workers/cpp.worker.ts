@@ -7,6 +7,7 @@ import { commands, Exit, type Tree } from "@yowasp/clang"
 import stubSrc from "@/cpp/stub.cpp?raw"
 import pchHeader from "@/cpp/pch.hpp?raw"
 import pchUrl from "@/generated/std.pch?url"
+import { clangInput, clangTree } from "@/lib/cpp/clang-files"
 import type { CppRequest, CppResponse } from "@/lib/cpp/client"
 import { sameFiles } from "@/lib/cpp/pch"
 
@@ -82,40 +83,30 @@ function stubObject() {
   return stub
 }
 
-/** `{"/project/a/b.cpp": text}` → clang's nested tree. */
-function tree(files: Record<string, string | Uint8Array>): Tree {
-  const root: Tree = {}
-  for (const [path, content] of Object.entries(files)) {
-    const parts = path.split("/").filter(Boolean)
-    let dir = root
-    for (const part of parts.slice(0, -1)) dir = (dir[part] ??= {}) as Tree
-    dir[parts.at(-1)!] = content
-  }
-  return root
-}
-
-async function handle({ kind, files, entry, pkgs }: CppRequest): Promise<Omit<CppResponse, "id">> {
-  const all: Record<string, string | Uint8Array> = { ...pkgs.files }
-  for (const [path, content] of Object.entries(files)) all[`/project/${path}`] = content
-  const folder = entry.includes("/") ? `/project/${entry.slice(0, entry.lastIndexOf("/"))}` : "/project"
-  const includes = [...new Set([folder, "/project"]), ...pkgs.includes].map((dir) => `-I${dir}`)
+async function handle({ kind, files, entry, pkgs, preamble }: CppRequest): Promise<Omit<CppResponse, "id">> {
+  const { all, includes } = clangInput(files, entry, pkgs)
   const source = `/project/${entry}`
   if (kind === "lint") {
-    const { log, out } = await run(["-fsyntax-only", ...STD, ...includes, source], tree(all))
+    const { log, out } = await run(["-fsyntax-only", ...STD, ...includes, source], clangTree(all))
     lastLint = { files, entry, ok: out !== null }
     return { log: relative(log) }
+  }
+  if (kind === "precompile") {
+    all["/pch.hpp"] = preamble!
+    const { out } = await run([...STD, ...includes, "-x", "c++-header", "/pch.hpp", "-Xclang", "-emit-pch", "-o", "/pch.hpp.pch"], clangTree(all))
+    return { log: "", pch: (out?.["pch.hpp.pch"] as Uint8Array | undefined) ?? undefined }
   }
   all["/stub.o"] = await stubObject()
   loadPch()
   const compile = [...STD, "-O1", "-Wl,--max-memory=1073741824", ...includes, source, "/stub.o", "-o", "/a.out"]
   const refused = lastLint && !lastLint.ok && lastLint.entry === entry && sameFiles(lastLint.files, files)
   if (pch && !refused) {
-    const fast = await run(["-include", "/std.hpp", ...compile], tree({ ...all, "/std.hpp": pchHeader, "/std.hpp.pch": pch }))
+    const fast = await run(["-include", "/std.hpp", ...compile], clangTree({ ...all, "/std.hpp": pchHeader, "/std.hpp.pch": pch }))
     if (fast.out) return { log: relative(fast.log), wasm: fast.out["a.out"] as Uint8Array }
     // The whole library in scope can break a valid program (`using namespace
     // std; int count;`), so only a compile without it decides on an error.
   }
-  const { log, out } = await run(compile, tree(all))
+  const { log, out } = await run(compile, clangTree(all))
   return { log: relative(log), wasm: (out?.["a.out"] as Uint8Array | undefined) ?? undefined }
 }
 
@@ -131,7 +122,8 @@ self.onmessage = ({ data }: MessageEvent<CppRequest>) => {
     } catch (err) {
       reply = { log: `${err instanceof Error ? err.message : String(err)}\n` }
     }
-    const transfer = reply.wasm ? [reply.wasm.buffer] : []
+    const bytes = reply.wasm ?? reply.pch
+    const transfer = bytes ? [bytes.buffer] : []
     postMessage({ id: data.id, ...reply } satisfies CppResponse, { transfer })
   })
 }

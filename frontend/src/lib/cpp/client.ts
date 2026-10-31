@@ -10,16 +10,20 @@ export type CppPackageFiles = { files: Record<string, string>; includes: string[
 
 export interface CppRequest {
   id: number
-  kind: "lint" | "compile"
+  kind: "lint" | "compile" | "precompile"
   files: ProjectFiles
   entry: string
   pkgs: CppPackageFiles
+  /** For `precompile`: the includes to put in the header. */
+  preamble?: string
 }
 /** The clang log (paths relative to the project) and, for a successful compile, the program. */
 export interface CppResponse {
   id: number
   log: string
   wasm?: Uint8Array
+  /** A precompiled header. */
+  pch?: Uint8Array
 }
 
 /** `failed`: the compiler could not be downloaded; the next request tries again. */
@@ -69,6 +73,12 @@ export class CppClient {
     return { wasm: wasm ?? null, log }
   }
 
+  /** A precompiled header of these includes, for code completion; null when they do not compile. */
+  async precompile(files: ProjectFiles, entry: string, preamble: string, pkgs: CppPackageFiles): Promise<Uint8Array | null> {
+    const { pch } = await this.request({ kind: "precompile", files, entry, preamble, pkgs })
+    return pch ?? null
+  }
+
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
     return () => {
@@ -107,7 +117,7 @@ export class CppClient {
   private arm() {
     clearTimeout(this.deadline)
     if (!this.busy) return
-    const ms = this.busy.request.kind === "compile" ? COMPILE_DEADLINE_MS : LINT_DEADLINE_MS
+    const ms = this.busy.request.kind !== "lint" ? COMPILE_DEADLINE_MS : LINT_DEADLINE_MS
     this.deadline = setTimeout(() => this.kill("The C++ compiler took too long"), ms)
   }
 

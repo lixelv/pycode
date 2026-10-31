@@ -35,6 +35,22 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
     turns a limit off. A limit that is on is measured and shown with the test.
     Python: input() prompts are not in the output, and reading past ``stdin``
     raises EOFError. C++: prompts are in the output, reading past ``stdin``
-    gets EOF, and a non-zero exit fails the test.
+    gets EOF, and a non-zero exit fails the test. In a tournament a Python
+    solution also fails the test on a non-zero exit or an uncaught exception.
     """
+    ...
+
+
+def tournament(id: str, private: bool = False) -> None:
+    """Makes this whole file a tournament: tests earn points(), the first failure
+    skips the rest, and each participant's best run goes into the table ``id``.
+
+    One top-level statement, with literal arguments. ``id`` has 1 to 64 characters;
+    ``private=True`` hides the table from students.
+    """
+    ...
+
+
+def points(amount: float):
+    """A decorator: what this test earns in a tournament. Without it, a test earns 0."""
     ...

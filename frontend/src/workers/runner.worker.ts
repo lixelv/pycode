@@ -305,19 +305,22 @@ function writeProject(files: ProjectFiles) {
 // ---- check ------------------------------------------------------------------
 
 /** Runs the C++ solution through the page and blocks until it ends or its time is up. */
-function runWasmOnPage(stdin: string, timeoutMs: number) {
+function runOutside(stdin: string, timeoutMs: number) {
   const result = new SharedArrayBuffer(BATCH_RESULT_BYTES)
   const header = new Int32Array(result, 0, 4)
   post({ type: "run_wasm", stdin, timeoutMs, result })
-  if (Atomics.wait(header, 0, 0, timeoutMs) === "timed-out") {
+  const started = performance.now()
+  const waited = Atomics.wait(header, 0, 0, timeoutMs)
+  const elapsed = (performance.now() - started) / 1000
+  if (waited === "timed-out") {
     post({ type: "kill_wasm" })
-    return { stdout: "", memory: 0, timedOut: true, exitCode: 0, failure: "" }
+    return { stdout: "", memory: 0, timedOut: true, exitCode: 0, failure: "", elapsed }
   }
   // TextDecoder refuses a view of shared memory: slice() copies it out.
   const stdout = new TextDecoder().decode(new Uint8Array(result, BATCH_HEADER_BYTES, header[1]).slice())
   const state = Atomics.load(header, 0)
   const failure = state === BATCH_OUTPUT_LIMIT ? "output_limit" : state === BATCH_EXITED ? "" : "not_started"
-  return { stdout, memory: header[2], timedOut: false, exitCode: header[3], failure }
+  return { stdout, memory: header[2], timedOut: false, exitCode: header[3], failure, elapsed }
 }
 
 /**
@@ -343,7 +346,7 @@ async function check(id: number, files: ProjectFiles, solution: string, test: st
     }
     return fired
   }
-  if (cpp) (self as { polycode_run_wasm?: typeof runWasmOnPage }).polycode_run_wasm = runWasmOnPage
+  if (cpp) (self as { polycode_run_outside?: typeof runOutside }).polycode_run_outside = runOutside
   armInterrupts() // a check's time limit is an interrupt
   const results = polycode.checker.run_tests("/home/pyodide/project", solution, test, cpp ? "cpp" : "python")
   const list = results.toJs({ dict_converter: Object.fromEntries }) as CheckResult[]

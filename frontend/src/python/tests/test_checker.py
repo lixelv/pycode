@@ -330,22 +330,25 @@ class ModuleDeclarations(unittest.TestCase):
 
 class CppChecks(unittest.TestCase):
     def setUp(self):
-        self.saved = checker._run_wasm if hasattr(checker, "_run_wasm") else None
+        self.saved = checker._run_outside if hasattr(checker, "_run_outside") else None
         self.calls = []
 
     def tearDown(self):
         if self.saved is None:
-            if hasattr(checker, "_run_wasm"):
-                del checker._run_wasm
+            if hasattr(checker, "_run_outside"):
+                del checker._run_outside
         else:
-            checker._run_wasm = self.saved
+            checker._run_outside = self.saved
 
     def check(self, source, wasm):
-        def hook(stdin, timeout_ms):
+        def hook(stdin, timeout_ms, trace_memory=False):
             self.calls.append(timeout_ms)
-            return wasm(stdin, timeout_ms)
+            started = checker._now()
+            result = wasm(stdin, timeout_ms)
+            result.setdefault("elapsed", checker._now() - started)
+            return result
 
-        checker._run_wasm = hook
+        checker._run_outside = hook
         with tempfile.TemporaryDirectory() as project:
             return checker.run_tests(project, "main.cpp", source, kind="cpp")
 
@@ -488,13 +491,13 @@ class CppExitStatus(CppChecks):
 
     def test_real_hook_passes_exit_status_from_the_worker(self):
         fake = types.ModuleType("js")
-        fake.polycode_run_wasm = lambda stdin, ms: types.SimpleNamespace(
-            stdout="out", memory=7, timedOut=False, exitCode=134, failure=""
+        fake.polycode_run_outside = lambda stdin, ms, trace: types.SimpleNamespace(
+            stdout="out", memory=7, timedOut=False, exitCode=134, failure="", elapsed=0.5
         )
         real = self.saved
         with unittest.mock.patch.dict(sys.modules, {"js": fake}):
             result = real("x", 100)
-        self.assertEqual(result, {"stdout": "out", "memory": 7, "timedOut": False, "exitCode": 134, "failure": ""})
+        self.assertEqual(result, {"stdout": "out", "memory": 7, "timedOut": False, "exitCode": 134, "failure": "", "elapsed": 0.5})
 
 
 
@@ -510,6 +513,133 @@ class ForgedProgramErrors(unittest.TestCase):
     def test_only_a_cpp_solution_reports_them(self):
         self.assertEqual(self.run_kind("python"), "error")
         self.assertEqual(self.run_kind("cpp"), "exit code 123")
+
+
+HEAD = "import polycode_test as t\nt.tournament('x')\n"
+
+
+def checker_run_plain(source):
+    with tempfile.TemporaryDirectory() as project:
+        with open(os.path.join(project, "main.py"), "w") as f:
+            f.write(SOLUTION)
+        return checker.run_tests(project, "main.py", source, tournament=False)
+
+
+class Tournament(unittest.TestCase):
+    def setUp(self):
+        self.saved = getattr(checker, "_run_outside", None)
+        self.calls = []
+        self.answer = None
+
+    def tearDown(self):
+        if self.saved is None:
+            if hasattr(checker, "_run_outside"):
+                del checker._run_outside
+        else:
+            checker._run_outside = self.saved
+
+    def check(self, source, project=None):
+        def hook(stdin, timeout_ms, trace_memory):
+            self.calls.append(timeout_ms)
+            if self.answer is not None:
+                return dict(self.answer)
+            return {"stdout": stdin, "memory": 0, "timedOut": False, "exitCode": 0, "failure": "", "elapsed": 0.0}
+
+        checker._run_outside = hook
+        if project is not None:
+            return checker.run_tests(project, "main.py", source, tournament=True)
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "main.py"), "w") as f:
+                f.write(SOLUTION)
+            return checker.run_tests(folder, "main.py", source, tournament=True)
+
+    def test_tournament_of(self):
+        self.assertIsNone(checker.tournament_of("x = 1\n"))
+        self.assertIsNone(checker.tournament_of("def (\n"))
+        self.assertEqual(
+            checker.tournament_of("import polycode_test as t\nt.tournament('a')\n"), {"id": "a", "private": False}
+        )
+        self.assertEqual(
+            checker.tournament_of("from polycode_test import tournament\ntournament('a', private=True)\n"),
+            {"id": "a", "private": True},
+        )
+
+    def test_tournament_of_rejects(self):
+        for source in (
+            "tournament('a')\ntournament('b')\n",
+            "def f():\n    tournament('a')\n",
+            "tournament('')\n",
+            f"tournament('{'x' * 65}')\n",
+            "tournament(1)\n",
+            "name = 'a'\ntournament(name)\n",
+            "tournament('a', private=1)\n",
+        ):
+            self.assertIn("error", checker.tournament_of(source), source)
+
+    def test_stops_after_the_first_failure(self):
+        res = self.check(
+            HEAD
+            + "@t.points(10)\ndef test_a(): pass\n"
+            + "@t.points(30)\ndef test_b(): assert False, 'no'\n"
+            + "@t.points(5)\ndef test_c(): raise SystemExit\n"
+        )
+        self.assertEqual(
+            [(r["name"], r["ok"], r.get("skipped", False), r["points"]) for r in res],
+            [("test_a", True, False, 10), ("test_b", False, False, 30), ("test_c", False, True, 5)],
+        )
+        self.assertEqual(res[1]["message"], "no")
+
+    def test_test_without_points_costs_nothing_and_still_stops(self):
+        res = self.check(HEAD + "def test_a(): assert False\n@t.points(5)\ndef test_b(): pass\n")
+        self.assertEqual(res[0]["points"], 0)
+        self.assertTrue(res[1]["skipped"])
+
+    def test_tests_above_the_call_count(self):
+        res = self.check("import polycode_test as t\n@t.points(2)\ndef test_a(): pass\nt.tournament('x')\n")
+        self.assertEqual(res[0]["points"], 2)
+
+    def test_ordinary_mode_runs_everything_and_adds_no_fields(self):
+        res = checker_run_plain(
+            "import polycode_test as t\n@t.points(2)\ndef test_a(): assert False\ndef test_b(): pass\n"
+        )
+        self.assertEqual([r["name"] for r in res], ["test_a", "test_b"])
+        self.assertNotIn("points", res[0])
+
+    def test_bad_points_is_an_error_of_the_file(self):
+        for amount in ("0", "-1", "True", "'5'", "float('inf')", "float('nan')"):
+            res = self.check(HEAD + f"@t.points({amount})\ndef test_a(): pass\n")
+            self.assertEqual([r["name"] for r in res], ["tests"], amount)
+
+    def test_alias_of_tournament_is_an_error_of_the_file(self):
+        res = checker_run_plain("from polycode_test import tournament as x\nx('a')\n")
+        self.assertEqual([r["name"] for r in res], ["tests"])
+        self.assertIn("tournament", res[0]["message"])
+
+    def test_project_stays_out_of_sys_path(self):
+        before = list(sys.path)
+        self.check(HEAD + "def test_a(): pass\n", project="/nonexistent/project")
+        self.assertEqual(sys.path, before)
+
+    def test_module_is_a_type_error(self):
+        res = self.check(HEAD + "def test_a():\n    t.module\n")
+        self.assertEqual(res[0]["message"], "TypeError")
+
+    def test_run_goes_through_the_hook(self):
+        res = self.check(HEAD + "def test_a():\n    assert t.run('x\\n') == 'x\\n'\n")
+        self.assertTrue(res[0]["ok"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_endless_solution_without_timeout_fails_and_skips_the_rest(self):
+        self.answer = {"stdout": "", "memory": 0, "timedOut": True, "exitCode": 0, "failure": "", "elapsed": 120.0}
+        res = self.check(HEAD + "def test_a():\n    t.run()\ndef test_b(): pass\n")
+        self.assertIn("time limit", res[0]["message"])
+        self.assertTrue(res[1]["skipped"])
+        self.assertLessEqual(self.calls[0], 120_000)
+
+    def test_exit_code_of_a_python_solution_reaches_the_student(self):
+        self.answer = {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 1, "failure": "", "elapsed": 0.0}
+        res = self.check(HEAD + "def test_a():\n    t.run()\n")
+        self.assertEqual(res[0]["message"], "exit code 1")
 
 
 if __name__ == "__main__":

@@ -21,6 +21,12 @@ is cut by the output limit or does not start, whatever it printed.
 
 ``polycode_test.module`` holds the solution's declarations (imports, defs,
 classes, constants without calls); the program itself is not run.
+
+A file with a top-level ``polycode_test.tournament(id)`` is a tournament: its
+tests earn ``points(amount)``, the first failure skips the rest, and the
+solution never runs in this interpreter. Its files are not given to it, and
+``run()`` goes through the page like a C++ solution's (``_run_isolated``), so
+the solution cannot reach the tests or the results.
 """
 
 import ast
@@ -38,9 +44,14 @@ import types
 
 MAX_MESSAGE = 200
 CHECK_LIMIT = 30  # seconds; the page stops a whole check after this
+TOURNAMENT_LIMIT = 120  # the same for a tournament's check
+MAX_TOURNAMENT_ID = 64
 
 _solution = ""
 _check_started = 0.0
+_check_limit = CHECK_LIMIT
+_in_tournament = False
+_points: dict = {}  # test function -> what it is worth
 # What the current test's run() calls measured: "time" (sum), "memory" (peak).
 _measures: dict = {}
 
@@ -71,6 +82,81 @@ class OutputLimitExceeded(RuntimeError):
 
 class ProgramNotStarted(RuntimeError):
     pass
+
+
+FILE_ERRORS = {
+    "place": "tournament() must be one top-level statement",
+    "args": "tournament(id, private=False): id is a string of 1 to 64 characters",
+    "points": "points(amount): amount is a positive number",
+}
+
+
+class TestFileError(Exception):
+    """The test file misuses tournament() or points(); ``code`` is a key of FILE_ERRORS."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def tournament(id: str, private: bool = False) -> None:
+    """The real work is in tournament_of(), before the file runs. Getting here outside
+    a tournament means tournament_of() did not see this call (an alias)."""
+    if not _in_tournament:
+        raise TestFileError("place")
+
+
+_tournament = tournament  # run_tests has a parameter of this name
+
+
+def points(amount: float):
+    """A decorator: what the test earns in a tournament. Gives back the same function."""
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not 0 < amount < math.inf:
+        raise TestFileError("points")
+
+    def worth(fn):
+        _points[fn] = amount
+        return fn
+
+    return worth
+
+
+def _tournament_args(call: ast.Call) -> dict:
+    invalid = {"error": FILE_ERRORS["args"]}
+    if len(call.args) > 2:
+        return invalid
+    values = dict(zip(("id", "private"), call.args))
+    for keyword in call.keywords:
+        if keyword.arg not in ("id", "private") or keyword.arg in values:
+            return invalid
+        values[keyword.arg] = keyword.value
+    name = values.get("id")
+    private = values.get("private", ast.Constant(False))
+    if not isinstance(name, ast.Constant) or not isinstance(private, ast.Constant):
+        return invalid
+    if not isinstance(name.value, str) or not 1 <= len(name.value) <= MAX_TOURNAMENT_ID or not isinstance(private.value, bool):
+        return invalid
+    return {"id": name.value, "private": private.value}
+
+
+def tournament_of(source: str) -> dict | None:
+    """Whether a test file is a tournament, from its text alone: None, {id, private}
+    or {error}. A syntax error is None: run_tests reports it."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+
+    def named(func) -> bool:
+        return (isinstance(func, ast.Name) and func.id == "tournament") or (isinstance(func, ast.Attribute) and func.attr == "tournament")
+
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and named(node.func)]
+    if not calls:
+        return None
+    statements = [node.value for node in tree.body if isinstance(node, ast.Expr)]
+    if len(calls) > 1 or not any(calls[0] is value for value in statements):
+        return {"error": FILE_ERRORS["place"]}
+    return _tournament_args(calls[0])
 
 
 def _deadline(ms: int) -> bool:
@@ -149,9 +235,11 @@ def _short(text: str) -> str:
     return text if len(text) <= MAX_MESSAGE else text[: MAX_MESSAGE - 1] + "…"
 
 
-def _failure(err: BaseException, tests: str, language: str = "python") -> str:
+def _failure(err: BaseException, tests: str, isolated: bool = False) -> str:
     """What the student is told. Only the tests' own asserts carry text: the
     solution must not be able to send anything back through messages."""
+    if isinstance(err, TestFileError):
+        return (isinstance(err.code, str) and FILE_ERRORS.get(err.code)) or "error"
     if isinstance(err, AssertionError):
         tb = err.__traceback__
         while tb and tb.tb_next:
@@ -168,9 +256,9 @@ def _failure(err: BaseException, tests: str, language: str = "python") -> str:
         if isinstance(err, TimeLimitExceeded):
             return _short(f"time limit {limit:g} s exceeded: {used:.2f} s")
         return _short(f"memory limit {limit / 1e6:g} MB exceeded: {used / 1e6:.1f} MB")
-    # Fixed text or an integer: the program's output never gets here. A Python solution
-    # never gets these from run(), but can reach the classes through sys.modules.
-    if language == "cpp":
+    # Fixed text or an integer: the program's output never gets here. A solution sharing
+    # this interpreter never gets these from run(), but can reach the classes through sys.modules.
+    if isolated:
         if isinstance(err, OutputLimitExceeded):
             return "output limit exceeded"
         if isinstance(err, ProgramNotStarted):
@@ -197,29 +285,31 @@ def _measured() -> dict:
     return measured
 
 
-def _run_wasm(stdin: str, timeout_ms: int) -> dict:
-    """Runs the C++ solution on the page, blocking: {stdout, memory, timedOut, exitCode, failure}.
-    ``failure`` is "", "output_limit" or "not_started"; exitCode alone cannot tell
-    them apart (a program may return 130 or 1 itself)."""
+def _run_outside(stdin: str, timeout_ms: int, trace_memory: bool = False) -> dict:
+    """Runs the solution outside this interpreter, through the page, blocking:
+    {stdout, memory, timedOut, exitCode, failure, elapsed}. ``failure`` is "",
+    "output_limit" or "not_started"; exitCode alone cannot tell them apart (a program
+    may return 130 or 1 itself). ``elapsed`` is in seconds, from the program's start."""
     import js  # Pyodide only; the unit tests replace this hook
 
-    result = js.polycode_run_wasm(stdin, timeout_ms)
+    result = js.polycode_run_outside(stdin, timeout_ms, trace_memory)
     return {
         "stdout": result.stdout,
         "memory": result.memory,
         "timedOut": result.timedOut,
         "exitCode": result.exitCode,
         "failure": result.failure,
+        "elapsed": result.elapsed,
     }
 
 
-def _run_cpp(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
-    """run() for a C++ solution. Without ``timeout`` it may use what is left of the check."""
-    ms = round(timeout * 1000) if timeout else round((CHECK_LIMIT - (_now() - _check_started)) * 1000)
+def _run_isolated(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
+    """run() for a solution outside this interpreter (C++, a tournament's). Without
+    ``timeout`` it may use what is left of the check."""
+    ms = round(timeout * 1000) if timeout else round((_check_limit - (_now() - _check_started)) * 1000)
     ms = max(1, ms)
-    started = _now()
-    result = _run_wasm(stdin, ms)
-    used = _now() - started
+    result = _run_outside(stdin, ms, bool(ram_usage))
+    used = result["elapsed"]
     memory = result["memory"]
     if timeout:
         _measures["time"] = _measures.get("time", 0.0) + used
@@ -259,22 +349,29 @@ def declarations(source: str, filename: str) -> types.ModuleType:
     return module
 
 
-def run_tests(project: str, solution: str, source: str, kind: str = "python") -> list:
+def run_tests(project: str, solution: str, source: str, kind: str = "python", tournament: bool = False) -> list:
     """Runs every test_* function of ``source`` against ``project/solution``.
-    ``kind`` is the solution's language: "python" or "cpp"."""
-    global _solution, _check_started
+    ``kind`` is the solution's language: "python" or "cpp". In a ``tournament`` (see
+    tournament_of) the first failure skips the rest and the project stays away from us."""
+    global _solution, _check_started, _check_limit, _in_tournament
     _check_started = _now()
+    _check_limit = TOURNAMENT_LIMIT if tournament else CHECK_LIMIT
+    _in_tournament = tournament
+    _points.clear()
+    isolated = kind == "cpp" or tournament
     _solution = os.path.join(project, solution)
     folder = os.path.dirname(_solution)
     helper = types.ModuleType("polycode_test")
-    helper.run = run if kind == "python" else _run_cpp
+    helper.run = _run_isolated if isolated else run
+    helper.tournament = _tournament
+    helper.points = points
     helper.TimeLimitExceeded = TimeLimitExceeded
     helper.MemoryLimitExceeded = MemoryLimitExceeded
     cached = []
 
     def module_of_solution():
-        if kind != "python":
-            raise TypeError("module is only for Python solutions")
+        if isolated:
+            raise TypeError("module is only for Python solutions outside a tournament")
         if not cached:
             with open(_solution, encoding="utf-8") as f:
                 cached.append(declarations(f.read(), _solution))
@@ -284,7 +381,7 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python") ->
     helper.__getattr__ = lambda name: module_of_solution() if name == "module" else _missing(name)
     # The old name keeps working for existing tests.
     sys.modules["polycode_test"] = sys.modules["pycode_test"] = helper
-    for path in (folder, project):
+    for path in () if tournament else (folder, project):
         if path not in sys.path:
             sys.path.insert(0, path)
     module = types.ModuleType("polycode_check")
@@ -297,20 +394,26 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python") ->
     except SyntaxError as err:
         return [{"name": "tests", "ok": False, "message": _short(f"SyntaxError: {err.msg} (line {err.lineno})")}]
     except BaseException as err:  # noqa: BLE001 - any error in the test file is reported
-        return [{"name": "tests", "ok": False, "message": _failure(err, tests, kind)}]
+        return [{"name": "tests", "ok": False, "message": _failure(err, tests, isolated)}]
     results = []
+    failed = False
     try:
         for name, fn in list(module.__dict__.items()):
             # def test_…(): functions named so (not lambdas or helpers bound to such names).
             if not name.startswith("test_") or not isinstance(fn, types.FunctionType) or fn.__name__ != name:
+                continue
+            worth = {"points": _points.get(fn, 0)} if tournament else {}
+            if tournament and failed:
+                results.append({"name": name, "ok": False, "message": "", "skipped": True, **worth})
                 continue
             _measures.clear()
             try:
                 fn()
                 result = {"name": name, "ok": True, "message": ""}
             except BaseException as err:  # noqa: BLE001
-                result = {"name": name, "ok": False, "message": _failure(err, tests, kind)}
-            results.append({**result, **_measured()})
+                result = {"name": name, "ok": False, "message": _failure(err, tests, isolated)}
+                failed = True
+            results.append({**result, **_measured(), **worth})
     finally:
         sys.modules.pop("polycode_test", None)
         sys.modules.pop("pycode_test", None)

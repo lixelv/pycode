@@ -28,7 +28,14 @@ class StubMatchesChecker(unittest.TestCase):
     def test_run_has_the_same_parameters(self):
         run = ast.dump(functions(self.stub)["run"].args)
         self.assertEqual(run, ast.dump(functions(self.checker)["run"].args))
-        self.assertEqual(run, ast.dump(functions(self.checker)["_run_cpp"].args))
+        self.assertEqual(run, ast.dump(functions(self.checker)["_run_isolated"].args))
+
+    def test_tournament_functions_have_the_same_parameters(self):
+        ours, theirs = functions(self.stub), functions(self.checker)
+        for name in ("tournament", "points"):
+            self.assertIn(name, ours)
+            self.assertIn(name, theirs)
+            self.assertEqual(ast.dump(ours[name].args), ast.dump(theirs[name].args), name)
 
     def test_public_names_are_those_of_the_helper(self):
         helper = {

@@ -1,4 +1,3 @@
-import dagre from "@dagrejs/dagre"
 import type { Edge, Node } from "@xyflow/react"
 
 export interface AstLoc {
@@ -65,7 +64,7 @@ export const CATEGORY_COLORS: Record<AstCategory, string> = {
   other: "var(--muted-foreground)",
 }
 
-export type FlowNodeData = AstNodeData & { category: AstCategory; depth: number }
+export type FlowNodeData = AstNodeData & { category: AstCategory; depth: number; leaf: boolean }
 export type FlowNode = Node<FlowNodeData, "ast">
 
 const CHAR_W = 7.3
@@ -80,31 +79,75 @@ function nodeSize(node: AstNodeData) {
   return { width, height }
 }
 
+const NODE_GAP = 28
+const RANK_GAP = 64
+const MARGIN = 24
+
+/**
+ * A plain tree layout: children stand left to right in the order of their edges,
+ * that is, in source order. Dagre's crossing reduction was free to swap them
+ * (`right` to the left of `left`).
+ */
 export function layout(response: AstResponse, lang: "python" | "cpp" = "python"): { nodes: FlowNode[]; edges: Edge[] } {
-  const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: "TB", nodesep: 28, ranksep: 64, marginx: 24, marginy: 24 })
-  g.setDefaultEdgeLabel(() => ({}))
-
   const sizes = new Map<string, { width: number; height: number }>()
-  for (const node of response.nodes ?? []) {
-    const size = nodeSize(node)
-    sizes.set(node.id, size)
-    g.setNode(node.id, size)
-  }
-  for (const edge of response.edges ?? []) g.setEdge(edge.source, edge.target)
-  dagre.layout(g)
+  for (const node of response.nodes ?? []) sizes.set(node.id, nodeSize(node))
 
-  const depth = new Map<string, number>([["0", 0]])
-  for (const edge of response.edges ?? []) depth.set(edge.target, (depth.get(edge.source) ?? 0) + 1)
+  const children = new Map<string, string[]>()
+  const depth = new Map<string, number>()
+  for (const edge of response.edges ?? []) {
+    children.set(edge.source, [...(children.get(edge.source) ?? []), edge.target])
+    depth.set(edge.target, 0)
+  }
+  const roots = (response.nodes ?? []).filter((n) => !depth.has(n.id)).map((n) => n.id)
+
+  // Top of each level: as far down as the tallest node of the level above needs.
+  const setDepth = (id: string, d: number) => {
+    depth.set(id, d)
+    for (const child of children.get(id) ?? []) setDepth(child, d + 1)
+  }
+  for (const root of roots) setDepth(root, 0)
+  const rankHeight: number[] = []
+  for (const [id, size] of sizes) rankHeight[depth.get(id)!] = Math.max(rankHeight[depth.get(id)!] ?? 0, size.height)
+  const rankTop = [MARGIN]
+  for (const height of rankHeight) rankTop.push(rankTop[rankTop.length - 1] + height + RANK_GAP)
+
+  const position = new Map<string, { x: number; y: number }>()
+  // Places a subtree from `left` on, its parent centred over its children; returns the subtree's right edge.
+  const place = (id: string, left: number): number => {
+    const size = sizes.get(id)!
+    const kids = children.get(id) ?? []
+    let right = left
+    if (kids.length) {
+      const span = kids.reduce((end, kid, i) => place(kid, i ? end + NODE_GAP : end), left)
+      const center = (position.get(kids[0])!.x + position.get(kids[kids.length - 1])!.x + sizes.get(kids[kids.length - 1])!.width) / 2
+      let x = center - size.width / 2
+      if (x < left) {
+        // The parent is wider than its children: move them under it.
+        const shift = left - x
+        const move = (n: string) => {
+          position.get(n)!.x += shift
+          ;(children.get(n) ?? []).forEach(move)
+        }
+        kids.forEach(move)
+        x = left
+        right = Math.max(span + shift, x + size.width)
+      } else right = Math.max(span, x + size.width)
+      position.set(id, { x, y: rankTop[depth.get(id)!] })
+    } else {
+      position.set(id, { x: left, y: rankTop[depth.get(id)!] })
+      right = left + size.width
+    }
+    return right
+  }
+  roots.reduce((left, root) => place(root, left) + NODE_GAP, MARGIN)
 
   const nodes: FlowNode[] = (response.nodes ?? []).map((node) => {
-    const pos = g.node(node.id)
     const size = sizes.get(node.id)!
     return {
       id: node.id,
       type: "ast",
-      position: { x: pos.x - size.width / 2, y: pos.y - size.height / 2 },
-      data: { ...node, category: categorize(node.type, lang), depth: depth.get(node.id) ?? 0 },
+      position: position.get(node.id)!,
+      data: { ...node, category: categorize(node.type, lang), depth: depth.get(node.id) ?? 0, leaf: !children.has(node.id) },
       style: { width: size.width },
     }
   })

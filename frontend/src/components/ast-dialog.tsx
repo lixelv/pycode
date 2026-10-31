@@ -73,7 +73,7 @@ const AstNode = memo(function AstNode({ data, selected }: NodeProps<FlowNode>) {
           ))}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!size-1.5 !border-0 !bg-muted-foreground" />
+      {!data.leaf && <Handle type="source" position={Position.Bottom} className="!size-1.5 !border-0 !bg-muted-foreground" />}
     </div>
   )
 })

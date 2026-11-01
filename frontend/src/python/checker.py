@@ -33,6 +33,7 @@ import ast
 import builtins
 import contextlib
 import io
+import json
 import math
 import os
 import runpy
@@ -41,6 +42,11 @@ import sys
 import time
 import tracemalloc
 import types
+
+try:
+    from polycode.runner import declaration_code
+except ImportError:  # the unit tests import the files directly
+    from runner import declaration_code
 
 MAX_MESSAGE = 200
 CHECK_LIMIT = 30  # seconds; the page stops a whole check after this
@@ -184,7 +190,13 @@ def _cancel_deadline() -> bool:
 def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
     """Runs the solution as ``__main__`` with this input; returns its output.
     Raises TimeLimitExceeded / MemoryLimitExceeded when a limit is exceeded."""
-    lines = io.StringIO(stdin)
+    return _execute(lambda: runpy.run_path(_solution, run_name="__main__"), stdin, timeout, ram_usage)
+
+
+def _execute(action, stdin: str, timeout: float | None, ram_usage: float | None) -> str:
+    """Runs ``action`` with the solution's input, output and limits (see run)."""
+    # sys.stdin too: a solution may read with sys.stdin.read() / open(0), which would otherwise wait for the console.
+    lines = io.TextIOWrapper(io.BytesIO(stdin.encode()), encoding="utf-8", newline="")
     out = io.StringIO()
 
     def fake_input(prompt=""):
@@ -194,19 +206,21 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
         return line.rstrip("\n")
 
     saved = builtins.input
+    saved_stdin = sys.stdin
     started = None
     interrupted = False
     peak = 0
     try:
         try:
             builtins.input = fake_input
+            sys.stdin = lines
             if ram_usage:
                 tracemalloc.start()
             if timeout:
                 _deadline(max(1, round(timeout * 1000)))
             started = _now()
             with contextlib.redirect_stdout(out):
-                runpy.run_path(_solution, run_name="__main__")
+                action()
         finally:
             # Once cancelled, no interrupt can come: the handler and cleanup below are safe.
             if timeout and _cancel_deadline():
@@ -218,6 +232,7 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
     finally:
         used = 0.0 if started is None else _now() - started
         builtins.input = saved
+        sys.stdin = saved_stdin
         if ram_usage and tracemalloc.is_tracing():
             peak = tracemalloc.get_traced_memory()[1]
             tracemalloc.stop()
@@ -285,14 +300,14 @@ def _measured() -> dict:
     return measured
 
 
-def _run_outside(stdin: str, timeout_ms: int, trace_memory: bool = False) -> dict:
+def _run_outside(stdin: str, timeout_ms: int, trace_memory: bool = False, call: str = "") -> dict:
     """Runs the solution outside this interpreter, through the page, blocking:
     {stdout, memory, timedOut, exitCode, failure, elapsed}. ``failure`` is "",
     "output_limit" or "not_started"; exitCode alone cannot tell them apart (a program
     may return 130 or 1 itself). ``elapsed`` is in seconds, from the program's start."""
     import js  # Pyodide only; the unit tests replace this hook
 
-    result = js.polycode_run_outside(stdin, timeout_ms, trace_memory)
+    result = js.polycode_run_outside(stdin, timeout_ms, trace_memory, *((call,) if call else ()))
     return {
         "stdout": result.stdout,
         "memory": result.memory,
@@ -304,11 +319,15 @@ def _run_outside(stdin: str, timeout_ms: int, trace_memory: bool = False) -> dic
 
 
 def _run_isolated(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
+    return _isolated(stdin, timeout, ram_usage)
+
+
+def _isolated(stdin: str, timeout: float | None, ram_usage: float | None, call: str = "") -> str:
     """run() for a solution outside this interpreter (C++, a tournament's). Without
     ``timeout`` it may use what is left of the check."""
     ms = round(timeout * 1000) if timeout else round((_check_limit - (_now() - _check_started)) * 1000)
     ms = max(1, ms)
-    result = _run_outside(stdin, ms, bool(ram_usage))
+    result = _run_outside(stdin, ms, bool(ram_usage), *((call,) if call else ()))
     used = result["elapsed"]
     memory = result["memory"]
     if timeout:
@@ -329,23 +348,40 @@ def _run_isolated(stdin: str = "", timeout: float | None = None, ram_usage: floa
     return result["stdout"]
 
 
+def _call_isolated(name: str, *args, timeout: float | None = None, ram_usage: float | None = None):
+    """call() for a tournament's solution: the function runs in its own interpreter and
+    comes back as JSON."""
+    if not isinstance(name, str):
+        raise TypeError("call() needs the function's name")
+    text = _isolated("", timeout, ram_usage, call=json.dumps({"name": name, "args": list(args)}))
+    return json.loads(text)
+
+
+def _call_local(solution_module, name: str, args, timeout, ram_usage):
+    """call() for a Python solution in this interpreter: arguments and result pass
+    through JSON too, so the test sees the same values as in a tournament."""
+    if not isinstance(name, str):
+        raise TypeError("call() needs the function's name")
+    args = json.loads(json.dumps(list(args)))
+    answer = []
+
+    def action():
+        function = getattr(solution_module(), name)
+        with contextlib.redirect_stdout(io.StringIO()):
+            answer.append(json.dumps(function(*args)))
+
+    _execute(action, "", timeout, ram_usage)
+    return json.loads(answer[0])
+
+
 def _missing(name: str):
     raise AttributeError(f"module 'polycode_test' has no attribute {name!r}")
 
 
 def declarations(source: str, filename: str) -> types.ModuleType:
-    """A module with only the top-level declarations of ``source``: imports,
-    defs, classes and assignments whose value contains no call."""
-    kept = []
-    for node in ast.parse(source, filename).body:
-        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            kept.append(node)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            if node.value is None or not any(isinstance(n, ast.Call) for n in ast.walk(node.value)):
-                kept.append(node)
-    code = compile(ast.Module(body=kept, type_ignores=[]), filename, "exec")
+    """A module with only the top-level declarations of ``source`` (see declaration_code)."""
     module = types.ModuleType(os.path.splitext(os.path.basename(filename))[0])
-    exec(code, module.__dict__)
+    exec(declaration_code(source, filename), module.__dict__)
     return module
 
 
@@ -371,12 +407,20 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python", to
 
     def module_of_solution():
         if isolated:
-            raise TypeError("module is only for Python solutions outside a tournament")
+            raise TypeError("module is only for Python solutions outside a tournament (use call)")
         if not cached:
             with open(_solution, encoding="utf-8") as f:
                 cached.append(declarations(f.read(), _solution))
         return cached[0]
 
+    def call(name: str, *args, timeout: float | None = None, ram_usage: float | None = None):
+        if kind == "cpp":
+            raise TypeError("call is only for Python solutions")
+        if tournament:
+            return _call_isolated(name, *args, timeout=timeout, ram_usage=ram_usage)
+        return _call_local(module_of_solution, name, args, timeout, ram_usage)
+
+    helper.call = call
     # Built on first use (PEP 562), once per check.
     helper.__getattr__ = lambda name: module_of_solution() if name == "module" else _missing(name)
     # The old name keeps working for existing tests.
@@ -397,12 +441,14 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python", to
         return [{"name": "tests", "ok": False, "message": _failure(err, tests, isolated)}]
     results = []
     failed = False
+    # Outside a tournament, points are only a score: shown when the file gives any, never skipping tests.
+    scored = tournament or bool(_points)
     try:
         for name, fn in list(module.__dict__.items()):
             # def test_…(): functions named so (not lambdas or helpers bound to such names).
             if not name.startswith("test_") or not isinstance(fn, types.FunctionType) or fn.__name__ != name:
                 continue
-            worth = {"points": _points.get(fn, 0)} if tournament else {}
+            worth = {"points": _points.get(fn, 0)} if scored else {}
             if tournament and failed:
                 results.append({"name": name, "ok": False, "message": "", "skipped": True, **worth})
                 continue

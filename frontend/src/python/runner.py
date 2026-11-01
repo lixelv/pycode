@@ -3,7 +3,11 @@
 The source is written to ``main.py`` first so tracebacks show its lines.
 """
 
+import ast
 import builtins
+import contextlib
+import io
+import json
 import os
 import sys
 import traceback
@@ -69,11 +73,13 @@ def write_project(files: dict) -> None:
     os.chdir(PROJECT)
 
 
-def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> dict:
+def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False, call: str = "") -> dict:
     """Runs ``path`` with a fixed input for a tournament's check: {exitCode, memory}.
 
     input() prompts are not printed, reading past ``stdin`` raises EOFError.
     ``memory`` is the tracemalloc peak in bytes, 0 unless ``trace_memory``.
+    With ``call`` (JSON ``{"name", "args"}``) the file is not run: its declarations are
+    loaded and that function is called; stdout is then the result as one line of JSON.
     Each run has streams of its own: a program may replace or close them
     (``io.TextIOWrapper(sys.stdout.buffer)``), and the next run must not notice.
     """
@@ -96,7 +102,7 @@ def run_batch(path: str, stdin: str, arm=None, trace_memory: bool = False) -> di
     if trace_memory:
         tracemalloc.start()
     try:
-        code = run_main(path, arm=arm)
+        code = run_main(path, arm=arm, call=json.loads(call) if call else None)
         if trace_memory:
             memory = tracemalloc.get_traced_memory()[1]
     finally:
@@ -127,11 +133,26 @@ def without_internal_frames(tb, folder: str = os.path.dirname(os.path.abspath(__
     return head
 
 
-def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
+def declaration_code(source: str, filename: str):
+    """Compiles only the top-level declarations of ``source``: imports, defs,
+    classes and assignments whose value contains no call."""
+    kept = []
+    for node in ast.parse(source, filename).body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            kept.append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            if node.value is None or not any(isinstance(n, ast.Call) for n in ast.walk(node.value)):
+                kept.append(node)
+    return compile(ast.Module(body=kept, type_ignores=[]), filename, "exec")
+
+
+def run_main(path: str = "main.py", debugger=None, arm=None, call=None) -> int:
     """Runs ``path`` as ``__main__``; with a debugger (a bdb.Bdb), under it.
 
     ``arm`` turns interrupts on just before the program starts and raises
-    KeyboardInterrupt for a Stop that came earlier.
+    KeyboardInterrupt for a Stop that came earlier. With ``call`` ({"name", "args"}) only
+    the declarations run, then the function is called and its result printed as JSON
+    (what the function prints itself is dropped).
     """
     import bdb
 
@@ -148,7 +169,7 @@ def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
     with open(path, encoding="utf-8") as f:
         source = f.read()
     try:
-        code = compile(source, path, "exec")
+        code = declaration_code(source, path) if call else compile(source, path, "exec")
     except SyntaxError as exc:
         traceback.print_exception(type(exc), exc, None)
         return 1
@@ -162,6 +183,13 @@ def run_main(path: str = "main.py", debugger=None, arm=None) -> int:
             debugger.run(code, namespace)
         else:
             exec(code, namespace)
+            if call:
+                function = namespace.get(call["name"])
+                if not callable(function):
+                    raise NameError(f"the solution has no function {call['name']!r}")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    value = function(*call["args"])
+                print(json.dumps(value))
     except bdb.BdbQuit:
         print("\nStopped", file=sys.stderr)
         return 130

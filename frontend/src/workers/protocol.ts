@@ -46,8 +46,8 @@ export type RunnerRequest =
   | { type: "check"; id: number; files: ProjectFiles; solution: string; test: string; specs: string[]; cpp?: boolean }
   /** Gets a tournament solution's interpreter ready for its runs. */
   | { type: "prepare"; files: ProjectFiles; specs: string[] }
-  /** A tournament's solution, one run: fixed input, the answer goes into `result` (BATCH_* below). */
-  | { type: "batch"; files: ProjectFiles; entry: string; stdin: string; traceMemory: boolean; result: SharedArrayBuffer }
+  /** A tournament's solution, one run: fixed input (or, with `call`, a JSON `{name, args}` for polycode_test.call), the answer goes into `result` (BATCH_* below). */
+  | { type: "batch"; files: ProjectFiles; entry: string; stdin: string; traceMemory: boolean; result: SharedArrayBuffer; call?: string }
 
 export type RunnerEvent =
   | { type: "ready"; python: string }
@@ -72,7 +72,7 @@ export type RunnerEvent =
   /** polycode_test.run(timeout=…): interrupt the program after ms if timer gen is still armed (lib/python/deadline.ts). */
   | { type: "deadline"; ms: number; gen: number }
   /** A check runs the solution outside its interpreter (C++, a tournament's): the page runs it in batch mode, the answer goes into `result` (BATCH_* below). */
-  | { type: "run_outside"; stdin: string; timeoutMs: number; traceMemory: boolean; result: SharedArrayBuffer }
+  | { type: "run_outside"; stdin: string; timeoutMs: number; traceMemory: boolean; result: SharedArrayBuffer; call?: string }
   /** The solution ran out of time: the page terminates it. */
   | { type: "kill_outside" }
 

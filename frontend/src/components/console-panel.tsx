@@ -27,6 +27,8 @@ interface ConsolePanelProps {
   onClose: () => void
   /** Shown in the header before the title (e.g. a switch to the web preview). */
   tabs?: ReactNode
+  /** False while another tab of its group is shown: what is hidden cannot take focus. */
+  visible?: boolean
 }
 
 function exitLabel(exit: ExitInfo, timeoutSec: number) {
@@ -95,6 +97,7 @@ export function ConsolePanel({
   onClear,
   onClose,
   tabs,
+  visible = true,
 }: ConsolePanelProps) {
   useI18n() // re-render on language change
   const draft = useSharedDraft(doc)
@@ -111,8 +114,8 @@ export function ConsolePanel({
   }, [chunks, waiting, exit])
 
   useEffect(() => {
-    if (waiting) inputRef.current?.focus({ preventScroll: true })
-  }, [waiting])
+    if (waiting && visible) inputRef.current?.focus({ preventScroll: true })
+  }, [waiting, visible])
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     // Enter that confirms an IME candidate only finishes the composition.

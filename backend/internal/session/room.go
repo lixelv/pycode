@@ -177,6 +177,25 @@ func (r *room) setRole(peer uint32, g grant) {
 	r.updateOwner() // an admin less (or more) may change who stands in for the owner
 }
 
+// remove disconnects every connection of a user (kicked or banned), telling
+// them why and everyone else that they left.
+func (r *room) remove(user uuid.UUID, ban bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, m := range r.members {
+		if m.user != user {
+			continue
+		}
+		m.enqueueJSON(control{Type: "removed", Ban: ban})
+		close(m.send) // the writer then closes the connection
+		delete(r.members, id)
+		for _, other := range r.members {
+			other.enqueueJSON(control{Type: "leave", Peer: &m.info})
+		}
+	}
+	r.updateOwner()
+}
+
 // hasAdmin reports whether this user is connected with admin rights.
 func (r *room) hasAdmin(user uuid.UUID) bool {
 	r.mu.Lock()

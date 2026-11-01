@@ -1,5 +1,5 @@
 import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { AstDialog } from "@/components/ast-dialog"
@@ -7,6 +7,7 @@ import { CodeEditor, type EditorInstance } from "@/components/code-editor"
 import { ConfirmDialog, type ConfirmRequest } from "@/components/confirm-dialog"
 import { ConsolePanel } from "@/components/console-panel"
 import { FileTree } from "@/components/file-tree"
+import { LowerPanels } from "@/components/lower-panels"
 import { MarkdownPreview } from "@/components/markdown-preview"
 import { CppPackagesPanel } from "@/components/cpp-packages-panel"
 import { PackagesPanel } from "@/components/packages-panel"
@@ -37,6 +38,7 @@ import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
 import { usePersisted } from "@/hooks/use-persisted"
+import { DEFAULT_LAYOUT, activate, normalizeLayout, type Tool } from "@/lib/lower-layout"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedRun, sharedTerminal } from "@/lib/collab/doc"
@@ -56,6 +58,7 @@ import {
   needsLanguage,
   packagesKind,
   packagesOf,
+  duplicatePath,
   renamePath,
   resetProject,
   openArchive,
@@ -97,6 +100,7 @@ const LABELS_KEY = "polycode:cursor-labels"
 const MD_MODE_KEY = "polycode:md-mode"
 const HTML_MODE_KEY = "polycode:html-mode"
 const BREAKPOINTS_KEY = "polycode:breakpoints"
+const LOWER_LAYOUT_KEY = "polycode:lower-layout"
 const CHECK_COOLDOWN_MS = 3000
 const FORMATTABLE = new Set(["python", "json", "html", "css", "javascript", "markdown"])
 type ViewMode = "code" | "split" | "preview"
@@ -391,7 +395,9 @@ function Workspace() {
 
   // Web pages and scripts run in a sandboxed frame (see components/web-preview.tsx).
   const [webRun, setWebRun] = useState<WebRun | null>(null)
-  const [lowerTab, setLowerTab] = useState<"console" | "web" | "tests" | "debug" | "tournament">("console")
+  const [savedLayout, setSavedLayout] = usePersisted<unknown>(LOWER_LAYOUT_KEY, DEFAULT_LAYOUT)
+  const lowerLayout = useMemo(() => normalizeLayout(savedLayout), [savedLayout])
+  const setLowerTab = useCallback((tool: Tool) => setSavedLayout((saved: unknown) => activate(normalizeLayout(saved), tool)), [setSavedLayout])
   const webStarted = useRef(0)
   const lastEntry = useRef<string | null>(null)
   const startRun = useCallback((debug: boolean) => {
@@ -554,36 +560,32 @@ function Workspace() {
   }, [provider, store, checkHere, t, recordIn])
 
   const tournaments = useTournaments(store, access)
-  // The table is gone (Reset, an opened archive, it became private): back to the console.
+  // A program asks for input: whoever can type is taken to the console, and a debugger's next stop brings them back.
+  const backToDebug = useRef(false)
+  const waitingForInput = consoleView.status === "waiting" && canRun
   useEffect(() => {
-    if (lowerTab === "tournament" && !tournaments.length) setLowerTab("console")
-  }, [lowerTab, tournaments.length])
+    if (!waitingForInput) return
+    setConsoleOpen(true)
+    backToDebug.current = sharedConsole.debugging
+    setLowerTab("console")
+  }, [waitingForInput, setLowerTab])
+  const debugState = sharedConsole.debug
+  useEffect(() => {
+    if (!debugState || !backToDebug.current) return
+    backToDebug.current = false
+    setLowerTab("debug")
+  }, [debugState, setLowerTab])
 
-  const lowerTabList = [
-    ...(webRun?.visible ? [["web", t("web.preview")] as const] : []),
-    ...(check ? [["tests", t("check.tab")] as const] : []),
-    ...(tournaments.length ? [["tournament", t("tournament.tab")] as const] : []),
-    ...(sharedConsole.debugging ? [["debug", t("debug.tab")] as const] : []),
-    ["console", t("console.title")] as const,
+  // A tool is gone (the table after a Reset, the debugger after its run): its group shows another.
+  const lowerTools: { id: Tool; label: string }[] = [
+    ...(webRun?.visible ? [{ id: "web" as const, label: t("web.preview") }] : []),
+    ...(check ? [{ id: "tests" as const, label: t("check.tab") }] : []),
+    ...(tournaments.length ? [{ id: "tournament" as const, label: t("tournament.tab") }] : []),
+    ...(sharedConsole.debugging ? [{ id: "debug" as const, label: t("debug.tab") }] : []),
+    { id: "console" as const, label: t("console.title") },
   ]
-  const lowerTabs = lowerTabList.length > 1 ? (
-    <nav role="tablist" className="inline-flex rounded-md border border-console-border p-0.5">
-      {lowerTabList.map(([value, label]) => (
-        <button
-          key={value}
-          role="tab"
-          aria-selected={lowerTab === value}
-          onClick={() => setLowerTab(value)}
-          className={cn(
-            "rounded-[4px] px-2 py-0.5 text-[11px] font-medium tracking-wider uppercase",
-            lowerTab === value ? "bg-white/10 text-console-foreground" : "text-console-muted hover:text-console-foreground",
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </nav>
-  ) : undefined
+  const webPanel = (tabs: ReactNode) =>
+    webRun && <WebPreview run={webRun} tabs={tabs} onOutput={webOutput} onLoad={webLoaded} onReload={() => run()} onClose={() => setConsoleOpen(false)} />
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
@@ -724,6 +726,13 @@ function Workspace() {
       setActive((current) => map(current))
     },
     [store],
+  )
+
+  const duplicateEntry = useCallback(
+    (path: string) => {
+      if ("error" in duplicatePath(store, path)) toast.error(t("toast.tooBig", { mb: PROJECT_LIMIT >> 20 }))
+    },
+    [store, t],
   )
 
   const formatCode = useCallback(async () => {
@@ -1011,6 +1020,7 @@ function Workspace() {
                 onCreate={createEntry}
                 onDelete={deleteEntry}
               onRename={renameEntry}
+              onDuplicate={duplicateEntry}
                 onDownload={download}
                 onUpload={upload}
                 onReset={reset}
@@ -1120,59 +1130,56 @@ function Workspace() {
                   <div className="absolute inset-x-0 -top-2 -bottom-2 cursor-row-resize" />
                 </div>
                 <div style={{ height: `${consoleHeight * 100}%` }} className="min-h-0 shrink-0">
-                  {webRun && (
-                    <div className={cn("h-full", (lowerTab !== "web" || !webRun.visible) && "hidden")}>
-                      <WebPreview
-                        run={webRun}
-                        tabs={lowerTabs}
-                        onOutput={webOutput}
-                        onLoad={webLoaded}
-                        onReload={() => run()}
-                        onClose={() => setConsoleOpen(false)}
-                      />
-                    </div>
-                  )}
-                  {check && lowerTab === "tests" && <CheckResults check={check} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
-                  {tournaments.length > 0 && lowerTab === "tournament" && <TournamentPanel tournaments={tournaments} tabs={lowerTabs} onClose={() => setConsoleOpen(false)} />}
-                  {sharedConsole.debugging && lowerTab === "debug" && (
-                    <DebugPanel
-                      state={consoleActive ? sharedConsole.debug : null}
-                      canControl={amExecutor && consoleActive}
-                      tabs={lowerTabs}
-                      onCommand={debugCommand}
-                      onOpen={(file, line) => {
-                        if (!files.includes(file)) return
-                        setActive(file)
-                        setTimeout(() => editor.current?.revealLineInCenter(line), 80)
-                      }}
-                      onClose={() => setConsoleOpen(false)}
-                    />
-                  )}
-                  <div
-                    className={cn(
-                      "h-full",
-                      ((webRun?.visible && lowerTab === "web") || (check && lowerTab === "tests") || (tournaments.length > 0 && lowerTab === "tournament") || (sharedConsole.debugging && lowerTab === "debug")) && "hidden",
-                    )}
-                  >
-                  <ConsolePanel
-                    tabs={lowerTabs}
-                    status={consoleView.status}
-                    chunks={sharedConsole.chunks}
-                    exit={consoleView.exit}
-                    canInput={canRun}
-                    doc={doc}
-                    onDraft={(value) => canRun && setDraft(doc, value)}
-                    timeoutSec={RUN_TIMEOUT_SEC}
-                    onInput={sendInput}
-                    onEof={sendEof}
-                    onStop={stop}
-                    onClear={() => {
-                      const term = sharedTerminal(doc)
-                      if (canRun) term.delete(0, term.length)
+                  {/* A script (Run on .js) has no tab, but its frame must live. */}
+                  {webRun && !webRun.visible && webPanel(undefined)}
+                  <LowerPanels
+                    layout={lowerLayout}
+                    onLayout={setSavedLayout}
+                    tools={lowerTools}
+                    onActivate={setLowerTab}
+                    render={(tool, tabs, visible) => {
+                      if (tool === "web") return webRun && webPanel(tabs)
+                      if (tool === "tests") return check && <CheckResults check={check} tabs={tabs} onClose={() => setConsoleOpen(false)} />
+                      if (tool === "tournament") return <TournamentPanel tournaments={tournaments} tabs={tabs} onClose={() => setConsoleOpen(false)} />
+                      if (tool === "debug") {
+                        return (
+                          <DebugPanel
+                            state={consoleActive ? sharedConsole.debug : null}
+                            canControl={amExecutor && consoleActive}
+                            tabs={tabs}
+                            onCommand={debugCommand}
+                            onOpen={(file, line) => {
+                              if (!files.includes(file)) return
+                              setActive(file)
+                              setTimeout(() => editor.current?.revealLineInCenter(line), 80)
+                            }}
+                            onClose={() => setConsoleOpen(false)}
+                          />
+                        )
+                      }
+                      return (
+                        <ConsolePanel
+                          tabs={tabs}
+                          visible={visible}
+                          status={consoleView.status}
+                          chunks={sharedConsole.chunks}
+                          exit={consoleView.exit}
+                          canInput={canRun}
+                          doc={doc}
+                          onDraft={(value) => canRun && setDraft(doc, value)}
+                          timeoutSec={RUN_TIMEOUT_SEC}
+                          onInput={sendInput}
+                          onEof={sendEof}
+                          onStop={stop}
+                          onClear={() => {
+                            const term = sharedTerminal(doc)
+                            if (canRun) term.delete(0, term.length)
+                          }}
+                          onClose={() => setConsoleOpen(false)}
+                        />
+                      )
                     }}
-                    onClose={() => setConsoleOpen(false)}
                   />
-                  </div>
                 </div>
               </>
             )}

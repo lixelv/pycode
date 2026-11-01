@@ -42,3 +42,10 @@ CREATE TABLE IF NOT EXISTS session_members (
     roles       text[] NOT NULL DEFAULT '{}',
     PRIMARY KEY (session_id, user_id)
 );
+
+-- Users an owner or an admin banned from a session: they are refused on joining.
+CREATE TABLE IF NOT EXISTS session_bans (
+    session_id  uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    user_id     uuid NOT NULL,
+    PRIMARY KEY (session_id, user_id)
+);

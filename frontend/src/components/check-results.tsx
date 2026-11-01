@@ -22,7 +22,8 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
   const passed = check.results?.filter((r) => r.ok).length ?? 0
   const total = check.results?.length ?? 0
   const score = maxPoints(check.results?.filter((r) => r.ok) ?? [])
-  const max = check.tournament?.max ?? 0
+  const scored = !!check.tournament || !!check.results?.some((r) => r.points !== undefined)
+  const max = check.tournament?.max ?? maxPoints(check.results ?? [])
   const complete = check.tournament ? allPassed(check.results ?? []) : passed === total
   return (
     <section aria-label={t("check.title")} className="flex h-full flex-col bg-console text-console-foreground">
@@ -31,7 +32,7 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
         <span className="truncate font-mono text-[11px] text-console-muted">{check.path}</span>
         {check.results && !check.error && (
           <span className={cn("rounded-full px-2 text-[11px] font-medium", complete ? "bg-[#62c073]/15 text-[#62c073]" : "bg-[#ff6166]/15 text-[#ff6166]")}>
-            {check.tournament ? t("tournament.summary", { score, max }) : t("check.summary", { passed, total })}
+            {scored ? t("tournament.summary", { score, max }) : t("check.summary", { passed, total })}
           </span>
         )}
         <Button size="icon-xs" variant="ghost" aria-label={t("console.hide")} onClick={onClose} className="ml-auto text-console-muted hover:bg-white/10 hover:text-console-foreground">
@@ -65,7 +66,7 @@ export function CheckResults({ check, tabs, onClose }: { check: CheckState; tabs
                   {[r.time !== undefined && `${r.time.toFixed(2)} s`, r.memory !== undefined && `${(r.memory / 1e6).toFixed(1)} MB`].filter(Boolean).join(" · ")}
                 </span>
               )}
-              {check.tournament && r.points !== undefined && (
+              {r.points !== undefined && (
                 <span data-points className={cn("shrink-0 pl-2", r.ok ? "text-[#62c073]" : "text-console-muted", r.time === undefined && r.memory === undefined && "ml-auto")}>
                   {r.ok ? `+${r.points}` : r.points}
                 </span>

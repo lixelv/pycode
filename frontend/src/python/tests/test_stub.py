@@ -30,6 +30,10 @@ class StubMatchesChecker(unittest.TestCase):
         self.assertEqual(run, ast.dump(functions(self.checker)["run"].args))
         self.assertEqual(run, ast.dump(functions(self.checker)["_run_isolated"].args))
 
+    def test_call_has_the_same_parameters(self):
+        call = ast.dump(functions(self.stub)["call"].args)
+        self.assertEqual(call, ast.dump(functions(self.checker)["_call_isolated"].args))
+
     def test_tournament_functions_have_the_same_parameters(self):
         ours, theirs = functions(self.stub), functions(self.checker)
         for name in ("tournament", "points"):

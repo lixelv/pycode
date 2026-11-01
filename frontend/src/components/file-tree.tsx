@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  Copy,
   Pencil,
   Download,
   File,
@@ -20,7 +21,8 @@ import {
   Trash2,
   Upload,
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -47,6 +49,7 @@ import {
   foldersOf,
   languageOf,
   metasOf,
+  moveTarget,
   nameOf,
   parentOf,
   rolesOf,
@@ -71,11 +74,24 @@ interface FileTreeProps {
   onCreate: (path: string, kind: "file" | "dir") => void
   onDelete: (path: string, kind: "file" | "dir") => void
   onRename: (from: string, to: string) => void
+  onDuplicate: (path: string) => void
   onDownload: () => void
   onUpload: (file: File) => void
   onReset: () => void
   /** In a session only the owner may reset the project. */
   canReset: boolean
+}
+
+/** Our own rows in a drag; not "Files", so useFileDrop leaves it alone. */
+const ROW_DRAG = "application/x-polycode-path"
+/** How long a drag rests on a closed folder before it opens. */
+const OPEN_ON_HOVER_MS = 600
+
+/** The folder under a drag: a folder row, a file row's folder, or the root. */
+function folderOfRow(target: EventTarget): string {
+  const row = (target as Element).closest<HTMLElement>("[data-path]")
+  if (!row) return ""
+  return row.dataset.kind === "dir" ? (row.dataset.path ?? "") : parentOf(row.dataset.path ?? "")
 }
 
 interface Node {
@@ -119,7 +135,7 @@ function FileIcon({ path }: { path: string }) {
 }
 
 export function FileTree(props: FileTreeProps) {
-  const { store, active, readOnly, access, peers, drop, flash, onOpen, onCreate, onDelete, onRename, onDownload, onUpload, onReset, canReset } = props
+  const { store, active, readOnly, access, peers, drop, flash, onOpen, onCreate, onDelete, onRename, onDuplicate, onDownload, onUpload, onReset, canReset } = props
   const { t } = useI18n()
   const [renaming, setRenaming] = useState<string | null>(null)
   const [, setVersion] = useState(0)
@@ -127,6 +143,11 @@ export function FileTree(props: FileTreeProps) {
   const [creating, setCreating] = useState<{ kind: "file" | "dir"; parent: string } | null>(null)
   const [selectedDir, setSelectedDir] = useState("")
   const upload = useRef<HTMLInputElement>(null)
+  // The row being dragged, and the folder it would land in (null: nowhere it can).
+  const dragged = useRef<string | null>(null)
+  const [moveInto, setMoveInto] = useState<string | null>(null)
+  const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const openFolder = useRef<string | null>(null)
 
   useEffect(() => {
     const bump = () => setVersion((v) => v + 1)
@@ -153,6 +174,53 @@ export function FileTree(props: FileTreeProps) {
     setCreating({ kind, parent })
   }
 
+  const endDrag = () => {
+    dragged.current = null
+    openFolder.current = null
+    clearTimeout(openTimer.current)
+    setMoveInto(null)
+  }
+
+  const rowDrag = (path: string) =>
+    readOnly
+      ? {}
+      : {
+          draggable: true,
+          onDragStart: (e: DragEvent) => {
+            e.dataTransfer.setData(ROW_DRAG, path)
+            e.dataTransfer.effectAllowed = "move"
+            dragged.current = path
+          },
+          onDragEnd: endDrag,
+        }
+
+  const dragOver = (e: DragEvent) => {
+    if (!dragged.current) return
+    const folder = folderOfRow(e.target)
+    const result = moveTarget(store, dragged.current, folder)
+    const can = "to" in result || result.error === "exists"
+    setMoveInto(can ? folder : null)
+    // Without preventDefault the browser refuses the drop.
+    if (can) e.preventDefault()
+    if (openFolder.current !== folder) {
+      openFolder.current = folder
+      clearTimeout(openTimer.current)
+      if (folder && collapsed.has(folder)) {
+        openTimer.current = setTimeout(() => setCollapsed((c) => new Set([...c].filter((x) => x !== folder))), OPEN_ON_HOVER_MS)
+      }
+    }
+  }
+
+  const dropRow = (e: DragEvent) => {
+    const from = dragged.current
+    if (!from) return
+    e.preventDefault()
+    const result = moveTarget(store, from, folderOfRow(e.target))
+    endDrag()
+    if ("to" in result) onRename(from, result.to)
+    else if (result.error === "exists") toast.error(t("tree.err.exists"))
+  }
+
   const renderNode = (node: Node, depth: number) => {
     const pad = { paddingLeft: 8 + depth * 12 }
     if (node.kind === "dir") {
@@ -168,12 +236,13 @@ export function FileTree(props: FileTreeProps) {
                   className={cn(
                     "group flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
                     selectedDir === node.path && "text-foreground",
-                    drop?.dragging && drop.target === node.path && "bg-primary/10 text-foreground ring-1 ring-primary/50",
+                    ((drop?.dragging && drop.target === node.path) || moveInto === node.path) && "bg-primary/10 text-foreground ring-1 ring-primary/50",
                     flash?.has(node.path) && "animate-flash",
                   )}
                   data-path={node.path}
                   data-kind="dir"
                   style={pad}
+                  {...rowDrag(node.path)}
                   onClick={() => {
                     setSelectedDir(node.path)
                     setCollapsed((c) => {
@@ -223,6 +292,9 @@ export function FileTree(props: FileTreeProps) {
               <ContextMenuItem onSelect={() => setRenaming(node.path)}>
                 <Pencil /> {t("tree.rename")}
               </ContextMenuItem>
+              <ContextMenuItem onSelect={() => onDuplicate(node.path)}>
+                <Copy /> {t("tree.duplicate")}
+              </ContextMenuItem>
               <ContextMenuItem variant="destructive" onSelect={() => onDelete(node.path, "dir")}>
                 <Trash2 /> {t("tree.delete")}
               </ContextMenuItem>
@@ -253,6 +325,7 @@ export function FileTree(props: FileTreeProps) {
                 )}
                 data-path={node.path}
                 data-kind="file"
+                {...rowDrag(node.path)}
                 style={{ paddingLeft: 8 + depth * 12 + 16 }}
                 onClick={() => {
                   setSelectedDir(parentOf(node.path))
@@ -302,6 +375,9 @@ export function FileTree(props: FileTreeProps) {
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => setRenaming(node.path)}>
               <Pencil /> {t("tree.rename")}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => onDuplicate(node.path)}>
+              <Copy /> {t("tree.duplicate")}
             </ContextMenuItem>
             <ContextMenuItem variant="destructive" onSelect={() => onDelete(node.path, "file")}>
               <Trash2 /> {t("tree.delete")}
@@ -383,7 +459,13 @@ export function FileTree(props: FileTreeProps) {
       </div>
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={readOnly}>
-          <ul className="min-h-0 flex-1 overflow-auto p-1.5" onClick={(e) => e.target === e.currentTarget && setSelectedDir("")}>
+          <ul
+            className={cn("min-h-0 flex-1 overflow-auto rounded-md p-1.5", moveInto === "" && "ring-1 ring-primary/50 ring-inset")}
+            onClick={(e) => e.target === e.currentTarget && setSelectedDir("")}
+            onDragOver={dragOver}
+            onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node | null) && setMoveInto(null)}
+            onDrop={dropRow}
+          >
             {creating?.parent === "" && <CreateRow depth={0} {...createProps()} />}
             {tree.map((n) => renderNode(n, 0))}
           </ul>

@@ -337,10 +337,10 @@ function writeProject(files: ProjectFiles) {
 // ---- check ------------------------------------------------------------------
 
 /** Runs the solution through the page and blocks until it ends or its time is up. */
-function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean) {
+function runOutside(stdin: string, timeoutMs: number, traceMemory: boolean, call = "") {
   const result = new SharedArrayBuffer(BATCH_RESULT_BYTES)
   const header = new Int32Array(result, 0, 5)
-  post({ type: "run_outside", stdin, timeoutMs, traceMemory, result })
+  post({ type: "run_outside", stdin, timeoutMs, traceMemory, result, call })
   if (Atomics.wait(header, BATCH_STARTED, 0, SOLUTION_BOOT_MS) === "timed-out") {
     post({ type: "kill_outside" })
     return { stdout: "", memory: 0, timedOut: false, exitCode: 0, failure: "not_started", elapsed: 0 }
@@ -440,7 +440,7 @@ async function batch(req: Extract<RunnerRequest, { type: "batch" }>) {
       armInterrupts()
       py?.checkInterrupt()
     }
-    const proxy = polycode.runner.run_batch.callKwargs(req.entry, req.stdin, { arm: startProgram, trace_memory: req.traceMemory })
+    const proxy = polycode.runner.run_batch.callKwargs(req.entry, req.stdin, { arm: startProgram, trace_memory: req.traceMemory, call: req.call ?? "" })
     const result = proxy.toJs({ dict_converter: Object.fromEntries }) as { exitCode: number; memory: number }
     proxy.destroy()
     code = result.exitCode

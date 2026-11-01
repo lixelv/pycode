@@ -176,7 +176,7 @@ export class RunnerClient implements ProgramRunner {
    * A tournament's solution, one run in this interpreter; the answer goes straight into `result`.
    * Its time starts here, not in the worker: from its second run on, a program can have replaced anything there.
    */
-  async batch(files: ProjectFiles, entry: string, specs: string[], stdin: string, traceMemory: boolean, result: SharedArrayBuffer) {
+  async batch(files: ProjectFiles, entry: string, specs: string[], stdin: string, traceMemory: boolean, result: SharedArrayBuffer, call = "") {
     try {
       await this.ready()
       await (this.prepared ??= new Promise<void>((resolve) => {
@@ -190,7 +190,7 @@ export class RunnerClient implements ProgramRunner {
       const header = new Int32Array(result, 0, 5)
       Atomics.store(header, BATCH_STARTED, 1)
       Atomics.notify(header, BATCH_STARTED)
-      this.worker!.postMessage({ type: "batch", files, entry, stdin, traceMemory, result })
+      this.worker!.postMessage({ type: "batch", files, entry, stdin, traceMemory, result, call })
     } catch {
       failBatch(result)
     }
@@ -224,7 +224,7 @@ export class RunnerClient implements ProgramRunner {
           }
           if (event.type === "run_outside") {
             if (wasm) this.runWasm(wasm, files, cwdOf(solution), event.stdin, event.result)
-            else void (this.solution ??= new RunnerClient()).batch(files, solution, specs, event.stdin, event.traceMemory, event.result)
+            else void (this.solution ??= new RunnerClient()).batch(files, solution, specs, event.stdin, event.traceMemory, event.result, event.call)
           }
           if (event.type === "kill_outside") {
             this.killWasm()

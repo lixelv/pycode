@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 
-import { createFile, deletePath, exportZip, foldersOf, importZip, metasOf, openArchive, renamePath, replaceProject, resetProject, setFlag, setFolderRole, setUp, snapshotFiles, stateOf, textOf } from "./project"
+import { createDir, createFile, deletePath, dirsOf, duplicatePath, exportZip, foldersOf, importZip, metasOf, moveTarget, openArchive, renamePath, replaceProject, resetProject, setFlag, setFolderRole, setUp, snapshotFiles, stateOf, textOf } from "./project"
 import { ProjectStore } from "./store"
 
 describe("ProjectStore", () => {
@@ -21,6 +21,54 @@ describe("ProjectStore", () => {
     renamePath(s, "a", "b")
     expect(metasOf(s).has("a/x.py")).toBe(false)
     expect(textOf(s, "b/x.py")).toBe(before)
+  })
+
+  it("says where a move lands, or why it cannot", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "a/x.py", "")
+    createFile(s, "a/b/y.py", "")
+    createFile(s, "c/x.py", "")
+    createDir(s, "d")
+    expect(moveTarget(s, "a/x.py", "d")).toEqual({ to: "d/x.py" })
+    expect(moveTarget(s, "a/x.py", "")).toEqual({ to: "x.py" })
+    expect(moveTarget(s, "a/b", "d")).toEqual({ to: "d/b" })
+    expect(moveTarget(s, "a/x.py", "a")).toEqual({ error: "same" })
+    expect(moveTarget(s, "a/x.py", "c")).toEqual({ error: "exists" })
+    expect(moveTarget(s, "a", "a")).toEqual({ error: "inside" })
+    expect(moveTarget(s, "a", "a/b")).toEqual({ error: "inside" })
+    createFile(s, "d/.polycode.env", "")
+    expect(moveTarget(s, "d/.polycode.env", "")).toEqual({ error: "reserved" })
+  })
+
+  it("duplicates a folder with its own texts, flags, roles and empty folders", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "a/x.py", "x = 1")
+    createFile(s, "a/t.test.py", "tests")
+    createDir(s, "a/empty")
+    createFile(s, "ab/other.py", "no")
+    setFolderRole(s, "a", "ivan")
+    setFlag(s, "a/x.py", "protected", true)
+    expect(duplicatePath(s, "a")).toEqual({ to: "a copy" })
+    expect(snapshotFiles(s)["a copy/x.py"]).toBe("x = 1")
+    expect(metasOf(s).get("a copy/x.py")!.protected).toBe(true)
+    expect(metasOf(s).get("a copy/t.test.py")!.hidden).toBe(true)
+    expect(metasOf(s).has("ab copy/other.py")).toBe(false)
+    expect(foldersOf(s).get("a copy")).toBe("ivan")
+    expect(dirsOf(s).has("a copy/empty")).toBe(true)
+    // The copy edits apart from the original.
+    textOf(s, "a copy/x.py")!.insert(0, "# ")
+    expect(snapshotFiles(s)["a/x.py"]).toBe("x = 1")
+    expect(duplicatePath(s, "a")).toEqual({ to: "a copy 2" })
+  })
+
+  it("names a file's copy before its extension, keeping .test.py", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "m/x.py", "1")
+    createFile(s, "t.test.py", "")
+    createFile(s, ".env", "")
+    expect(duplicatePath(s, "m/x.py")).toEqual({ to: "m/x copy.py" })
+    expect(duplicatePath(s, "t.test.py")).toEqual({ to: "t copy.test.py" })
+    expect(duplicatePath(s, ".env")).toEqual({ to: ".env copy" })
   })
 
   it("hides new tests and moves folder roles on rename", () => {

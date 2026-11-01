@@ -223,6 +223,7 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
   useEffect(refresh, [refresh])
 
   const ORDER = ["admin", "write", "read"]
+  const adminCode = codes?.find((c) => c.role === "admin")?.code
   const sorted = [...(codes ?? [])].sort((a, b) => {
     const ia = ORDER.indexOf(a.role)
     const ib = ORDER.indexOf(b.role)
@@ -258,6 +259,13 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
               <RoleRow key={c.role} code={c} />
             ))}
           </ul>
+          {adminCode && (
+            <div className="grid gap-1">
+              <div className="text-xs font-medium">{t("share.mcp")}</div>
+              <CopyField label="MCP" value={`${location.origin}/s/${adminCode}/mcp`} />
+              <p className="text-xs text-muted-foreground">{t("share.mcpHint")}</p>
+            </div>
+          )}
           <CustomRoles
             store={store}
             onAdded={(name, level) =>

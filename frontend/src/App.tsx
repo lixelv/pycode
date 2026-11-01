@@ -88,7 +88,9 @@ import { formatWith } from "@/lib/prettier"
 import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import type { CheckOutcome, DebugCommand } from "@/workers/protocol"
-import { format, ruffVersion, type Diagnostic } from "@/lib/ruff"
+import { format, lint, ruffVersion, type Diagnostic } from "@/lib/ruff"
+import { runTool, type AgentApp } from "@/lib/agent/tools"
+import { callTool } from "@/lib/python/tools-client"
 import { memberLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
 
@@ -586,6 +588,83 @@ function Workspace() {
   ]
   const webPanel = (tabs: ReactNode) =>
     webRun && <WebPreview run={webRun} tabs={tabs} onOutput={webOutput} onLoad={webLoaded} onReload={() => run()} onClose={() => setConsoleOpen(false)} />
+
+  // ---- an agent (MCP): its tools run here, on this tab's runners and screen ----------
+  const agentLatest = useRef({ active, activeExists, startRun, sendInput, sendEof, stop, debugCommand, checkHere, pkgs, cppPkgs, cppPackages })
+  useEffect(() => {
+    agentLatest.current = { active, activeExists, startRun, sendInput, sendEof, stop, debugCommand, checkHere, pkgs, cppPkgs, cppPackages }
+  })
+  const agentApp = useMemo<AgentApp>(() => {
+    const show = (path: string) => {
+      setActive(path)
+      setView("editor")
+    }
+    return {
+      active: () => agentLatest.current.active,
+      open: show,
+      moved: (map) => setActive((current) => map(current)),
+      async run(path, debug, points) {
+        if (points) setBreakpoints((all) => ({ ...all, ...points }))
+        show(path)
+        // startRun runs what is open: wait for the render that opens it.
+        for (let tries = 0; tries < 100 && !(agentLatest.current.active === path && agentLatest.current.activeExists); tries++) await new Promise((r) => setTimeout(r, 20))
+        // Breakpoints reach startRun through a render too.
+        await new Promise((r) => setTimeout(r, 40))
+        agentLatest.current.startRun(debug)
+      },
+      sendInput: (text) => agentLatest.current.sendInput(text),
+      sendEof: () => agentLatest.current.sendEof(),
+      stop: () => agentLatest.current.stop(),
+      debugCommand: (command) => agentLatest.current.debugCommand(command),
+      async check(path) {
+        setCheck({ path, results: null })
+        setConsoleOpen(true)
+        setLowerTab("tests")
+        const done = await agentLatest.current.checkHere(path)
+        // In a session an admin's own check is only a try: the table is for students' runs.
+        if (done.tournament) ensureTournament(store, done.tournament.id, done.tournament.private)
+        setCheck({ path, ...done })
+        return done
+      },
+      installPython: (spec) => agentLatest.current.pkgs.add(spec),
+      removePython: (name) => agentLatest.current.pkgs.remove(name),
+      installCpp: (spec) => agentLatest.current.cppPkgs.add(spec),
+      removeCpp: (repo) => agentLatest.current.cppPkgs.remove(repo),
+      async diagnostics(path) {
+        const source = textOf(store, path)?.toString() ?? ""
+        if (languageOf(path) === "python") return lint(source)
+        if (languageOf(path) !== "cpp") return []
+        const files = await projectFiles(store, provider, path)
+        return cppClient.lint(files, path, await loadCppPackages(agentLatest.current.cppPackages, agentLatest.current.cppPkgs.fail))
+      },
+      async format(path, code) {
+        const language = languageOf(path)
+        if (language === "json") return JSON.stringify(JSON.parse(code), null, 2) + "\n"
+        if (language === "python") return format(code)
+        if (language === "html" || language === "css" || language === "javascript" || language === "markdown") return formatWith(language, code)
+        throw new Error(`${path} has no formatter`)
+      },
+      async analyse(path, code, mode, lang) {
+        const language = languageOf(path)
+        if (language === "cpp") return mode === "flow" ? (await import("@/lib/cpp/flow")).cppFlow(code, lang as never) : (await import("@/lib/cpp/tree")).cppTree(code)
+        if (language !== "python") throw new Error("only Python and C++ can be analysed")
+        return callTool(mode, { code, lang: lang as never })
+      },
+    }
+  }, [store, provider, setBreakpoints, setLowerTab])
+  const [agentTool, setAgentTool] = useState<string | null>(null)
+  useEffect(() => {
+    if (!provider) return
+    let running = 0
+    return provider.on("mcp", (id, name, args) => {
+      running++
+      setAgentTool(name)
+      void runTool(name, args, { store, provider, app: agentApp }).then((result) => {
+        provider.mcpResult(id, result)
+        if (--running === 0) setAgentTool(null)
+      })
+    })
+  }, [provider, store, agentApp])
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
@@ -1197,6 +1276,7 @@ function Workspace() {
             </button>
           )}
           {isGuest && <span className="text-[#52a8ff]">{t("footer.guest")}</span>}
+          {agentTool && <span className="truncate text-[#52a8ff]">{t("footer.agent", { tool: agentTool })}</span>}
           <span className="ml-auto hidden sm:inline">
             {t("footer.position", { line: cursor.line, col: cursor.column })}
           </span>

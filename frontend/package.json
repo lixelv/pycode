@@ -16,6 +16,7 @@
     "@astral-sh/ruff-wasm-web": "^0.17.1",
     "@bjorn3/browser_wasi_shim": "0.4.2",
     "@excalidraw/excalidraw": "^0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@monaco-editor/react": "^4.7.0",

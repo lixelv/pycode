@@ -33,6 +33,9 @@ type room struct {
 	// owner is who acts as the owner: the real one while connected, else
 	// the admin who joined first, else 0.
 	owner uint32
+	// Tool calls of the MCP endpoint waiting for a browser (mcp.go).
+	calls    map[uint64]*mcpPending
+	nextCall uint64
 }
 
 // pickOwner chooses the acting owner. Call with r.mu held.
@@ -95,6 +98,7 @@ func (r *room) leave(m *member) (empty bool) {
 		return len(r.members) == 0
 	}
 	delete(r.members, m.info.Peer)
+	r.mcpGone(m.info.Peer)
 	for _, other := range r.members {
 		other.enqueueJSON(control{Type: "leave", Peer: &m.info})
 	}
@@ -189,6 +193,7 @@ func (r *room) remove(user uuid.UUID, ban bool) {
 		m.enqueueJSON(control{Type: "removed", Ban: ban})
 		close(m.send) // the writer then closes the connection
 		delete(r.members, id)
+		r.mcpGone(id)
 		for _, other := range r.members {
 			other.enqueueJSON(control{Type: "leave", Peer: &m.info})
 		}
@@ -215,6 +220,7 @@ func (r *room) end() {
 		m.enqueueJSON(control{Type: "ended"})
 		close(m.send)
 		delete(r.members, id)
+		r.mcpGone(id)
 	}
 }
 

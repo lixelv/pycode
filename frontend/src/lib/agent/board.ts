@@ -79,6 +79,8 @@ export async function boardAdd(s: ProjectStore, skeletons: Item[], route = true)
   const elements = elementsOf(s)
   // An arrow bound to an element of an earlier call needs that element beside it while converting.
   const named = new Set(skeletons.map((e) => e.id))
+  // Mermaid's own ids (A, B) repeat between diagrams: they get new ones below.
+  if (route) for (const id of named) if (typeof id === "string" && elements.get(id)?.isDeleted === false) throw new Error(`there is already an element ${id} on the board: use board_update, or another id`)
   const referred = new Set(skeletons.flatMap((e) => [e.start, e.end]).map((end) => (end as { id?: string } | undefined)?.id).filter((id): id is string => !!id && !named.has(id)))
   const known = [...referred].flatMap((id) => {
     const element = elements.get(id)
@@ -91,11 +93,15 @@ export async function boardAdd(s: ProjectStore, skeletons: Item[], route = true)
         const element = elements.get(id)
         return element && !element.isDeleted ? element : undefined
       })
-  const converted = convertToExcalidrawElements([...known, ...routed] as never, { regenerateIds: false })
+  const converted = convertToExcalidrawElements([...known, ...routed] as never, { regenerateIds: !route })
   const old = new Set(known.map((e) => e.id))
   s.board.transact(() => {
     for (const element of converted) {
-      if (!old.has(element.id)) elements.set(element.id, element as ExcalidrawElement)
+      if (!old.has(element.id)) {
+        // The id of a deleted element: the deletion's version must not win over this one.
+        const gone = elements.get(element.id)
+        elements.set(element.id, (gone ? { ...element, version: gone.version + 1 } : element) as ExcalidrawElement)
+      }
       else {
         // The old one gained a binding to the arrow.
         const bound = (element as ExcalidrawElement).boundElements

@@ -27,7 +27,10 @@ func last(m *member, typ string) *control {
 	var found *control
 	for {
 		select {
-		case f := <-m.send:
+		case f, ok := <-m.send:
+			if !ok { // closed: nothing more will come
+				return found
+			}
 			var c control
 			if json.Unmarshal(f.data, &c) == nil && c.Type == typ {
 				found = &c
@@ -186,4 +189,30 @@ func TestSetRoleTellsEveryone(t *testing.T) {
 	if len(student.info.Roles) != 2 {
 		t.Fatal("the room must keep the new roles")
 	}
+}
+
+func TestRemoveDisconnectsEveryConnectionOfAUser(t *testing.T) {
+	ownerID := uuid.New()
+	r := newRoom(ownerID)
+	owner := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(owner)
+	studentID := uuid.New()
+	a := newMember(studentID, "write", LevelWrite)
+	b := newMember(studentID, "write", LevelWrite)
+	r.join(a)
+	r.join(b)
+	last(owner, "join")
+
+	r.remove(studentID, true)
+
+	if len(r.members) != 1 {
+		t.Fatalf("members left: %d, want only the owner", len(r.members))
+	}
+	if c := last(a, "removed"); c == nil || !c.Ban {
+		t.Fatalf("first tab: got %+v, want removed with ban", c)
+	}
+	if last(b, "removed") == nil {
+		t.Fatal("second tab was not told")
+	}
+	r.leave(a) // the read loop ends later: must not panic or change anything
 }

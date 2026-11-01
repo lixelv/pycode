@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -290,7 +291,7 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
                 </span>
               )}
               <span className="ml-auto">
-                {p.member && <MemberRoles me={provider.member} member={p.member} isMe={p.isMe} roles={customRoles} onSet={(level, roles) => provider.setRole(p.member!.peer, level, roles)} />}
+                {p.member && <MemberRoles me={provider.member} member={p.member} isMe={p.isMe} roles={customRoles} onSet={(level, roles) => provider.setRole(p.member!.peer, level, roles)} onKick={(ban) => provider.kick(p.member!.peer, ban)} />}
               </span>
             </li>
           ))}
@@ -341,12 +342,14 @@ function MemberRoles({
   isMe,
   roles,
   onSet,
+  onKick,
 }: {
   me: Member
   member: Member & { acting: boolean }
   isMe: boolean
   roles: string[]
   onSet: (level: Level, roles: string[]) => void
+  onKick: (ban: boolean) => void
 }) {
   const { t } = useI18n()
   const label = memberLabel(member, member.acting && !member.owner)
@@ -387,6 +390,13 @@ function MemberRoles({
             ))}
           </>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onKick(false)}>
+          {t("share.kick")}
+        </DropdownMenuItem>
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onKick(true)}>
+          {t("share.ban")}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

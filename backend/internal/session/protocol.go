@@ -38,7 +38,7 @@ type peerInfo struct {
 
 // control is every JSON message in either direction.
 type control struct {
-	Type    string     `json:"type"`              // welcome | join | leave | signal | owner | role | setRole | reset | error | ended
+	Type    string     `json:"type"`              // welcome | join | leave | signal | owner | role | setRole | kick | removed | reset | error | ended
 	You     *peerInfo  `json:"you,omitempty"`     // welcome
 	Session *Session   `json:"session,omitempty"` // welcome
 	Peers   []peerInfo `json:"peers,omitempty"`   // welcome
@@ -50,4 +50,5 @@ type control struct {
 	Owner   *uint32    `json:"owner,omitempty"`   // welcome / owner: who acts as the owner (0: nobody)
 	Level   string     `json:"level,omitempty"`   // setRole (client -> server, with To): the new level
 	Roles   []string   `json:"roles,omitempty"`   // setRole: the new custom roles
+	Ban     bool       `json:"ban,omitempty"`     // kick (client -> server, with To): also refuse them from now on; removed: they were banned
 }

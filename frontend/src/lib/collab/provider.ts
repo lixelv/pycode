@@ -9,6 +9,7 @@ import {
 import * as syncProtocol from "y-protocols/sync"
 import type * as Y from "yjs"
 
+import { translate } from "@/lib/i18n"
 import { docAccess, fileAccess, type Level, type Member } from "@/lib/project/access"
 import { getBlob, putBlob, sha256 } from "@/lib/project/blobs"
 import { metasOf, rulesOf } from "@/lib/project/project"
@@ -66,6 +67,7 @@ type Control =
   | { type: "signal"; from: number; data: SignalData }
   | { type: "reset"; from: number }
   | { type: "error"; error: string }
+  | { type: "removed"; ban?: boolean }
   | { type: "ended" }
 
 /** Who sent a signal, as the server and the link know it (not as the signal claims). */
@@ -389,6 +391,11 @@ export class CollabProvider {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "setRole", to: peer, level, roles }))
   }
 
+  /** Removes a member; with `ban` they cannot rejoin (the server checks who may). */
+  kick(peer: number, ban: boolean) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "kick", to: peer, ban }))
+  }
+
   private readable() {
     return new Set(this.store.ids().filter((id) => this.access(this.member, id) !== "none"))
   }
@@ -523,6 +530,12 @@ export class CollabProvider {
         break
       case "error":
         this.listeners.error.forEach((fn) => fn(msg.error))
+        break
+      case "removed":
+        // Kicked or banned: do not come back on our own.
+        this.listeners.error.forEach((fn) => fn(translate(msg.ban ? "share.banned" : "share.kicked")))
+        this.setStatus("ended")
+        this.ws?.close()
         break
       case "ended":
         this.setStatus("ended")

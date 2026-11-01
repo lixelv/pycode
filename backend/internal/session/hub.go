@@ -209,6 +209,29 @@ func (h *Hub) setRole(ctx context.Context, sess *Session, rm *room, from *member
 	rm.setRole(target.info.Peer, g)
 }
 
+// kick removes a connected member, and with msg.Ban keeps them out for the
+// rest of the session. It follows the same rules as canSetRole: an admin
+// removes members below admin, the owner anyone but themself.
+func (h *Hub) kick(ctx context.Context, sess *Session, rm *room, from *member, msg control) {
+	target := rm.member(msg.To)
+	refuse := func(why string) { from.enqueueJSON(control{Type: "error", Error: why}) }
+	if target == nil || target == from || target.user == from.user {
+		refuse("No such member.")
+		return
+	}
+	if !canSetRole(from.info.Level, from.user == sess.OwnerID, target.info.Level, target.user == sess.OwnerID, LevelRead) {
+		refuse("You cannot remove this member.")
+		return
+	}
+	if msg.Ban {
+		if err := h.store.Ban(ctx, sess.ID, target.user); err != nil {
+			refuse("Could not ban the member.")
+			return
+		}
+	}
+	rm.remove(target.user, msg.Ban)
+}
+
 // manager reports whether the user may manage the session's roles: the
 // owner, or someone connected to it as an admin.
 func (h *Hub) manager(sess *Session, user uuid.UUID) bool {
@@ -306,6 +329,11 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(maxFrame)
+	if user != sess.OwnerID && h.store.Banned(r.Context(), sess.ID, user) {
+		_ = conn.Write(r.Context(), websocket.MessageText, mustJSON(control{Type: "removed", Ban: true}))
+		conn.Close(websocket.StatusNormalClosure, "banned")
+		return
+	}
 	g, owner := h.grantOf(r.Context(), sess, code, user)
 	m := &member{
 		info: peerInfo{UserID: identity.Public(user)},
@@ -365,6 +393,8 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 			rm.reset(m)
 		case "setRole":
 			h.setRole(ctx, sess, rm, m, msg)
+		case "kick":
+			h.kick(ctx, sess, rm, m, msg)
 		}
 	}
 

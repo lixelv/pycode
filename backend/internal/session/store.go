@@ -176,6 +176,18 @@ func (s *Store) MemberGrant(ctx context.Context, session, user uuid.UUID) (grant
 	return g, err == nil
 }
 
+// Ban refuses a user from a session from now on.
+func (s *Store) Ban(ctx context.Context, session, user uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO session_bans (session_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, session, user)
+	return err
+}
+
+// Banned reports whether a user was banned from a session.
+func (s *Store) Banned(ctx context.Context, session, user uuid.UUID) bool {
+	var one int
+	return s.pool.QueryRow(ctx, `SELECT 1 FROM session_bans WHERE session_id = $1 AND user_id = $2`, session, user).Scan(&one) == nil
+}
+
 // ByCode finds a session by any of its codes, with the role that code gives.
 func (s *Store) ByCode(ctx context.Context, code string) (*Session, Code, error) {
 	var sess Session

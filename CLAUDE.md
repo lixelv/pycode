@@ -203,6 +203,7 @@ sites. Do not set it on a real server.
   - The owner or an admin changes a connected member's level and roles from the share dialog (`provider.setRole` → WS `setRole`); the server checks `canSetRole`:
     - an admin changes members below admin and cannot make admins;
     - the owner changes anyone but themself.
+  - `kick {to, ban}` removes a member (same rules as `canSetRole`; every connection of that user). The client gets `removed` and does not reconnect; with `ban` the user id goes into `session_bans` and `ws` answers `removed` at once. There is no unban.
   - Everyone gets `{"type":"role"}` and access follows at once. The change is kept in `session_members` and wins over the join code on reconnect.
 - **Acting owner**: the server picks `room.owner` (the owner while connected, else the admin who joined first) and broadcasts `{"type":"owner"}`. Reset is accepted only from the acting owner.
 - **The project lives with the owner**: the owner shares their local store, and a guest gets a fresh in-memory store that is dropped on leaving.

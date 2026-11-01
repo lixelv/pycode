@@ -274,6 +274,10 @@ const en = {
   "doc.next": "Next page",
   "md.previewLabel": "Markdown preview",
   "share.changeRole": "Change role",
+  "share.kick": "Remove from session",
+  "share.ban": "Remove and ban",
+  "share.kicked": "You were removed from the session.",
+  "share.banned": "You were banned from this session.",
   "share.level": "Level",
   "share.customRoles": "Roles (folders)",
 
@@ -542,6 +546,10 @@ const ru: Record<MessageKey, string> = {
   "doc.next": "Следующая страница",
   "md.previewLabel": "Просмотр Markdown",
   "share.changeRole": "Изменить роль",
+  "share.kick": "Убрать из сессии",
+  "share.ban": "Убрать и заблокировать",
+  "share.kicked": "Вас убрали из сессии.",
+  "share.banned": "Вас заблокировали в этой сессии.",
   "share.level": "Уровень",
   "share.customRoles": "Роли (папки)",
 }

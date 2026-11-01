@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { DEFAULT_LAYOUT, TOOLS, activate, moveTool, normalizeLayout, resizeGroups, splitTool, visibleGroups, type ToolGroup } from "./lower-layout"
+import { DEFAULT_LAYOUT, TOOLS, activate, moveTool, normalizeLayout, panelHeight, resizeGroups, splitTool, visibleGroups, type ToolGroup } from "./lower-layout"
 
 const names = (layout: ToolGroup[]) => layout.map((g) => g.tools)
 const pair = (): ToolGroup[] => [
@@ -85,5 +85,15 @@ describe("changes", () => {
     const [a, b] = resizeGroups(pair(), 0, 1, 0.99)
     expect(a.size).toBeCloseTo(1.7)
     expect(b.size).toBeCloseTo(0.3)
+  })
+})
+
+describe("panelHeight", () => {
+  it("collapses when dragged too low and stays within limits above that", () => {
+    expect(panelHeight(0)).toBeNull()
+    expect(panelHeight(0.05)).toBeNull()
+    expect(panelHeight(0.1)).toBe(0.15)
+    expect(panelHeight(0.4)).toBe(0.4)
+    expect(panelHeight(0.95)).toBe(0.8)
   })
 })

@@ -99,3 +99,13 @@ export function resizeGroups(layout: ToolGroup[], first: number, second: number,
   const share = Math.min(0.85, Math.max(0.15, ratio))
   return layout.map((group, index) => (index === first ? { ...group, size: total * share } : index === second ? { ...group, size: total * (1 - share) } : group))
 }
+
+/** Dragged below this share of the height, the panel collapses, as in VS Code. */
+const COLLAPSE_BELOW = 0.08
+const MIN_HEIGHT = 0.15
+const MAX_HEIGHT = 0.8
+
+/** The panel's share of the height for a drag to `ratio`; null: it collapses. */
+export function panelHeight(ratio: number): number | null {
+  return ratio < COLLAPSE_BELOW ? null : Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, ratio))
+}

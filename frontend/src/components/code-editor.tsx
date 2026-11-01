@@ -278,6 +278,8 @@ export function CodeEditor({
       theme={theme === "dark" ? "geist-dark" : "geist-light"}
       onMount={handleMount}
       loading={<div className="size-full bg-card" />}
+      // Monaco sets its colours on this class too: the context menu lies outside .monaco-editor, here.
+      wrapperProps={{ className: "monaco-component" }}
       options={{
         readOnly,
         readOnlyMessage: { value: t("editor.readOnly") },

@@ -1,4 +1,4 @@
-import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, Paintbrush, Play, Radio, Square, Sun, TerminalSquare } from "lucide-react"
+import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, PanelBottom, Paintbrush, Play, Radio, Square, Sun } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -38,7 +38,7 @@ import { useAccess } from "@/hooks/use-access"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { useFollow } from "@/hooks/use-follow"
 import { usePersisted } from "@/hooks/use-persisted"
-import { DEFAULT_LAYOUT, activate, normalizeLayout, type Tool } from "@/lib/lower-layout"
+import { DEFAULT_LAYOUT, activate, normalizeLayout, panelHeight, type Tool } from "@/lib/lower-layout"
 import { useSharedConsole } from "@/hooks/use-shared-console"
 import { toEditorColumn, type AstLoc } from "@/lib/ast"
 import { appendTerminal, readRun, resetRun, setDraft, setRunStatus, sharedRun, sharedTerminal } from "@/lib/collab/doc"
@@ -875,9 +875,12 @@ function Workspace() {
     const container = split.current
     if (!container) return
     const rect = container.getBoundingClientRect()
+    const before = consoleHeight
     const onMove = (ev: PointerEvent) => {
-      const ratio = (rect.bottom - ev.clientY) / rect.height
-      setConsoleHeight(Math.min(0.8, Math.max(0.15, ratio)))
+      const next = panelHeight((rect.bottom - ev.clientY) / rect.height)
+      setConsoleOpen(next !== null)
+      // Collapsed: opening it again brings back the height from before this drag.
+      setConsoleHeight(next ?? before)
     }
     const onUp = () => {
       window.removeEventListener("pointermove", onMove)
@@ -1194,20 +1197,21 @@ function Workspace() {
             )}
             </div>
 
+            {/* Stays when the panel is collapsed: dragging it up brings the panel back. */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize panel"
+              onPointerDown={startResize}
+              className="group relative z-10 h-px shrink-0 cursor-row-resize"
+            >
+              {/* The visible border: 1px, three times thicker while hovered or dragged. */}
+              <div className="absolute inset-x-0 bottom-0 h-px bg-console-border transition-[height] duration-150 group-hover:h-[3px] group-active:h-[3px]" />
+              {/* Transparent, taller hit area so the border is easy to grab; collapsed, it stays off the footer. */}
+              <div className={cn("absolute inset-x-0 -top-2 cursor-row-resize", consoleOpen ? "-bottom-2" : "bottom-0")} />
+            </div>
             {consoleOpen && (
               <>
-                <div
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label="Resize console"
-                  onPointerDown={startResize}
-                  className="group relative z-10 h-px shrink-0 cursor-row-resize"
-                >
-                  {/* The visible border: 1px, three times thicker while hovered or dragged. */}
-                  <div className="absolute inset-x-0 bottom-0 h-px bg-console-border transition-[height] duration-150 group-hover:h-[3px] group-active:h-[3px]" />
-                  {/* Transparent, taller hit area so the border is easy to grab. */}
-                  <div className="absolute inset-x-0 -top-2 -bottom-2 cursor-row-resize" />
-                </div>
                 <div style={{ height: `${consoleHeight * 100}%` }} className="min-h-0 shrink-0">
                   {/* A script (Run on .js) has no tab, but its frame must live. */}
                   {webRun && !webRun.visible && webPanel(undefined)}
@@ -1270,11 +1274,9 @@ function Workspace() {
             <span className={cn("size-1.5 rounded-full", errors > 0 ? "bg-[#ff6166]" : "bg-[#62c073]")} />
             {errors === 0 ? t("footer.noErrors") : errors === 1 ? t("footer.error") : t("footer.errors", { n: errors })}
           </span>
-          {!consoleOpen && (sharedConsole.chunks.length > 0 || runner.runCount > 0 || tournaments.length > 0) && (
-            <button onClick={() => setConsoleOpen(true)} className="inline-flex items-center gap-1 hover:text-console-foreground">
-              <TerminalSquare className="size-3" /> {t("footer.console")}
-            </button>
-          )}
+          <button onClick={() => setConsoleOpen((open) => !open)} aria-pressed={consoleOpen} className={cn("inline-flex items-center gap-1 hover:text-console-foreground", consoleOpen && "text-console-foreground")}>
+            <PanelBottom className="size-3" /> {t("footer.panel")}
+          </button>
           {isGuest && <span className="text-[#52a8ff]">{t("footer.guest")}</span>}
           {agentTool && <span className="truncate text-[#52a8ff]">{t("footer.agent", { tool: agentTool })}</span>}
           <span className="ml-auto hidden sm:inline">

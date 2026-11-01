@@ -170,6 +170,7 @@ sites. Do not set it on a real server.
   - A syntax error is the first `ERROR`/`MISSING` node. Columns are converted to UTF-8 bytes, like Python's, so `sourceSegment` and reveal work the same.
   - `AstDialog` takes `language` and calls these instead of the tools worker.
 - **Tools under the editor** (`lib/lower-layout.ts`, pure; `components/lower-panels.tsx`): groups side by side, each with tabs (`[[console, debug], [tests]]`), kept per browser in `polycode:lower-layout`. A new tool only needs a place in `TOOLS` (old layouts get it in the first group) and a case in `render`. Tabs drag with the type `application/x-polycode-tool`: onto a tab to reorder or join, onto a panel's middle to join, onto its outer quarter to split. While dragging, a layer over each panel catches the events (a page's frame would swallow them). A group with no available tool is not drawn; `web` and `console` stay mounted while hidden, and moving `web` to another group reloads its page. `.js` runs keep their hidden frame outside the groups.
+  - The border above it stays when the panel is closed: dragging it below `panelHeight`'s limit collapses the panel, dragging it up brings it back at the height from before. The footer's Panel button toggles it.
   - When a program asks for input, whoever can type is taken to the console (`setLowerTab`, its group only); in a debug run the next stop brings them back to the debugger.
 - **Console mirroring**: the console always renders from the doc. Whoever runs the program mirrors its output into the doc (`mirrorRun` in `App.tsx`). Others send `stdin`/`eof`/`stop` signals to `executorClient`.
   - The input line is `run.draft`, read straight from the doc (`useSharedDraft`, `useSyncExternalStore`) with no local copy: `useSharedConsole` updates a frame late, and such a copy put back over the input lost the last keystrokes when Enter followed quickly.
@@ -181,6 +182,7 @@ sites. Do not set it on a real server.
   - The themes in `src/lib/monaco.ts` set bracket colours by depth (grey, yellow, purple, blue). Empty pairs stay grey via the `bracket-empty` decoration.
   - Models are created per file in `code-editor.tsx`, so model options such as `bracketColorizationOptions` must be set on the model, not only on the editor.
   - Remote cursors: every file's text is the root type `"t"` of its own document, so y-monaco would resolve another file's cursor here. `code-editor.tsx` gives the binding an awareness proxy that shows only states whose `file` is this path.
+  - The context menu lies outside `.monaco-editor`, in the wrapper `@monaco-editor/react` renders, so that wrapper has the class `monaco-component`: without it the theme's `--vscode-menu-*` variables do not reach the menu (black text, no background).
   - The editor is **uncontrolled** (`defaultValue`). A controlled `value` overwrites remote Yjs edits with a stale copy.
 - **i18n**: `src/lib/i18n.ts` (EN/RU, default from the browser).
   - Every UI string goes through `t()` / `translate()`, with both `en` and `ru` entries.

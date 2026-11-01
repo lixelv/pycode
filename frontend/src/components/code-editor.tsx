@@ -156,7 +156,18 @@ export function CodeEditor({
     })
     editor.setModel(model)
     const empty = editor.createDecorationsCollection()
-    const binding = new MonacoBinding(ytext, model, new Set([editor]), awareness)
+    // Every file's text is the root type "t" of its own document, so a relative
+    // position from another file would resolve here too: show only the cursors of
+    // members who are in this file.
+    awareness?.setLocalStateField("file", path)
+    const here = awareness && new Proxy(awareness, {
+      get(target, prop) {
+        if (prop === "getStates") return () => new Map([...target.getStates()].filter(([, state]) => state.file === path))
+        const value = Reflect.get(target, prop)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
+    const binding = new MonacoBinding(ytext, model, new Set([editor]), here)
     // y-monaco publishes the cursor only when it moves: share where it is now,
     // so the others see it from the start (same shape y-monaco uses).
     if (awareness) {
@@ -179,7 +190,6 @@ export function CodeEditor({
     }
     report()
     const sub = model.onDidChangeContent(report)
-    awareness?.setLocalStateField("file", path)
     return () => {
       sub.dispose()
       empty.clear()

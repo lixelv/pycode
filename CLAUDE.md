@@ -96,6 +96,7 @@ sites. Do not set it on a real server.
   - `testPathOf(path, files)`: a solution's tests are the nearest `name.test.py`, in its folder first, then up to the root.
   - `name.test.py` holds `test_*` functions; `polycode_test.run(stdin)` (limits below; alias `pycode_test` for old tests) runs the solution and returns its output, without `input()` prompts.
   - Checks run in an admin's browser, in a fresh `RunnerClient` (`check()`), with fetch/XHR/WebSocket/IndexedDB/caches removed and a 30 s limit.
+  - `run()` also feeds `sys.stdin` (`read()`, `.buffer`, iteration), not only `input()`: otherwise a solution reading it waited for the console until the 30 s limit. Outside a tournament `points()` is only a score: if any test has points, every result carries `points` (0 without) and nothing is skipped; the results header shows `earned of max`.
   - `polycode_test.module` (lazy, cached per check): the solution's top-level declarations (imports, defs, classes, assignments without a call), compiled under the solution's filename; the program itself does not run. A C++ solution (`run_tests(..., kind="cpp")`) gets `TypeError`.
   - Limits: `run(stdin, timeout=None, ram_usage=None)`, seconds and MB (10⁶ bytes); `None`/`0` turn a limit off.
     - Time: `run()` calls the worker's JS global `polycode_deadline(ms)` → event `deadline {ms, gen}` → `RunnerClient` sets a timer that calls `interrupt()`. Cancelling (`ms` 0) is synchronous through `control[2]` (`lib/python/deadline.ts`): a late timer finds its generation gone, and a written but untaken interrupt is cleared, so nothing reaches code after `run()`; it returns whether the timer fired (fired counts as exceeded). `KeyboardInterrupt` becomes `TimeLimitExceeded(TimeoutError)`; the elapsed `perf_counter` time is compared too, so a program that swallows the interrupt still fails.
@@ -175,6 +176,7 @@ sites. Do not set it on a real server.
   - The Python tokenizer is our own (`src/lib/python-language.ts`): calls and `def` names → `function`, classes → `type`, brackets → `delimiter.*`.
   - The themes in `src/lib/monaco.ts` set bracket colours by depth (grey, yellow, purple, blue). Empty pairs stay grey via the `bracket-empty` decoration.
   - Models are created per file in `code-editor.tsx`, so model options such as `bracketColorizationOptions` must be set on the model, not only on the editor.
+  - Remote cursors: every file's text is the root type `"t"` of its own document, so y-monaco would resolve another file's cursor here. `code-editor.tsx` gives the binding an awareness proxy that shows only states whose `file` is this path.
   - The editor is **uncontrolled** (`defaultValue`). A controlled `value` overwrites remote Yjs edits with a stale copy.
 - **i18n**: `src/lib/i18n.ts` (EN/RU, default from the browser).
   - Every UI string goes through `t()` / `translate()`, with both `en` and `ru` entries.

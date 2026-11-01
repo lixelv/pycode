@@ -598,12 +598,13 @@ class Tournament(unittest.TestCase):
         res = self.check("import polycode_test as t\n@t.points(2)\ndef test_a(): pass\nt.tournament('x')\n")
         self.assertEqual(res[0]["points"], 2)
 
-    def test_ordinary_mode_runs_everything_and_adds_no_fields(self):
+    def test_ordinary_mode_runs_everything_and_scores_without_skipping(self):
         res = checker_run_plain(
             "import polycode_test as t\n@t.points(2)\ndef test_a(): assert False\ndef test_b(): pass\n"
         )
         self.assertEqual([r["name"] for r in res], ["test_a", "test_b"])
-        self.assertNotIn("points", res[0])
+        self.assertEqual([r["points"] for r in res], [2, 0])
+        self.assertFalse(any(r.get("skipped") for r in res))
 
     def test_bad_points_is_an_error_of_the_file(self):
         for amount in ("0", "-1", "True", "'5'", "float('inf')", "float('nan')"):
@@ -687,6 +688,42 @@ class Tournament(unittest.TestCase):
         self.answer = {"stdout": "", "memory": 0, "timedOut": False, "exitCode": 1, "failure": "", "elapsed": 0.0}
         res = self.check(HEAD + "def test_a():\n    t.run()\n")
         self.assertEqual(res[0]["message"], "exit code 1")
+
+
+class PlainChecks(unittest.TestCase):
+    def check(self, source, solution):
+        with tempfile.TemporaryDirectory() as project:
+            with open(os.path.join(project, "main.py"), "w") as f:
+                f.write(solution)
+            return checker.run_tests(project, "main.py", source)
+
+    def test_solution_may_read_sys_stdin(self):
+        res = self.check(
+            "import polycode_test as t\ndef test_a(): assert t.run('2\\n3 4\\n').split() == ['7']\n",
+            "import sys\nk, a, b = sys.stdin.read().split()\nprint(int(a) + int(b))\n",
+        )
+        self.assertEqual([(r["name"], r["ok"]) for r in res], [("test_a", True)])
+
+    def test_open_zero_and_stdin_buffer_work_too(self):
+        res = self.check(
+            "import polycode_test as t\ndef test_a(): assert t.run('x y').split() == ['y', 'x']\n",
+            "import sys\nprint(*reversed(sys.stdin.buffer.read().decode().split()))\n",
+        )
+        self.assertTrue(res[0]["ok"], res)
+
+    def test_points_outside_a_tournament_are_a_score_and_never_skip(self):
+        res = self.check(
+            "import polycode_test as t\n@t.points(10)\ndef test_a(): assert False, 'no'\n@t.points(5)\ndef test_b(): pass\n",
+            SOLUTION,
+        )
+        self.assertEqual(
+            [(r["name"], r["ok"], r["points"], r.get("skipped", False)) for r in res],
+            [("test_a", False, 10, False), ("test_b", True, 5, False)],
+        )
+
+    def test_no_points_without_any_points_call(self):
+        res = self.check("def test_a(): pass\n", SOLUTION)
+        self.assertNotIn("points", res[0])
 
 
 if __name__ == "__main__":

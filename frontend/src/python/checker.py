@@ -184,7 +184,8 @@ def _cancel_deadline() -> bool:
 def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None = None) -> str:
     """Runs the solution as ``__main__`` with this input; returns its output.
     Raises TimeLimitExceeded / MemoryLimitExceeded when a limit is exceeded."""
-    lines = io.StringIO(stdin)
+    # sys.stdin too: a solution may read with sys.stdin.read() / open(0), which would otherwise wait for the console.
+    lines = io.TextIOWrapper(io.BytesIO(stdin.encode()), encoding="utf-8", newline="")
     out = io.StringIO()
 
     def fake_input(prompt=""):
@@ -194,12 +195,14 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
         return line.rstrip("\n")
 
     saved = builtins.input
+    saved_stdin = sys.stdin
     started = None
     interrupted = False
     peak = 0
     try:
         try:
             builtins.input = fake_input
+            sys.stdin = lines
             if ram_usage:
                 tracemalloc.start()
             if timeout:
@@ -218,6 +221,7 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
     finally:
         used = 0.0 if started is None else _now() - started
         builtins.input = saved
+        sys.stdin = saved_stdin
         if ram_usage and tracemalloc.is_tracing():
             peak = tracemalloc.get_traced_memory()[1]
             tracemalloc.stop()
@@ -397,12 +401,14 @@ def run_tests(project: str, solution: str, source: str, kind: str = "python", to
         return [{"name": "tests", "ok": False, "message": _failure(err, tests, isolated)}]
     results = []
     failed = False
+    # Outside a tournament, points are only a score: shown when the file gives any, never skipping tests.
+    scored = tournament or bool(_points)
     try:
         for name, fn in list(module.__dict__.items()):
             # def test_…(): functions named so (not lambdas or helpers bound to such names).
             if not name.startswith("test_") or not isinstance(fn, types.FunctionType) or fn.__name__ != name:
                 continue
-            worth = {"points": _points.get(fn, 0)} if tournament else {}
+            worth = {"points": _points.get(fn, 0)} if scored else {}
             if tournament and failed:
                 results.append({"name": name, "ok": False, "message": "", "skipped": True, **worth})
                 continue

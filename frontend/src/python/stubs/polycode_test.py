@@ -52,5 +52,6 @@ def tournament(id: str, private: bool = False) -> None:
 
 
 def points(amount: float):
-    """A decorator: what this test earns in a tournament. Without it, a test earns 0."""
+    """A decorator: what this test earns. Without it, a test earns 0. Outside a tournament
+    the points are only a score shown with the results."""
     ...

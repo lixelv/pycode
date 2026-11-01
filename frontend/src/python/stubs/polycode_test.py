@@ -41,6 +41,18 @@ def run(stdin: str = "", timeout: float | None = None, ram_usage: float | None =
     ...
 
 
+def call(name: str, *args, timeout: float | None = None, ram_usage: float | None = None):
+    """Calls the solution's function ``name`` with these arguments and returns its result.
+
+    Only the solution's top-level declarations are loaded (see ``module``), the program
+    itself does not run, and what the function prints is dropped. Arguments and the
+    result pass through JSON (numbers, strings, lists, dicts, None): tuples come back
+    as lists. Works in a tournament too, where ``module`` does not. ``timeout`` and
+    ``ram_usage`` are as in ``run``. Python solutions only.
+    """
+    ...
+
+
 def tournament(id: str, private: bool = False) -> None:
     """Makes this whole file a tournament: tests earn points(), the first failure
     skips the rest, and each participant's best run goes into the table ``id``.

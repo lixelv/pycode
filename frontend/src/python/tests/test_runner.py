@@ -173,6 +173,20 @@ class Batch(unittest.TestCase):
             self.assertEqual(self.run_batch(text + "\n")["exitCode"], 0, text)
             self.assertEqual(self.out(), text + "\n")
 
+    def test_call_runs_only_the_declarations_and_prints_the_result(self):
+        self.write("def gcd(a, b):\n    print('noise')\n    return a if not b else gcd(b, a % b)\n\nprint('main ran')\nN = 3\n")
+        result = self.run_batch("", call='{"name": "gcd", "args": [12, 18]}')
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(self.out(), "6\n")
+
+    def test_call_of_a_missing_function_fails(self):
+        self.write("x = 1\n")
+        self.assertEqual(self.run_batch("", call='{"name": "gcd", "args": []}')["exitCode"], 1)
+
+    def test_call_with_a_result_that_is_not_json_fails(self):
+        self.write("def f():\n    return object()\n")
+        self.assertEqual(self.run_batch("", call='{"name": "f", "args": []}')["exitCode"], 1)
+
     def test_replaced_stdout_does_not_reach_the_next_run(self):
         self.write("import io, sys\nsys.stdout = io.StringIO()\n")
         before = sys.stdout

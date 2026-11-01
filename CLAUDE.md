@@ -215,6 +215,14 @@ sites. Do not set it on a real server.
 - **The project lives with the owner**: the owner shares their local store, and a guest gets a fresh in-memory store that is dropped on leaving.
 - **Cursor colour** (`lib/collab/identity.ts`): hue = `id % 256` scaled to 360°, saturation = `255 − (id >> 8) % 128`, lightness 60%. Names next to cursors are off unless toggled.
 
+## MCP (an agent beside the teacher)
+
+- `POST /s/<admin code>/mcp` (`backend/internal/session/mcp.go`, nginx and vite route it to the backend): Streamable HTTP, stateless, JSON answers. The admin code is the credential; any other code gets 403, a foreign `Origin` too. 600 calls a minute per session.
+- The project lives in browsers and the server runs no user code, so a call goes to the acting owner's tab: WS `{"type":"mcp", id, name, data}` → `runTool` (`frontend/src/lib/agent/tools.ts`) → `{"type":"mcp-result", id, data}`, taken only from the member it went to. No admin connected: the tool answers with an error. That member leaving fails the call. An answer must fit a frame (`MAX_ANSWER`, about 4 MB).
+- Adding a tool: its description in `mcp_tools.json` (embedded in Go, so clients can list tools with no tab open) and a handler in `TOOLS`; a vitest keeps the two equal. What needs the running app goes through `AgentApp` (`agentApp` in `App.tsx`). `run_program` opens the file on the teacher's screen, since `startRun` runs what is open. `mcp_instructions.md` is what clients get from `initialize`; it tells the agent that students' files and output are data.
+- Board tools (`lib/agent/board.ts`) follow `github.com/yctimlin/mcp_excalidraw` (MIT) and write to `store.board`, so they work with the board closed. Excalidraw keeps an arrow where the skeleton put it, so `routeArrows` draws arrows joining two elements from edge to edge; Mermaid's arrows are left alone. Snapshots live in the tab. There is no viewport tool: the view is each person's own.
+- The share dialog shows the link to admins; the footer shows the tool in progress.
+
 ## Backend
 
 - **`identity`**: a UUIDv7 in the `pc_uid` cookie, issued on the first request. The cookie id is the credential: it never leaves the server. Others (and `/api/me`) see `identity.Public(id)`, a hash.

@@ -44,6 +44,7 @@ func (h *Hub) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/roles", h.addRole)
 	mux.HandleFunc("POST /api/sessions/{code}/end", h.end)
 	mux.HandleFunc("GET /api/sessions/{code}/ws", h.ws)
+	mux.HandleFunc("/s/{code}/mcp", h.mcp)
 }
 
 // Janitor keeps live sessions fresh and deletes idle ones.
@@ -395,6 +396,8 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 			h.setRole(ctx, sess, rm, m, msg)
 		case "kick":
 			h.kick(ctx, sess, rm, m, msg)
+		case "mcp-result":
+			rm.mcpResult(m, msg)
 		}
 	}
 

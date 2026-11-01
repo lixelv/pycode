@@ -1,0 +1,1075 @@
+[
+ {
+  "name": "project_overview",
+  "description": "The whole picture, as JSON: file tree with flags, folders and who may see them, roles, members, the console's state, packages, tournaments, the board, the file open on the teacher's screen. Call it first.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "read_file",
+  "description": "A file's content. Text comes back as text (Markdown too); an image as an image; another binary file as a base64 blob.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "start_line": {
+     "type": "integer",
+     "description": "First line, from 1 (text only)."
+    },
+    "end_line": {
+     "type": "integer",
+     "description": "Last line, inclusive (text only)."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "write_file",
+  "description": "Replaces a text file's whole content, creating the file if needed. Everyone sees it live; only what differs is changed.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "content": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "content"
+   ]
+  }
+ },
+ {
+  "name": "edit_file",
+  "description": "Replaces an exact piece of a text file. `old` must occur once, unless `all` is true.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "old": {
+     "type": "string"
+    },
+    "new": {
+     "type": "string"
+    },
+    "all": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path",
+    "old",
+    "new"
+   ]
+  }
+ },
+ {
+  "name": "create_file",
+  "description": "Creates a text file, failing if the path is taken. `*.test.py` files are hidden from students unless `hidden` is false.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "content": {
+     "type": "string"
+    },
+    "hidden": {
+     "type": "boolean"
+    },
+    "protected": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "upload_file",
+  "description": "Adds a file from base64 bytes (a picture, a PDF, data). If the path is taken, the file gets a free name; the answer says which.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "base64": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "base64"
+   ]
+  }
+ },
+ {
+  "name": "create_folder",
+  "description": "Creates a folder (parents included).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "delete_path",
+  "description": "Deletes a file, or a folder with everything inside. No undo.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "move_path",
+  "description": "Moves or renames a file or folder to the full new path. Folder access moves with it, and open editors stay bound.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "from": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "to": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "from",
+    "to"
+   ]
+  }
+ },
+ {
+  "name": "duplicate_path",
+  "description": "Copies a file or folder next to itself (or to `to`), with flags and folder access.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "to": {
+     "type": "string",
+     "description": "Optional full path for the copy."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "search_files",
+  "description": "Finds lines in the project's text files. Returns path, line number and text, at most 200 matches.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string"
+    },
+    "regex": {
+     "type": "boolean",
+     "description": "Treat query as a regular expression."
+    },
+    "folder": {
+     "type": "string",
+     "description": "Only inside this folder."
+    }
+   },
+   "required": [
+    "query"
+   ]
+  }
+ },
+ {
+  "name": "set_file_flags",
+  "description": "Sets a file's flags: `hidden` (admins alone see it), `protected` (admins alone edit it).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "hidden": {
+     "type": "boolean"
+    },
+    "protected": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "set_folder_access",
+  "description": "Says who may see inside a folder: \"public\", \"admins\" (admins alone), or a custom role's name.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "access": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "access"
+   ]
+  }
+ },
+ {
+  "name": "open_file",
+  "description": "Opens a file on the teacher's screen.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "get_diagnostics",
+  "description": "Errors in a file: Ruff for Python, clang for C++ (loads the compiler the first time).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "format_file",
+  "description": "Formats a file: Ruff for Python, Prettier for HTML, CSS, JavaScript and Markdown, and JSON. Writes the result.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "get_flowchart",
+  "description": "A Python or C++ file's flowchart as nodes and edges (what students see under Show tree).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "lang": {
+     "type": "string",
+     "enum": [
+      "en",
+      "ru"
+     ]
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "get_syntax_tree",
+  "description": "A Python or C++ file's syntax tree.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "run_program",
+  "description": "Runs a file in the shared console (stopping a run in progress) and returns the console when the program ends, asks for input, stops in the debugger, or `wait_seconds` pass (default 30, at most 120; it keeps running after that). With `debug` (Python only) it stops at `breakpoints`, or on the first line without any.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "wait_seconds": {
+     "type": "number"
+    },
+    "debug": {
+     "type": "boolean"
+    },
+    "breakpoints": {
+     "type": "object",
+     "description": "Path -> line numbers.",
+     "additionalProperties": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "console_read",
+  "description": "The console: status, exit, debugger state, output (last `tail` characters, default 20000). Can wait for the program to end, ask for input or stop.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "tail": {
+     "type": "integer"
+    },
+    "wait_seconds": {
+     "type": "number"
+    }
+   }
+  }
+ },
+ {
+  "name": "send_input",
+  "description": "Answers the program's request for input with one line, then returns the console as run_program does.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "text": {
+     "type": "string"
+    },
+    "wait_seconds": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "text"
+   ]
+  }
+ },
+ {
+  "name": "send_eof",
+  "description": "Sends end of input (Ctrl+D), then returns the console.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "wait_seconds": {
+     "type": "number"
+    }
+   }
+  }
+ },
+ {
+  "name": "stop_program",
+  "description": "Stops the running program and returns the console.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "clear_console",
+  "description": "Clears the shared console.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "debug_command",
+  "description": "While stopped in the debugger: continue, next (step over), step (into), return (out) or stop. Returns the console with the new stop's line, variables and call stack.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "command": {
+     "type": "string",
+     "enum": [
+      "continue",
+      "next",
+      "step",
+      "return",
+      "stop"
+     ]
+    },
+    "wait_seconds": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "command"
+   ]
+  }
+ },
+ {
+  "name": "run_check",
+  "description": "Runs the tests of a solution file (its nearest name.test.py) in a fresh interpreter and returns each test's result. Takes up to 30 s, a tournament's up to 2 min. An admin's own check in a session goes to no table.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "list_members",
+  "description": "Who is connected: peer number, name, level, roles, owner, the file they are in.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "set_member_role",
+  "description": "Changes a connected member's level and custom roles. An admin cannot touch other admins or make admins; the owner can.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "peer": {
+     "type": "integer"
+    },
+    "level": {
+     "type": "string",
+     "enum": [
+      "read",
+      "write",
+      "admin"
+     ]
+    },
+    "roles": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "peer",
+    "level"
+   ]
+  }
+ },
+ {
+  "name": "kick_member",
+  "description": "Removes a member from the session (every tab of theirs). They can come back by the link.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "peer": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "peer"
+   ]
+  }
+ },
+ {
+  "name": "ban_member",
+  "description": "Removes a member and refuses them for the rest of the session. There is no unban.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "peer": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "peer"
+   ]
+  }
+ },
+ {
+  "name": "share_links",
+  "description": "Every role's join link and code, and this MCP link.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "add_role",
+  "description": "Creates a custom role, with what it may do with public files, and its join link.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "level": {
+     "type": "string",
+     "enum": [
+      "read",
+      "write"
+     ]
+    }
+   },
+   "required": [
+    "name",
+    "level"
+   ]
+  }
+ },
+ {
+  "name": "set_frozen",
+  "description": "Freezes the project for students (read-only, a frost over the page) or thaws it.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "frozen": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "frozen"
+   ]
+  }
+ },
+ {
+  "name": "presentation_start",
+  "description": "Presents a PDF or PPTX to everyone, at a page (from 1).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "Path from the project root, with /."
+    },
+    "page": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path"
+   ]
+  }
+ },
+ {
+  "name": "presentation_page",
+  "description": "Turns the presentation to a page.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "page": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "page"
+   ]
+  }
+ },
+ {
+  "name": "presentation_stop",
+  "description": "Ends the presentation.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "list_packages",
+  "description": "The project's Python packages and C++ libraries, with versions and status.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "install_package",
+  "description": "Installs a package for everyone: Python by name (`requests`, `numpy==2.0`), C++ header-only from GitHub (`nlohmann/json`, `fmtlib/fmt@11.0.2`). Waits for the result.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "language": {
+     "type": "string",
+     "enum": [
+      "python",
+      "cpp"
+     ]
+    },
+    "spec": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "language",
+    "spec"
+   ]
+  }
+ },
+ {
+  "name": "remove_package",
+  "description": "Removes a package: Python by name, C++ by owner/repo.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "language": {
+     "type": "string",
+     "enum": [
+      "python",
+      "cpp"
+     ]
+    },
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "language",
+    "name"
+   ]
+  }
+ },
+ {
+  "name": "tournament_list",
+  "description": "The project's tournaments and whether each table is private.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "tournament_standings",
+  "description": "One tournament's table: place, name, scores by task, total.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "id"
+   ]
+  }
+ },
+ {
+  "name": "tournament_set_private",
+  "description": "Hides a tournament's table from students or shows it.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string"
+    },
+    "private": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "id",
+    "private"
+   ]
+  }
+ },
+ {
+  "name": "board_read",
+  "description": "The whiteboard's elements: id, type, position, size, text, colours, bindings. Use `board_image` to see it.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "board_add",
+  "description": "Adds elements to the whiteboard (Excalidraw's skeleton format). Each has `type` (rectangle, ellipse, diamond, text, arrow, line), `x`, `y`; shapes take `width`, `height`, `backgroundColor`, `strokeColor`, `label: {text}`; text takes `text`, `fontSize`; arrows take `width`, `height`, `label`, and `start`/`end`: `{id}` of an element to connect, given in this same call or earlier. Pass your own `id` to refer to one later.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "elements": {
+     "type": "array",
+     "items": {
+      "type": "object"
+     }
+    }
+   },
+   "required": [
+    "elements"
+   ]
+  }
+ },
+ {
+  "name": "board_update",
+  "description": "Changes properties of whiteboard elements. Each item has `id` and the properties to set (x, y, width, height, strokeColor, backgroundColor, text, angle, opacity…).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "elements": {
+     "type": "array",
+     "items": {
+      "type": "object"
+     }
+    }
+   },
+   "required": [
+    "elements"
+   ]
+  }
+ },
+ {
+  "name": "board_delete",
+  "description": "Deletes whiteboard elements by id, with the labels bound to them.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "ids"
+   ]
+  }
+ },
+ {
+  "name": "board_clear",
+  "description": "Deletes everything on the whiteboard.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "board_mermaid",
+  "description": "Draws a Mermaid diagram on the whiteboard as editable elements, placed at (`x`, `y`) if given.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "definition": {
+     "type": "string"
+    },
+    "x": {
+     "type": "number"
+    },
+    "y": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "definition"
+   ]
+  }
+ },
+ {
+  "name": "board_image",
+  "description": "The whiteboard as a PNG, so you can see the result. Everything, or only `ids`.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ },
+ {
+  "name": "board_duplicate",
+  "description": "Copies whiteboard elements with their labels, moved by (`dx`, `dy`, default 20).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "dx": {
+     "type": "number"
+    },
+    "dy": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "ids"
+   ]
+  }
+ },
+ {
+  "name": "board_align",
+  "description": "Lines whiteboard elements up with the outermost of them.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "alignment": {
+     "type": "string",
+     "enum": [
+      "left",
+      "center",
+      "right",
+      "top",
+      "middle",
+      "bottom"
+     ]
+    }
+   },
+   "required": [
+    "ids",
+    "alignment"
+   ]
+  }
+ },
+ {
+  "name": "board_distribute",
+  "description": "Equal gaps between at least three whiteboard elements.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "direction": {
+     "type": "string",
+     "enum": [
+      "horizontal",
+      "vertical"
+     ]
+    }
+   },
+   "required": [
+    "ids",
+    "direction"
+   ]
+  }
+ },
+ {
+  "name": "board_group",
+  "description": "Groups whiteboard elements.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "ids"
+   ]
+  }
+ },
+ {
+  "name": "board_ungroup",
+  "description": "Takes whiteboard elements out of their outermost group.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "ids"
+   ]
+  }
+ },
+ {
+  "name": "board_lock",
+  "description": "Locks whiteboard elements against changes on the canvas, or unlocks them (`locked`: false).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "locked": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "ids"
+   ]
+  }
+ },
+ {
+  "name": "board_export",
+  "description": "The whiteboard as the JSON of a .excalidraw file.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "board_import",
+  "description": "Puts a .excalidraw file's JSON on the whiteboard; `replace` clears it first.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "scene": {
+     "type": "string"
+    },
+    "replace": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "scene"
+   ]
+  }
+ },
+ {
+  "name": "board_snapshot",
+  "description": "Saves the whiteboard under a name, in the teacher's tab, until it closes.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  }
+ },
+ {
+  "name": "board_restore",
+  "description": "Puts a saved snapshot back, replacing what is on the whiteboard.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  }
+ },
+ {
+  "name": "export_project",
+  "description": "The whole project as a .zip, in base64: files, folders and access rules.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "import_project",
+  "description": "Replaces the whole project with a .zip in base64 (as made by export_project). Everything now in it is lost.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "base64": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "base64"
+   ]
+  }
+ },
+ {
+  "name": "reset_project",
+  "description": "Deletes every file. With `language` (python or cpp) it starts again from that language's starter file; without it the owner is asked. Owner only. No undo.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "language": {
+     "type": "string",
+     "enum": [
+      "python",
+      "cpp"
+     ]
+    }
+   }
+  }
+ }
+]

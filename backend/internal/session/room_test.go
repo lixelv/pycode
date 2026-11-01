@@ -1,9 +1,14 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -215,4 +220,102 @@ func TestRemoveDisconnectsEveryConnectionOfAUser(t *testing.T) {
 		t.Fatal("second tab was not told")
 	}
 	r.leave(a) // the read loop ends later: must not panic or change anything
+}
+
+func TestMCPCallGoesToTheActingOwnerAndOnlyTheyAnswer(t *testing.T) {
+	ownerID := uuid.New()
+	r := newRoom(ownerID)
+	owner := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(owner)
+	student := newMember(uuid.New(), "write", LevelWrite)
+	r.join(student)
+	last(owner, "owner")
+
+	type outcome struct {
+		result json.RawMessage
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := r.mcpCall(context.Background(), "read_file", json.RawMessage(`{"path":"a.py"}`))
+		done <- outcome{result, err}
+	}()
+	var call control
+	for call.Type != "mcp" {
+		_ = json.Unmarshal((<-owner.send).data, &call)
+	}
+	if call.Name != "read_file" || string(call.Data) != `{"path":"a.py"}` {
+		t.Fatalf("call: %+v", call)
+	}
+	r.mcpResult(student, control{ID: call.ID, Data: jsonRaw(`{"forged":true}`)})
+	select {
+	case got := <-done:
+		t.Fatalf("a student's answer counted: %s", got.result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	r.mcpResult(owner, control{ID: call.ID, Data: jsonRaw(`{"content":[]}`)})
+	if got := <-done; got.err != nil || string(got.result) != `{"content":[]}` {
+		t.Fatalf("answer: %s %v", got.result, got.err)
+	}
+}
+
+func TestMCPCallFailsWithoutABrowserAndWhenItLeaves(t *testing.T) {
+	ownerID := uuid.New()
+	r := newRoom(ownerID)
+	if _, err := r.mcpCall(context.Background(), "x", json.RawMessage(`{}`)); !errors.Is(err, errNoBrowser) {
+		t.Fatalf("empty room: %v", err)
+	}
+	owner := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(owner)
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.mcpCall(context.Background(), "x", json.RawMessage(`{}`))
+		done <- err
+	}()
+	var call control
+	for call.Type != "mcp" {
+		_ = json.Unmarshal((<-owner.send).data, &call)
+	}
+	r.leave(owner)
+	if err := <-done; err == nil {
+		t.Fatal("the call should fail when its browser leaves")
+	}
+}
+
+func TestToolsListIsValidJSON(t *testing.T) {
+	var tools []struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"inputSchema"`
+	}
+	if err := json.Unmarshal(mcpToolsJSON, &tools); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("no tools")
+	}
+	for _, tool := range tools {
+		if tool.Name == "" || tool.Description == "" || tool.InputSchema["type"] != "object" {
+			t.Fatalf("bad tool: %+v", tool)
+		}
+	}
+}
+
+func TestOriginAllowed(t *testing.T) {
+	req := func(origin string) *http.Request {
+		r := httptest.NewRequest("POST", "http://polycode.example/s/x/mcp", nil)
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+	if !originAllowed(req(""), nil) || !originAllowed(req("https://polycode.example"), nil) {
+		t.Fatal("an agent or our own page should pass")
+	}
+	if originAllowed(req("https://evil.example"), nil) {
+		t.Fatal("another site should not")
+	}
+	if !originAllowed(req("https://localhost:5173"), []string{"localhost:*"}) {
+		t.Fatal("a configured pattern should pass")
+	}
 }

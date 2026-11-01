@@ -68,6 +68,7 @@ type Control =
   | { type: "reset"; from: number }
   | { type: "error"; error: string }
   | { type: "removed"; ban?: boolean }
+  | { type: "mcp"; id: number; name: string; data: unknown }
   | { type: "ended" }
 
 /** Who sent a signal, as the server and the link know it (not as the signal claims). */
@@ -85,6 +86,8 @@ type Events = {
   error: (message: string) => void
   /** Links, roles or the acting owner changed. */
   links: () => void
+  /** An agent's tool call (MCP), for us as the acting owner; answer with mcpResult. */
+  mcp: (id: number, name: string, args: unknown) => void
 }
 
 // Data messages between peers (first byte).
@@ -298,7 +301,7 @@ export class CollabProvider {
   readonly links = new Map<number, Link>()
 
   private ws: WebSocket | null = null
-  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set(), error: new Set() }
+  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set(), error: new Set(), mcp: new Set() }
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
@@ -389,6 +392,11 @@ export class CollabProvider {
   /** Changes a member's level and custom roles (the server checks who may). */
   setRole(peer: number, level: Level, roles: string[]) {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "setRole", to: peer, level, roles }))
+  }
+
+  /** The answer to an agent's tool call (MCP). */
+  mcpResult(id: number, result: unknown) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "mcp-result", id, data: result }))
   }
 
   /** Removes a member; with `ban` they cannot rejoin (the server checks who may). */
@@ -530,6 +538,9 @@ export class CollabProvider {
         break
       case "error":
         this.listeners.error.forEach((fn) => fn(msg.error))
+        break
+      case "mcp":
+        this.listeners.mcp.forEach((fn) => fn(msg.id, msg.name, msg.data))
         break
       case "removed":
         // Kicked or banned: do not come back on our own.

@@ -73,7 +73,7 @@ sites. Do not set it on a real server.
   - A member is `{level, roles[], owner?}`: a level (read < write < admin; the owner is an admin) plus any number of custom roles.
   - `fileAccess` applies, in order: hidden → none; every role folder on the path must be one of the member's roles; protected or frozen → read.
   - `docAccess` maps documents to access: `structure` is written by admins only; `runtime` and `board` by write; `t:<id>` by admins only, read by all unless private (a private or unknown table is `none`).
-  - `useAccess` (hook) gives the UI the same answers. Tree changes, packages, freeze and presentation are admin-only. `*.test.py` files are created hidden.
+  - `useAccess` (hook) gives the UI the same answers. Tree changes, packages, freeze and presentation are admin-only. Any file can be hidden from non-admins (context menu); `*.test.py` files are created hidden. A folder given the role `@admins` (`ADMINS_ONLY`; no member has it, custom role names cannot contain `@`) is seen by admins alone.
 - **Running code**: `src/workers/runner.worker.ts` (Pyodide). Binary files are written next to the texts.
   - The program may be someone else's (a teacher runs a student's file), and the worker shares the app's origin and cookie. So of our own site it reaches only `/pyodide/` and `/api/proxy`; `fetch` is replaced on every prototype; IndexedDB, caches, WebSocket, EventSource and WebTransport are removed. In a session, running a different file starts a fresh interpreter.
   - `input()` blocks on a `SharedArrayBuffer` and wakes via `Atomics`. This needs cross-origin isolation, so COOP/COEP headers are required in nginx and in vite.

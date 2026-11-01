@@ -74,6 +74,18 @@ describe("fileAccess", () => {
     expect(fileAccess(ivan, "s/ivan/a.py", r)).toBe("read")
   })
 
+  it("shows an admins-only folder to admins alone", () => {
+    const r = rules({ folders: { secret: "@admins" } })
+    expect(fileAccess(admin, "secret/a.py", r)).toBe("write")
+    expect(fileAccess({ level: "write", roles: ["admin", "ivan"] }, "secret/a.py", r)).toBe("none")
+  })
+
+  it("hides any file from non-admins, not only tests", () => {
+    const r = rules({ files: { "notes.md": { id: "n", kind: "text", size: 1, hidden: true } } })
+    expect(fileAccess(admin, "notes.md", r)).toBe("write")
+    expect(fileAccess({ level: "write", roles: [] }, "notes.md", r)).toBe("none")
+  })
+
   it("freezes everyone but admins to read", () => {
     expect(fileAccess(writer, "main.py", rules({ frozen: true }))).toBe("read")
     expect(fileAccess(ivan, "s/ivan/a.py", rules({ frozen: true }))).toBe("read")
@@ -151,9 +163,9 @@ describe("runVisible", () => {
 
 describe(".pycode.env built-in names", () => {
   it("ignores roles and folders named after built-in roles", () => {
-    expect(parseEnv("role write read\nrole ivan write\nfolder admin a\nfolder ivan b\n")).toEqual({
+    expect(parseEnv("role write read\nrole ivan write\nfolder admin a\nfolder ivan b\nfolder @admins c\n")).toEqual({
       roles: { ivan: "write" },
-      folders: { b: "ivan" },
+      folders: { b: "ivan", c: "@admins" },
       protected: [],
       hidden: [],
     })

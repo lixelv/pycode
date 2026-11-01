@@ -35,6 +35,11 @@ export const LEGACY_ENV = ".pycode.env"
 export const isReserved = (path: string) => path === RESERVED || path === LEGACY_ENV
 /** Roles every session has; custom roles cannot take these names. */
 export const BUILT_IN_ROLES = new Set(["owner", "admin", "write", "read"])
+/**
+ * A folder given this "role" is seen by admins only: no member has it (custom
+ * role names are letters, digits, `_` and `-`), so everyone else gets none.
+ */
+export const ADMINS_ONLY = "@admins"
 export const isTest = (path: string) => path.endsWith(".test.py")
 
 export function fileAccess(m: Member, path: string, r: Rules): Access {
@@ -121,7 +126,8 @@ export function parseEnv(text: string): EnvRules {
     } else if (m[1] === "folder") {
       // A folder given to "write" (say) would open it to everyone with that code.
       const space = rest.indexOf(" ")
-      if (space > 0 && !BUILT_IN_ROLES.has(rest.slice(0, space))) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
+      const role = rest.slice(0, space)
+      if (space > 0 && (role === ADMINS_ONLY || !BUILT_IN_ROLES.has(role))) e.folders[rest.slice(space + 1)] = rest.slice(0, space)
     } else e[m[1] as "protected" | "hidden"].push(rest)
   }
   return e

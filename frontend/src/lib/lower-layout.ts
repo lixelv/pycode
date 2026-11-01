@@ -40,14 +40,19 @@ export function normalizeLayout(raw: unknown): ToolGroup[] {
   return groups
 }
 
-/** What to draw: groups with a tool available now (`index` is the group's place in the layout). */
+/**
+ * What to draw: groups with a tool available now (`index` is the group's place in the layout).
+ * Sizes are scaled to add up to the groups' number: flex-grow below 1 in total leaves the rest of the width empty.
+ */
 export function visibleGroups(layout: ToolGroup[], available: readonly Tool[]) {
-  return layout.flatMap((group, index) => {
+  const groups = layout.flatMap((group, index) => {
     const tools = group.tools.filter((tool) => available.includes(tool))
     if (!tools.length) return []
     const active = tools.includes(group.active) ? group.active : tools.includes("console") ? "console" : tools[0]
     return [{ index, tools, active, size: group.size }]
   })
+  const total = groups.reduce((sum, group) => sum + group.size, 0)
+  return groups.map((group) => ({ ...group, size: (group.size * groups.length) / total }))
 }
 
 /** Shows a tool in its group; the other groups stay as they are. */

@@ -32,6 +32,18 @@ describe("visibleGroups", () => {
     expect(visibleGroups(pair(), ["console"]).map((g) => g.index)).toEqual([0])
   })
 
+  it("shares the whole width, whatever the saved sizes add up to", () => {
+    const merged = moveTool(splitTool(pair(), "tests", 0, "right"), "tests", 0, null)
+    const total = (layout: ToolGroup[], tools: Parameters<typeof visibleGroups>[1]) => visibleGroups(layout, tools).reduce((sum, g) => sum + g.size, 0)
+    expect(total([{ tools: ["console"], active: "console", size: 0.5 }], ["console"])).toBeGreaterThanOrEqual(1)
+    expect(total(merged, ["console", "tests"])).toBeGreaterThanOrEqual(1)
+    // The neighbour has nothing to show: the one left takes its place.
+    const halves: ToolGroup[] = [{ tools: ["console"], active: "console", size: 0.25 }, { tools: ["debug"], active: "debug", size: 0.25 }]
+    expect(total(halves, ["console"])).toBeGreaterThanOrEqual(1)
+    const [a, b] = visibleGroups(halves, ["console", "debug"])
+    expect(a.size).toBe(b.size)
+  })
+
   it("falls back to the console, then the first tool, when the active one is gone", () => {
     expect(visibleGroups(pair(), ["web", "console"])[0].active).toBe("console")
     expect(visibleGroups([{ tools: ["web", "debug"], active: "tests" as never, size: 1 }], ["debug", "web"])[0].active).toBe("web")

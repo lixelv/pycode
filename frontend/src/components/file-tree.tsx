@@ -36,7 +36,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import type { AccessView } from "@/hooks/use-access"
-import { isReserved, isTest } from "@/lib/project/access"
+import { ADMINS_ONLY, isReserved } from "@/lib/project/access"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Peer } from "@/hooks/use-collab"
 import { useI18n } from "@/lib/i18n"
@@ -189,7 +189,7 @@ export function FileTree(props: FileTreeProps) {
                   <span className="truncate">{node.name}</span>
                   {folders[node.path] && (
                     <span title={t("tree.access")} className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5 font-mono text-[10px]">
-                      <Users className="size-2.5" /> {folders[node.path]}
+                      <Users className="size-2.5" /> {folders[node.path] === ADMINS_ONLY ? t("tree.adminsOnly") : folders[node.path]}
                     </span>
                   )}
                   {!readOnly && <DeleteButton label={`${t("tree.delete")} ${node.name}`} onClick={() => onDelete(node.path, "dir")} />}
@@ -211,6 +211,7 @@ export function FileTree(props: FileTreeProps) {
                 <ContextMenuSubContent>
                   <ContextMenuRadioGroup value={folders[node.path] ?? ""} onValueChange={(v) => setFolderRole(store, node.path, v || null)}>
                     <ContextMenuRadioItem value="">{t("tree.public")}</ContextMenuRadioItem>
+                    <ContextMenuRadioItem value={ADMINS_ONLY}>{t("tree.adminsOnly")}</ContextMenuRadioItem>
                     {roles.map((r) => (
                       <ContextMenuRadioItem key={r} value={r} className="font-mono text-xs">
                         {r}
@@ -289,16 +290,15 @@ export function FileTree(props: FileTreeProps) {
                 <Lock /> {t("tree.protect")}
               </ContextMenuItem>
             )}
-            {isTest(node.path) &&
-              (metas.get(node.path)?.hidden ? (
-                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", false)}>
-                  <Eye /> {t("tree.show")}
-                </ContextMenuItem>
-              ) : (
-                <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", true)}>
-                  <EyeOff /> {t("tree.hide")}
-                </ContextMenuItem>
-              ))}
+            {metas.get(node.path)?.hidden ? (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", false)}>
+                <Eye /> {t("tree.show")}
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onSelect={() => setFlag(store, node.path, "hidden", true)}>
+                <EyeOff /> {t("tree.hide")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => setRenaming(node.path)}>
               <Pencil /> {t("tree.rename")}

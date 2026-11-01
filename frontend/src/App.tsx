@@ -56,6 +56,7 @@ import {
   needsLanguage,
   packagesKind,
   packagesOf,
+  duplicatePath,
   renamePath,
   resetProject,
   openArchive,
@@ -726,6 +727,13 @@ function Workspace() {
     [store],
   )
 
+  const duplicateEntry = useCallback(
+    (path: string) => {
+      if ("error" in duplicatePath(store, path)) toast.error(t("toast.tooBig", { mb: PROJECT_LIMIT >> 20 }))
+    },
+    [store, t],
+  )
+
   const formatCode = useCallback(async () => {
     const ed = editor.current
     const model = ed?.getModel()
@@ -1011,6 +1019,7 @@ function Workspace() {
                 onCreate={createEntry}
                 onDelete={deleteEntry}
               onRename={renameEntry}
+              onDuplicate={duplicateEntry}
                 onDownload={download}
                 onUpload={upload}
                 onReset={reset}

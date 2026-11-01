@@ -219,6 +219,63 @@ export function deletePath(s: ProjectStore, path: string) {
   })
 }
 
+/** Where `path` lands when moved into `folder` ("" is the root), or why it cannot; `same`: it is already there. */
+export function moveTarget(s: ProjectStore, path: string, folder: string): { to: string } | { error: "same" | "inside" | "reserved" | "exists" } {
+  if (folder === path || folder.startsWith(path + "/")) return { error: "inside" }
+  if (folder === parentOf(path)) return { error: "same" }
+  const to = folder ? `${folder}/${nameOf(path)}` : nameOf(path)
+  if (isReserved(to)) return { error: "reserved" }
+  return exists(s, to) ? { error: "exists" } : { to }
+}
+
+/** A free name next to `path`: `a copy.py`, `a copy 2.py`; `.test.py` stays whole, so a copy of tests is tests. */
+function copyPath(s: ProjectStore, path: string, isFile: boolean): string {
+  const name = nameOf(path)
+  const dir = parentOf(path)
+  const ext = isFile ? (/(\.test)?\.[^.]+$/.exec(name.slice(1))?.[0] ?? "") : ""
+  const stem = name.slice(0, name.length - ext.length)
+  for (let n = 1; ; n++) {
+    const copy = `${stem} copy${n > 1 ? ` ${n}` : ""}${ext}`
+    const full = dir ? `${dir}/${copy}` : copy
+    if (!exists(s, full)) return full
+  }
+}
+
+/**
+ * Copies a file, or a folder with everything inside it, next to itself: flags and
+ * folder roles come along, so a copy shows students no more than the original.
+ * Texts get documents of their own; binary files share their bytes (by hash).
+ */
+export function duplicatePath(s: ProjectStore, path: string): { to: string } | { error: "limit" } {
+  const metas = metasOf(s)
+  const inside = (key: string) => key === path || key.startsWith(path + "/")
+  const to = copyPath(s, path, metas.has(path))
+  const map = (key: string) => to + key.slice(path.length)
+  const texts: [string, string][] = []
+  const copies: [string, FileMeta][] = []
+  let grow = 0
+  for (const [key, meta] of metas.entries()) {
+    if (!inside(key)) continue
+    const id = newId()
+    copies.push([map(key), { ...meta, id }])
+    if (meta.kind !== "text") continue
+    const content = textOf(s, key)?.toString() ?? ""
+    grow += content.length
+    texts.push([id, content])
+  }
+  if (projectSize(s) + grow > PROJECT_LIMIT) return { error: "limit" }
+  s.structure.transact(() => {
+    for (const [key, meta] of copies) metas.set(key, meta)
+    const dirs = dirsOf(s)
+    if (!metas.has(path)) dirs.set(to, true)
+    for (const key of [...dirs.keys()]) if (key.startsWith(path + "/")) dirs.set(map(key), true)
+    const folders = foldersOf(s)
+    for (const [key, role] of [...folders.entries()]) if (inside(key)) folders.set(map(key), role)
+  })
+  for (const [id, content] of texts) if (content) s.doc(`f:${id}`).getText("t").insert(0, content)
+  return { to }
+}
+
 export function exists(s: ProjectStore, path: string) {
   if (metasOf(s).has(path) || dirsOf(s).has(path)) return true
   return [...metasOf(s).keys()].some((k) => k.startsWith(path + "/"))

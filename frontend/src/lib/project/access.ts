@@ -43,8 +43,9 @@ export const ADMINS_ONLY = "@admins"
 export const isTest = (path: string) => path.endsWith(".test.py")
 
 export function fileAccess(m: Member, path: string, r: Rules): Access {
-  if (m.level === "admin") return "write"
   const meta = r.files[path]
+  if (meta?.sealed) return "none"
+  if (m.level === "admin") return "write"
   if (meta?.hidden) return "none"
   let result: Access = m.level === "write" ? "write" : "read"
   // Every role folder on the way must be one of the member's roles.
@@ -57,6 +58,10 @@ export function fileAccess(m: Member, path: string, r: Rules): Access {
 }
 
 export function docAccess(m: Member, docId: string, r: Rules): Access {
+  if (docId.startsWith("f:")) {
+    const id = docId.slice(2)
+    if (Object.values(r.files).some((meta) => meta.id === id && meta.sealed)) return "none"
+  }
   if (m.level === "admin") return "write"
   if (docId === "structure") return "read"
   if (docId === "runtime" || docId === "board") return m.level === "write" && !r.frozen ? "write" : "read"
@@ -79,7 +84,7 @@ export function docAccess(m: Member, docId: string, r: Rules): Access {
  * students' folders.
  */
 export function runVisible(entry: string, path: string, r: Rules): boolean {
-  if (r.files[path]?.hidden) return false
+  if (r.files[path]?.hidden || r.files[path]?.sealed) return false
   for (const folder of Object.keys(r.folders)) {
     if (path.startsWith(folder + "/") && !entry.startsWith(folder + "/")) return false
   }

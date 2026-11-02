@@ -24,8 +24,10 @@ const text = async (name: string, args: object, ctx: AgentContext) => {
 
 describe("the list of tools", () => {
   it("is the same on the server and here", () => {
-    const listed = JSON.parse(readFileSync(resolve(__dirname, "../../../../backend/internal/session/mcp_tools.json"), "utf8")) as { name: string }[]
-    expect(listed.map((t) => t.name).sort()).toEqual(Object.keys(TOOLS).sort())
+    const listed = JSON.parse(readFileSync(resolve(__dirname, "../../../../backend/internal/mcp/mcp_tools.json"), "utf8")) as { name: string }[]
+    // These five are answered by the server (backend/internal/mcp/tools.go).
+    const onServer = new Set(["list_tabs", "list_projects", "create_project", "delete_project", "open_project"])
+    expect(listed.map((t) => t.name).filter((name) => !onServer.has(name)).sort()).toEqual(Object.keys(TOOLS).sort())
   })
 })
 

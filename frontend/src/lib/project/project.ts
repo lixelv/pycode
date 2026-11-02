@@ -1,7 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
 import { IndexeddbPersistence } from "y-indexeddb"
+import * as Y from "yjs"
 import { Doc as YDoc } from "yjs"
-import type * as Y from "yjs"
 
 import type { PackageEntry } from "@/hooks/use-packages"
 import { cppPackagesOf, type CppPackage } from "@/lib/cpp/packages"
@@ -23,7 +23,7 @@ export const packagesOf = (s: ProjectStore) => s.structure.getArray<PackageEntry
 /** The shared text of a text file, or null (no such file, or binary). */
 export function textOf(s: ProjectStore, path: string): Y.Text | null {
   const meta = metasOf(s).get(path)
-  return meta?.kind === "text" ? s.doc(`f:${meta.id}`).getText("t") : null
+  return meta?.kind === "text" && !meta.sealed ? s.doc(`f:${meta.id}`).getText("t") : null
 }
 
 /** The access rules as they stand in the structure document. */
@@ -176,7 +176,8 @@ export function startProject(s: ProjectStore, lang: ProjectLanguage) {
 /** `flags` overrides the default (tests are created hidden). */
 export function createFile(s: ProjectStore, path: string, content = "", flags?: Pick<FileMeta, "protected" | "hidden">) {
   const metas = metasOf(s)
-  if (metas.has(path)) return
+  // A sealed file gives way to a new one under its path.
+  if (metas.has(path) && !metas.get(path)!.sealed) return
   const id = newId()
   s.structure.transact(() => {
     // Tests are hidden from students until an admin shows them.
@@ -190,7 +191,7 @@ export function createFile(s: ProjectStore, path: string, content = "", flags?: 
 export function setFlag(s: ProjectStore, path: string, flag: "protected" | "hidden", on: boolean) {
   const metas = metasOf(s)
   const meta = metas.get(path)
-  if (!meta) return
+  if (!meta || meta.sealed) return
   const next = { ...meta }
   if (on) next[flag] = true
   else delete next[flag]
@@ -246,8 +247,9 @@ function copyPath(s: ProjectStore, path: string, isFile: boolean): string {
  * folder roles come along, so a copy shows students no more than the original.
  * Texts get documents of their own; binary files share their bytes (by hash).
  */
-export function duplicatePath(s: ProjectStore, path: string): { to: string } | { error: "limit" } {
+export function duplicatePath(s: ProjectStore, path: string): { to: string } | { error: "limit" | "missing" } {
   const metas = metasOf(s)
+  if (metas.get(path)?.sealed) return { error: "missing" }
   const inside = (key: string) => key === path || key.startsWith(path + "/")
   const to = copyPath(s, path, metas.has(path))
   const map = (key: string) => to + key.slice(path.length)
@@ -255,7 +257,7 @@ export function duplicatePath(s: ProjectStore, path: string): { to: string } | {
   const copies: [string, FileMeta][] = []
   let grow = 0
   for (const [key, meta] of metas.entries()) {
-    if (!inside(key)) continue
+    if (!inside(key) || meta.sealed) continue
     const id = newId()
     copies.push([map(key), { ...meta, id }])
     if (meta.kind !== "text") continue
@@ -276,15 +278,18 @@ export function duplicatePath(s: ProjectStore, path: string): { to: string } | {
   return { to }
 }
 
+/** A sealed file does not count: its path is free for a new file. */
 export function exists(s: ProjectStore, path: string) {
-  if (metasOf(s).has(path) || dirsOf(s).has(path)) return true
-  return [...metasOf(s).keys()].some((k) => k.startsWith(path + "/"))
+  const metas = metasOf(s)
+  if ((metas.has(path) && !metas.get(path)!.sealed) || dirsOf(s).has(path)) return true
+  return [...metas.entries()].some(([k, meta]) => !meta.sealed && k.startsWith(path + "/"))
 }
 
 /** Every folder, explicit or implied by a file inside it. */
 export function allDirs(s: ProjectStore): string[] {
   const set = new Set<string>(dirsOf(s).keys())
-  for (const path of metasOf(s).keys()) {
+  for (const [path, meta] of metasOf(s).entries()) {
+    if (meta.sealed) continue
     for (let p = parentOf(path); p; p = parentOf(p)) set.add(p)
   }
   return [...set].sort()
@@ -379,8 +384,8 @@ export function envOf(s: ProjectStore): EnvRules {
   return {
     roles: rolesOf(s).toJSON() as Record<string, "read" | "write">,
     folders: foldersOf(s).toJSON() as Record<string, string>,
-    protected: Object.keys(metas).filter((p) => metas[p].protected),
-    hidden: Object.keys(metas).filter((p) => metas[p].hidden),
+    protected: Object.keys(metas).filter((p) => metas[p].protected && !metas[p].sealed),
+    hidden: Object.keys(metas).filter((p) => metas[p].hidden && !metas[p].sealed),
   }
 }
 
@@ -426,6 +431,7 @@ export function projectSize(s: ProjectStore): number {
   let size = 0
   const hashes = new Set<string>()
   metasOf(s).forEach((meta, path) => {
+    if (meta.sealed) return
     if (meta.kind === "text") size += textOf(s, path)?.length ?? meta.size
     else if (meta.hash && !hashes.has(meta.hash)) {
       hashes.add(meta.hash)
@@ -532,7 +538,7 @@ export async function exportZip(s: ProjectStore, fetch?: (hash: string) => Promi
   const entries: Record<string, Uint8Array> = {}
   for (const [path, content] of Object.entries(snapshotFiles(s))) entries[path] = strToU8(content)
   for (const [path, meta] of Object.entries(metasOf(s).toJSON() as Record<string, FileMeta>)) {
-    if (meta.kind !== "binary" || !meta.hash) continue
+    if (meta.kind !== "binary" || !meta.hash || meta.sealed) continue
     const bytes = await ensureBlob(meta.hash, fetch).catch(() => null)
     if (bytes) entries[path] = bytes
     else missing.push(path)
@@ -599,26 +605,104 @@ export async function openArchive(s: ProjectStore, zip: Archive): Promise<{ adde
   return addFiles(s, "", zip.entries, zip.env)
 }
 
-// ---- the local project -------------------------------------------------------
+// ---- the project of this page ---------------------------------------------------
 
 const LEGACY_DB = "python-coder:project"
 const LEGACY_PACKAGES = "python-coder:packages"
 
 let local: ProjectStore | null = null
 
-/** The user's own project, saved in IndexedDB (await `.ready`). */
+/**
+ * This page's project (await `.ready`): one page load holds one. Until a page names
+ * its project this is an empty one in memory (a guest's page, whose real one comes with the session).
+ */
 export function localStore(): ProjectStore {
-  if (local) return local
-  const s = new ProjectStore(true)
-  local = s
-  const ready = s.ready.then(async () => {
-    await setUp(s, migrate)
+  local ??= new ProjectStore(false)
+  return local
+}
+
+/** Makes a project of this user this page's own, kept in IndexedDB under its id. */
+export function openProjectStore(id: string): ProjectStore {
+  local = new ProjectStore(true, id)
+  return settle(local)
+}
+
+/** A public project of someone else: in memory, gone with the page. */
+export function openViewStore(): ProjectStore {
+  local = new ProjectStore(false)
+  return local
+}
+
+function settle(s: ProjectStore) {
+  const ready = s.ready.then(() => {
     // A run cannot survive a reload.
     const run = s.runtime.getMap("run")
     if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
   })
   s.ready = ready
   return s
+}
+
+const MIGRATED_KEY = "polycode:migrated-to"
+
+/**
+ * The single project of older versions, if this browser has one that was not moved
+ * yet: its documents under the old database names. It goes on being read through here.
+ */
+export async function legacyProject(): Promise<ProjectStore | null> {
+  try {
+    if (localStorage.getItem(MIGRATED_KEY)) return null
+  } catch {
+    return null
+  }
+  const databases = await indexedDB.databases?.().catch(() => [])
+  const names = (databases ?? []).map((d) => d.name ?? "")
+  if (!names.includes("polycode:structure") && !names.includes(LEGACY_DB)) return null
+  const s = new ProjectStore(true)
+  await s.ready
+  await setUp(s, migrate)
+  await s.ready
+  if (metasOf(s).size > 0) return s
+  s.destroy()
+  return null
+}
+
+/** Copies the old project's documents into a new project's, in this browser. */
+export async function moveLegacyProject(from: ProjectStore, to: ProjectStore) {
+  await to.ready
+  Y.applyUpdate(to.structure, Y.encodeStateAsUpdate(from.structure))
+  Y.applyUpdate(to.board, Y.encodeStateAsUpdate(from.board))
+  for (const id of from.ids()) {
+    if (id.startsWith("f:") || id.startsWith("t:")) Y.applyUpdate(to.doc(id), Y.encodeStateAsUpdate(from.doc(id)))
+  }
+  await new Promise((done) => setTimeout(done, 300)) // y-indexeddb writes after the update
+}
+
+/** Marks the old project as moved; its databases go once S3 has its files. */
+export function markLegacyMoved(project: string) {
+  try {
+    localStorage.setItem(MIGRATED_KEY, project)
+  } catch {
+    // storage unavailable
+  }
+}
+
+/** The new project reached S3: the old databases can go. */
+export async function finishLegacyMove(project: string) {
+  try {
+    if (localStorage.getItem(MIGRATED_KEY) !== project) return
+  } catch {
+    return
+  }
+  const old = new ProjectStore(true)
+  await old.ready
+  await old.clearStorage()
+  old.destroy()
+  try {
+    localStorage.setItem(MIGRATED_KEY, "done")
+  } catch {
+    // storage unavailable
+  }
 }
 
 /** First start of this version: bring over the single-document project of older ones. */

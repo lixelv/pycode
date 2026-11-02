@@ -11,6 +11,12 @@ export interface FileMeta {
   mime?: string
   protected?: true
   hidden?: true
+  /**
+   * Came hidden with a copy of a public project: only for running tests. It has no
+   * document and no text here; a check fetches the text for itself. Nobody can
+   * read it through the app, though the browser that runs a test holds it for a moment.
+   */
+  sealed?: true
 }
 
 /*
@@ -31,9 +37,12 @@ export class ProjectStore {
   private readonly stores = new Map<string, IndexeddbPersistence>()
   private readonly listeners = new Set<(docId: string, doc: Y.Doc) => void>()
   private readonly persist: boolean
+  private readonly prefix: string
 
-  constructor(persist: boolean) {
+  /** `projectId` names the IndexedDB databases; without one they are the old single project's. */
+  constructor(persist: boolean, projectId?: string) {
     this.persist = persist
+    this.prefix = projectId ? `polycode:${projectId}:` : "polycode:"
     this.structure = this.open("structure")
     this.runtime = this.open("runtime")
     this.board = this.open("board")
@@ -88,7 +97,7 @@ export class ProjectStore {
     const doc = new Y.Doc()
     if (this.structure) doc.clientID = this.structure.clientID
     this.docs.set(docId, doc)
-    if (this.persist) this.stores.set(docId, new IndexeddbPersistence(`polycode:${docId}`, doc))
+    if (this.persist) this.stores.set(docId, new IndexeddbPersistence(`${this.prefix}${docId}`, doc))
     this.listeners.forEach((fn) => fn(docId, doc))
     return doc
   }
@@ -97,7 +106,7 @@ export class ProjectStore {
   private follow() {
     const live = new Set<string>()
     this.structure.getMap<FileMeta>("files").forEach((meta) => {
-      if (meta.kind === "text") live.add(`f:${meta.id}`)
+      if (meta.kind === "text" && !meta.sealed) live.add(`f:${meta.id}`)
     })
     for (const id of this.structure.getMap("tournaments").keys()) live.add(`t:${id}`)
     for (const id of live) if (!this.docs.has(id)) this.open(id)

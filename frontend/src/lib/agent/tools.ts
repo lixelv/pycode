@@ -45,11 +45,17 @@ import type { CheckResult } from "@/workers/protocol"
 import { boardAdd, boardAlign, boardClear, boardDelete, boardDistribute, boardDuplicate, boardExport, boardGroup, boardImage, boardImport, boardLock, boardMermaid, boardRead, boardRestore, boardSnapshot, boardUngroup, boardUpdate, type Alignment } from "./board"
 
 /*
- * What an agent can do through MCP (backend/internal/session/mcp_tools.json has
+ * What an agent can do through MCP (backend/internal/mcp/mcp_tools.json has
  * the descriptions; a test keeps the two equal). Each tool runs here, in the
- * acting owner's browser, on the same project and the same runners as the
+ * /mcp-driven tab's browser, on the same project and the same runners as the
  * person at it.
  */
+
+/** A file as an agent knows it: a sealed one does not exist, its path is free. */
+const liveMeta = (s: ProjectStore, path: string) => {
+  const meta = metasOf(s).get(path)
+  return meta?.sealed ? undefined : meta
+}
 
 export type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string } | { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }
 export interface ToolResult {
@@ -245,7 +251,7 @@ function kick(ctx: AgentContext, args: Args, ban: boolean) {
 export const TOOLS: Record<string, Tool> = {
   project_overview(_args, ctx) {
     const { store: s, app } = ctx
-    const metas = [...metasOf(s).entries()].map(([path, m]) => ({ path, kind: m.kind, size: m.kind === "text" ? (textOf(s, path)?.length ?? m.size) : m.size, ...(m.mime ? { mime: m.mime } : {}), ...(m.protected ? { protected: true } : {}), ...(m.hidden ? { hidden: true } : {}) }))
+    const metas = [...metasOf(s).entries()].filter(([, m]) => !m.sealed).map(([path, m]) => ({ path, kind: m.kind, size: m.kind === "text" ? (textOf(s, path)?.length ?? m.size) : m.size, ...(m.mime ? { mime: m.mime } : {}), ...(m.protected ? { protected: true } : {}), ...(m.hidden ? { hidden: true } : {}) }))
     const state = stateOf(s)
     const { output: _output, ...run } = consoleState(s, 0)
     return {
@@ -268,7 +274,7 @@ export const TOOLS: Record<string, Tool> = {
 
   async read_file(args, { store: s, provider }) {
     const path = existing(args, s)
-    const meta = metasOf(s).get(path)
+    const meta = liveMeta(s, path)
     if (!meta) throw new ToolError(`${path} is a folder`)
     const text = textOf(s, path)
     if (text) {
@@ -288,7 +294,7 @@ export const TOOLS: Record<string, Tool> = {
     const content = string(args, "content")
     const path = pathOf(args)
     if (isReserved(path)) throw new ToolError(`${path} is reserved`)
-    if (!metasOf(s).has(path)) {
+    if (!!!liveMeta(s, path)) {
       if (exists(s, path)) throw new ToolError(`${path} is a folder`)
       createFile(s, path, content)
       return `created ${path}`
@@ -382,14 +388,14 @@ export const TOOLS: Record<string, Tool> = {
 
   set_file_flags(args, { store: s }) {
     const path = existing(args, s)
-    if (!metasOf(s).has(path)) throw new ToolError(`${path} is a folder: use set_folder_access`)
+    if (!!!liveMeta(s, path)) throw new ToolError(`${path} is a folder: use set_folder_access`)
     for (const flag of ["hidden", "protected"] as const) if (typeof args[flag] === "boolean") setFlag(s, path, flag, args[flag] as boolean)
-    return metasOf(s).get(path)
+    return liveMeta(s, path)
   },
 
   set_folder_access(args, { store: s }) {
     const path = existing(args, s)
-    if (metasOf(s).has(path)) throw new ToolError(`${path} is a file: use set_file_flags`)
+    if (!!liveMeta(s, path)) throw new ToolError(`${path} is a file: use set_file_flags`)
     const access = string(args, "access")
     if (access !== "public" && access !== "admins" && !rolesOf(s).has(access)) throw new ToolError(`no role ${access}: use public, admins or one of ${Object.keys(rolesOf(s).toJSON()).join(", ") || "(no custom roles yet)"}`)
     setFolderRole(s, path, access === "public" ? null : access === "admins" ? ADMINS_ONLY : access)
@@ -398,7 +404,7 @@ export const TOOLS: Record<string, Tool> = {
 
   open_file(args, { store: s, app }) {
     const path = existing(args, s)
-    if (!metasOf(s).has(path)) throw new ToolError(`${path} is a folder`)
+    if (!!!liveMeta(s, path)) throw new ToolError(`${path} is a folder`)
     app.open(path)
     return `opened ${path}`
   },
@@ -427,7 +433,7 @@ export const TOOLS: Record<string, Tool> = {
 
   async run_program(args, { store: s, app }) {
     const path = existing(args, s)
-    if (!metasOf(s).has(path)) throw new ToolError(`${path} is a folder`)
+    if (!!!liveMeta(s, path)) throw new ToolError(`${path} is a folder`)
     const kind = languageOf(path)
     if (!textOf(s, path) || !(kind === "python" || kind === "cpp" || kind === "html" || kind === "javascript") || /\.(h|hpp)$/i.test(path)) throw new ToolError(`${path} is not a program`)
     if (args.debug && languageOf(path) !== "python") throw new ToolError("the debugger is for Python only")

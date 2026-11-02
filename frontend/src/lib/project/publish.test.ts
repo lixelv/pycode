@@ -142,6 +142,7 @@ describe("publicStructure", () => {
   it("keeps what running needs: languages and packages", () => {
     const s = new ProjectStore(false)
     createFile(s, "main.cpp", "")
+    stateOf(s).set("languages", ["cpp"]) // an inferred language is not stored
     packagesOf(s).push([{ spec: "numpy", status: "installed" } as never])
     const doc = decoded(publicStructure(s.structure))
     expect(doc.getMap("state").get("languages")).toEqual(stateOf(s).get("languages"))

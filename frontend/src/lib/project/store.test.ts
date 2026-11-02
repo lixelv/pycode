@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
+
+import { runTool, type AgentApp, type AgentContext } from "@/lib/agent/tools"
+import type { CollabProvider } from "@/lib/collab/provider"
 
 import { createDir, createFile, deletePath, dirsOf, duplicatePath, exportZip, foldersOf, importZip, metasOf, moveTarget, openArchive, renamePath, replaceProject, resetProject, setFlag, setFolderRole, setUp, snapshotFiles, stateOf, textOf } from "./project"
 import { ProjectStore } from "./store"
+
+// The agent's tools import these browser-only modules.
+vi.mock("@/lib/collab/provider", () => ({ addRole: vi.fn(), listCodes: vi.fn() }))
+vi.mock("@/hooks/use-packages", () => ({ parseSpec: vi.fn() }))
 
 describe("ProjectStore", () => {
   it("keeps each file's text in its own document", () => {
@@ -165,5 +172,135 @@ describe("reset and first start", () => {
     await setUp(s, migrate)
     expect(migrations).toBe(1)
     expect(metasOf(s).size).toBe(0)
+  })
+})
+
+describe("sealed files", () => {
+  const SECRET_ID = "sealedsealedseal"
+  const withSealed = (path = "t.test.py") => {
+    const s = new ProjectStore(false)
+    metasOf(s).set(path, { id: SECRET_ID, kind: "text", size: 6, sealed: true })
+    return s
+  }
+  const context = (store: ProjectStore): AgentContext => ({
+    store,
+    provider: { isOwner: true } as CollabProvider,
+    app: { moved: vi.fn(), open: vi.fn(), active: () => "main.py" } as unknown as AgentApp,
+  })
+  const answer = async (name: string, args: object, store: ProjectStore) => {
+    const result = await runTool(name, args, context(store))
+    return { error: !!result.isError, text: JSON.stringify(result.content) }
+  }
+
+  it("has no document: no text in Yjs or IndexedDB", () => {
+    const s = withSealed()
+    expect(s.has(`f:${SECRET_ID}`)).toBe(false)
+    expect(s.ids()).not.toContain(`f:${SECRET_ID}`)
+    const created: string[] = []
+    s.onDoc((id) => created.push(id))
+    createFile(s, "main.py", "")
+    expect(created).toEqual([`f:${metasOf(s).get("main.py")!.id}`])
+  })
+
+  it("does not get one from someone else's structure either", () => {
+    const a = withSealed()
+    const b = new ProjectStore(false)
+    Y.applyUpdate(b.structure, Y.encodeStateAsUpdate(a.structure))
+    expect(b.has(`f:${SECRET_ID}`)).toBe(false)
+  })
+
+  it("is not in snapshotFiles, duplicates or flags", () => {
+    const s = withSealed("a/t.test.py")
+    createFile(s, "a/x.py", "x")
+    expect(Object.keys(snapshotFiles(s))).toEqual(["a/x.py"])
+
+    expect(duplicatePath(s, "a")).toEqual({ to: "a copy" })
+    expect(metasOf(s).has("a copy/t.test.py")).toBe(false)
+    expect(metasOf(s).has("a copy/x.py")).toBe(true)
+
+    const before = metasOf(s).get("a/t.test.py")
+    expect("error" in duplicatePath(s, "a/t.test.py")).toBe(true)
+    expect(metasOf(s).size).toBe(3)
+
+    // Its owner cannot show it or make it an ordinary file.
+    setFlag(s, "a/t.test.py", "hidden", false)
+    setFlag(s, "a/t.test.py", "protected", true)
+    expect(metasOf(s).get("a/t.test.py")).toEqual(before)
+  })
+
+  // Review focus 3: whichever way the path gets taken, the old sealed file is gone.
+  it("is replaced by createFile", () => {
+    const s = withSealed()
+    createFile(s, "t.test.py", "mine")
+    const meta = metasOf(s).get("t.test.py")!
+    expect(meta.sealed).toBeUndefined()
+    expect(meta.id).not.toBe(SECRET_ID)
+    expect(textOf(s, "t.test.py")!.toString()).toBe("mine")
+  })
+
+  it("is replaced by renamePath onto its path", () => {
+    const s = withSealed()
+    createFile(s, "mine.py", "my text")
+    const id = metasOf(s).get("mine.py")!.id
+    renamePath(s, "mine.py", "t.test.py")
+    const meta = metasOf(s).get("t.test.py")!
+    expect(meta.id).toBe(id)
+    expect(meta.sealed).toBeUndefined()
+    expect(textOf(s, "t.test.py")!.toString()).toBe("my text")
+    expect(metasOf(s).has("mine.py")).toBe(false)
+  })
+
+  it("is replaced when a whole folder is renamed over it", () => {
+    const s = withSealed("b/t.test.py")
+    createFile(s, "a/t.test.py", "from a")
+    renamePath(s, "a", "b")
+    expect(metasOf(s).get("b/t.test.py")!.sealed).toBeUndefined()
+    expect(textOf(s, "b/t.test.py")!.toString()).toBe("from a")
+  })
+
+  it("moves with its folder, still sealed, when nothing takes its path", () => {
+    const s = withSealed("a/t.test.py")
+    renamePath(s, "a", "b")
+    expect(metasOf(s).get("b/t.test.py")).toMatchObject({ id: SECRET_ID, sealed: true })
+    expect(s.has(`f:${SECRET_ID}`)).toBe(false)
+  })
+
+  it("is replaced by the agent's write_file, and read_file then gives the new text", async () => {
+    const s = withSealed()
+    const written = await answer("write_file", { path: "t.test.py", content: "agent text" }, s)
+    expect(written.error).toBe(false)
+    const meta = metasOf(s).get("t.test.py")!
+    expect(meta.sealed).toBeUndefined()
+    expect(meta.id).not.toBe(SECRET_ID)
+    const read = await answer("read_file", { path: "t.test.py" }, s)
+    expect(read.error).toBe(false)
+    expect(read.text).toContain("agent text")
+  })
+
+  it("the agent's create_file takes its path as if it were free", async () => {
+    const s = withSealed()
+    expect((await answer("create_file", { path: "t.test.py", content: "new" }, s)).error).toBe(false)
+    expect(metasOf(s).get("t.test.py")!.sealed).toBeUndefined()
+  })
+
+  it("the agent's read_file answers as for a file that does not exist", async () => {
+    const seen = await answer("read_file", { path: "t.test.py" }, withSealed())
+    const missing = await answer("read_file", { path: "t.test.py" }, new ProjectStore(false))
+    expect(seen).toEqual(missing)
+    expect(seen.error).toBe(true)
+  })
+
+  it("the agent's overview, list and search do not show it", async () => {
+    const s = withSealed("hidden_test_name.test.py")
+    createFile(s, "main.py", "needle")
+    for (const [tool, args] of [
+      ["project_overview", {}],
+      ["list_files", {}],
+      ["search_files", { query: "needle" }],
+    ] as const) {
+      const { text } = await answer(tool, args, s)
+      expect(text).not.toContain("hidden_test_name")
+      expect(text).not.toContain(SECRET_ID)
+    }
   })
 })

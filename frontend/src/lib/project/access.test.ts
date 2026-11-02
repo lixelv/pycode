@@ -179,3 +179,46 @@ describe("isReserved", () => {
     expect(isReserved("a/.pycode.env")).toBe(false)
   })
 })
+
+describe("sealed files", () => {
+  const owner: Member = { level: "admin", roles: [], owner: true }
+  const sealedRules = (over: Partial<Rules> = {}) =>
+    rules({
+      files: {
+        "main.py": meta("m"),
+        "t.test.py": meta("sealedid", { sealed: true }),
+        "s/ivan/u.test.py": meta("sealedinrole", { sealed: true }),
+        "own.test.py": meta("own", { hidden: true }),
+      },
+      ...over,
+    })
+
+  it("fileAccess gives nobody a sealed file, the owner and admins included", () => {
+    for (const m of [owner, admin, writer, reader, ivan]) {
+      expect(fileAccess(m, "t.test.py", sealedRules())).toBe("none")
+      expect(fileAccess(m, "s/ivan/u.test.py", sealedRules())).toBe("none")
+    }
+  })
+
+  it("a frozen project changes nothing about it", () => {
+    expect(fileAccess(owner, "t.test.py", sealedRules({ frozen: true }))).toBe("none")
+  })
+
+  it("docAccess gives no one its document, so it never travels to peers", () => {
+    for (const m of [owner, admin, writer, reader]) expect(docAccess(m, "f:sealedid", sealedRules())).toBe("none")
+  })
+
+  it("a hidden file of one's own project stays an ordinary file for its owner", () => {
+    expect(fileAccess(owner, "own.test.py", sealedRules())).toBe("write")
+    expect(docAccess(owner, "f:own", sealedRules())).toBe("write")
+    expect(fileAccess(writer, "own.test.py", sealedRules())).toBe("none")
+  })
+
+  it("no run sees it", () => {
+    const r = sealedRules()
+    expect(runVisible("main.py", "t.test.py", r)).toBe(false)
+    expect(runVisible("t.test.py", "t.test.py", r)).toBe(false)
+    expect(runVisible("s/ivan/a.py", "s/ivan/u.test.py", r)).toBe(false)
+    expect(runVisible("main.py", "main.py", r)).toBe(true)
+  })
+})

@@ -2,7 +2,7 @@ import { strToU8, zipSync } from "fflate"
 import { describe, expect, it } from "vitest"
 
 import { getBlob } from "./blobs"
-import { addFiles, addLanguagesFor, createFile, deletePath, ensureTournament, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, replaceProject, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf, tournamentsOf } from "./project"
+import { addFiles, addLanguagesFor, createFile, envOf, deletePath, ensureTournament, exportZip, importZip, isCpp, isText, languageOf, languagesOf, metasOf, needsLanguage, openArchive, packagesKind, projectSize, PROJECT_LIMIT, replaceProject, resetProject, startProject, STARTERS, stateOf, testPathOf, textOf, tournamentsOf } from "./project"
 import { ProjectStore } from "./store"
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -259,5 +259,66 @@ describe("tournaments", () => {
     expect(calls).toBe(0)
     ensureTournament(s, "a", false)
     expect(calls).toBe(1)
+  })
+})
+
+describe("sealed files and archives", () => {
+  const sealed = (s: ProjectStore, path: string, extra = {}) => metasOf(s).set(path, { id: `sealed-${path}`, kind: "text", size: 4, sealed: true, ...extra })
+
+  it("leaves sealed files out of an archive and of its access rules", async () => {
+    const s = new ProjectStore(false)
+    createFile(s, "main.py", "x")
+    sealed(s, "t.test.py")
+    metasOf(s).set("data.bin", { id: "b", kind: "binary", size: 2, hash: "a".repeat(64), sealed: true })
+    const missing: string[] = []
+    const zip = importZip(await exportZip(s, undefined, missing))
+    expect(zip.entries.map((e) => e.path)).toEqual(["main.py"])
+    // Not even a "missing file" report or a line in .polycode.env.
+    expect(missing).toEqual([])
+    expect(zip.env).toBeNull()
+    expect(envOf(s).hidden).toEqual([])
+  })
+
+  // Review focus 3.
+  it("a dropped file takes a sealed path as an ordinary file, without a number", async () => {
+    const s = new ProjectStore(false)
+    sealed(s, "t.test.py")
+    const res = await addFiles(s, "", [{ path: "t.test.py", bytes: utf8("mine") }])
+    expect(res).toEqual({ added: ["t.test.py"] })
+    const meta = metasOf(s).get("t.test.py")!
+    expect(meta.sealed).toBeUndefined()
+    expect(meta.id).not.toBe("sealed-t.test.py")
+    expect(textOf(s, "t.test.py")!.toString()).toBe("mine")
+  })
+
+  it("a dropped binary file takes a sealed path too", async () => {
+    const s = new ProjectStore(false)
+    sealed(s, "logo.png")
+    expect(await addFiles(s, "", [{ path: "logo.png", bytes: PNG }])).toEqual({ added: ["logo.png"] })
+    expect(metasOf(s).get("logo.png")).toMatchObject({ kind: "binary" })
+    expect(metasOf(s).get("logo.png")!.sealed).toBeUndefined()
+  })
+
+  it("an opened archive takes a sealed path as an ordinary file", async () => {
+    const s = new ProjectStore(false)
+    sealed(s, "t.test.py")
+    const zip = zipSync({ "t.test.py": strToU8("from archive") })
+    await openArchive(s, importZip(zip))
+    const meta = metasOf(s).get("t.test.py")!
+    expect(meta.sealed).toBeUndefined()
+    expect(textOf(s, "t.test.py")!.toString()).toBe("from archive")
+  })
+
+  it("testPathOf finds a sealed test among the project's paths", () => {
+    const s = new ProjectStore(false)
+    createFile(s, "tasks/sum.py", "")
+    sealed(s, "tasks/sum.test.py")
+    expect(testPathOf("tasks/sum.py", [...metasOf(s).keys()])).toBe("tasks/sum.test.py")
+  })
+
+  it("a sealed file has no text to show", () => {
+    const s = new ProjectStore(false)
+    sealed(s, "t.test.py")
+    expect(textOf(s, "t.test.py")).toBeNull()
   })
 })

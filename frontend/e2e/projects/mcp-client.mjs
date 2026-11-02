@@ -47,7 +47,10 @@ await scenario("projects/mcp-client", async (browser) => {
     const list = (await first.json("list_tabs")).tabs
     return list.length === 2 ? list : null
   })
-  const [t1, t2] = tabs.map((t) => t.tab_id)
+  // list_tabs is sorted by id: which page holds which id is for the pages to say.
+  const idIn = (page) => page.evaluate((ids) => Object.values(sessionStorage).find((v) => ids.includes(v)), tabs.map((t) => t.tab_id))
+  const [t1, t2] = [await idIn(pageOne), await idIn(pageTwo)]
+  assert.ok(t1 && t2 && t1 !== t2, "each page holds its own tab id")
   assert.equal(tabs[0].project, null)
 
   // Not chosen yet.
@@ -71,7 +74,8 @@ await scenario("projects/mcp-client", async (browser) => {
   assert.equal(wroteB.tab_id, t2)
   assert.equal(wroteB.project.id, b.id)
 
-  await first.call("write_file", { path: "from_first.py", content: "1" })
+  const w1 = await first.call("write_file", { path: "from_first.py", content: "1" })
+  assert.ok(!w1.isError, JSON.stringify(w1))
   await second.call("write_file", { path: "from_second.py", content: "2" })
   await until("the first file in the first tab", async () => (await textOf(pageOne, "from_first.py")) === "1")
   await until("the second file in the second tab", async () => (await textOf(pageTwo, "from_second.py")) === "2")

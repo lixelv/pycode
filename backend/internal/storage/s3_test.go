@@ -24,6 +24,16 @@ func testS3(t *testing.T) (*S3, string, string) {
 		t.Skip("S3_TEST_ENDPOINT is not set")
 	}
 	endpoint = strings.TrimPrefix(endpoint, "http://")
+	// S3_TEST_SSL=true for a real provider (R2 answers only HTTPS).
+	ssl := os.Getenv("S3_TEST_SSL") == "true"
+	scheme := "http://"
+	if ssl {
+		scheme = "https://"
+	}
+	region := os.Getenv("S3_TEST_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
 	bucket := os.Getenv("S3_TEST_BUCKET")
 	s, err := New(context.Background(), Config{
 		Endpoint:       endpoint,
@@ -31,14 +41,15 @@ func testS3(t *testing.T) (*S3, string, string) {
 		Bucket:         bucket,
 		AccessKey:      os.Getenv("S3_TEST_ACCESS_KEY"),
 		SecretKey:      os.Getenv("S3_TEST_SECRET_KEY"),
-		Region:         "us-east-1",
+		Region:         region,
+		UseSSL:         ssl,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	prefix := "storage-test/" + uuid.NewString() + "/"
 	t.Cleanup(func() { _ = s.DeletePrefix(context.Background(), prefix) })
-	return s, "http://" + endpoint + "/" + bucket, prefix
+	return s, scheme + endpoint + "/" + bucket, prefix
 }
 
 func send(t *testing.T, method, target, body string) (int, string) {
@@ -77,9 +88,10 @@ func TestAnonymousDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, method := range []string{"GET", "HEAD", "PUT", "DELETE"} {
+		// Refused, however the provider words it (R2 says 400).
 		status, body := send(t, method, base+"/"+key, "anon")
-		if status != http.StatusForbidden {
-			t.Errorf("anonymous %s: got %d, want 403", method, status)
+		if status < 400 || status >= 500 {
+			t.Errorf("anonymous %s: got %d, want a refusal", method, status)
 		}
 		if strings.Contains(body, "secret") {
 			t.Errorf("anonymous %s saw the object", method)
@@ -104,8 +116,8 @@ func TestListDeniedWithoutSignature(t *testing.T) {
 		base + "?delimiter=/",
 	} {
 		status, body := send(t, "GET", target, "")
-		if status != http.StatusForbidden {
-			t.Errorf("GET %s: got %d, want 403", target, status)
+		if status < 400 || status >= 500 {
+			t.Errorf("GET %s: got %d, want a refusal", target, status)
 		}
 		if strings.Contains(body, prefix) {
 			t.Errorf("GET %s listed the keys", target)

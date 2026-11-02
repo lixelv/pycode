@@ -10,6 +10,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    environment:
+      # Into the CSP's connect-src: the browser talks to S3 directly.
+      S3_PUBLIC_ORIGIN: ${S3_PUBLIC_ORIGIN:-http://localhost:9100}
+      NGINX_ENVSUBST_OUTPUT_DIR: /tmp/nginx
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -25,6 +29,16 @@ services:
       LISTEN_ADDR: ":8090"
       # Only for VPNs with "fake IP" DNS on a dev machine, e.g. 198.18.0.0/15.
       PROXY_ALLOW_CIDRS: ${PROXY_ALLOW_CIDRS:-}
+      S3_ENDPOINT: s3:8333
+      # What presigned URLs are signed for: the address the browser reaches.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-localhost:9100}
+      S3_BUCKET: polycode
+      S3_ACCESS_KEY: polycode
+      S3_SECRET_KEY: polycode-dev-secret
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+      # Dev only: create the bucket with CORS for this origin on start.
+      S3_DEV_BUCKET_ORIGIN: ${APP_ORIGIN:-http://localhost:8081}
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -32,6 +46,27 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      s3:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # A local S3, for development and tests only: production names its own.
+  s3:
+    image: chrislusf/seaweedfs:4.05
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/s3.json -volume.max=10
+    configs:
+      - source: s3-identities
+        target: /etc/s3.json
+    ports:
+      - "${S3_PORT:-9100}:8333"
+    volumes:
+      - s3-data:/data
+    healthcheck:
+      # Any HTTP answer: without a signature the gateway says 403.
+      test: ["CMD-SHELL", "wget -q -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
     restart: unless-stopped
 
   db:
@@ -49,5 +84,11 @@ services:
       retries: 10
     restart: unless-stopped
 
+configs:
+  s3-identities:
+    content: |
+      {"identities":[{"name":"polycode","credentials":[{"accessKey":"polycode","secretKey":"polycode-dev-secret"}],"actions":["Admin","Read","List","Tagging","Write"]}]}
+
 volumes:
   db-data:
+  s3-data:

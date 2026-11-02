@@ -25,6 +25,8 @@ export interface SessionInfo {
   code: string
   ownerId: string
   askName: boolean
+  /** The project whose room this is. */
+  projectId?: string
 }
 
 /** A role's join code. */
@@ -68,7 +70,7 @@ type Control =
   | { type: "reset"; from: number }
   | { type: "error"; error: string }
   | { type: "removed"; ban?: boolean }
-  | { type: "mcp"; id: number; name: string; data: unknown }
+  | { type: "saver"; saver?: number; token?: string }
   | { type: "ended" }
 
 /** Who sent a signal, as the server and the link know it (not as the signal claims). */
@@ -86,8 +88,8 @@ type Events = {
   error: (message: string) => void
   /** Links, roles or the acting owner changed. */
   links: () => void
-  /** An agent's tool call (MCP), for us as the acting owner; answer with mcpResult. */
-  mcp: (id: number, name: string, args: unknown) => void
+  /** This tab was named (a token) or is no longer (null) the one writing the project to S3. */
+  saver: (token: string | null) => void
 }
 
 // Data messages between peers (first byte).
@@ -301,7 +303,8 @@ export class CollabProvider {
   readonly links = new Map<number, Link>()
 
   private ws: WebSocket | null = null
-  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set(), error: new Set(), mcp: new Set() }
+  private readonly ownProject: boolean
+  private listeners: { [K in keyof Events]: Set<Events[K]> } = { status: new Set(), reset: new Set(), signal: new Set(), links: new Set(), error: new Set(), saver: new Set() }
   private retry = 0
   private retryTimer: number | undefined
   private closed = false
@@ -309,8 +312,9 @@ export class CollabProvider {
   private readonly onAwareness: (changes: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => void
 
   /** `name`: what the others see (a generated one when the session does not ask). */
-  constructor(session: SessionInfo, me: string, store: ProjectStore, name?: string | null) {
+  constructor(session: SessionInfo, me: string, store: ProjectStore, name?: string | null, ownProject = false) {
     this.session = session
+    this.ownProject = ownProject
     this.store = store
     this.awareness = new Awareness(store.structure)
     this.awareness.setLocalStateField("user", { id: me, name: name || nameFor(me), color: colorFor(me) } satisfies PeerUser)
@@ -394,11 +398,6 @@ export class CollabProvider {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "setRole", to: peer, level, roles }))
   }
 
-  /** The answer to an agent's tool call (MCP). */
-  mcpResult(id: number, result: unknown) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "mcp-result", id, data: result }))
-  }
-
   /** Removes a member; with `ban` they cannot rejoin (the server checks who may). */
   kick(peer: number, ban: boolean) {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "kick", to: peer, ban }))
@@ -460,7 +459,9 @@ export class CollabProvider {
   private connect() {
     if (this.closed) return
     const proto = location.protocol === "https:" ? "wss" : "ws"
-    const ws = new WebSocket(`${proto}://${location.host}/api/sessions/${this.session.code}/ws`)
+    // The owner's way into a project's room needs no code: ending the session revokes them all.
+    const path = this.session.projectId && this.ownProject ? `/api/projects/${this.session.projectId}/ws` : `/api/sessions/${this.session.code}/ws`
+    const ws = new WebSocket(`${proto}://${location.host}${path}`)
     ws.binaryType = "arraybuffer"
     this.ws = ws
     this.setStatus("connecting")
@@ -476,6 +477,7 @@ export class CollabProvider {
     ws.onclose = () => {
       if (this.ws !== ws) return
       this.ws = null
+      this.listeners.saver.forEach((fn) => fn(null))
       this.links.forEach((l) => l.close())
       this.links.clear()
       this.emitLinks()
@@ -539,8 +541,8 @@ export class CollabProvider {
       case "error":
         this.listeners.error.forEach((fn) => fn(msg.error))
         break
-      case "mcp":
-        this.listeners.mcp.forEach((fn) => fn(msg.id, msg.name, msg.data))
+      case "saver":
+        this.listeners.saver.forEach((fn) => fn(msg.token ?? null))
         break
       case "removed":
         // Kicked or banned: do not come back on our own.
@@ -782,6 +784,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function createSession(askName: boolean, roles: { name: string; level: "read" | "write" }[]) {
   return api<{ session: SessionInfo; codes: RoleCode[] }>("/api/sessions", { method: "POST", body: JSON.stringify({ askName, roles }) })
+}
+
+/** The session of a user's own project, with working codes for Share. */
+export function projectSession(project: string, roles: { name: string; level: "read" | "write" }[] = []) {
+  return api<{ session: SessionInfo; codes: RoleCode[] }>(`/api/projects/${project}/session`, { method: "POST", body: JSON.stringify({ roles }) })
 }
 
 export function getSession(code: string) {

@@ -108,7 +108,7 @@ export async function openProject(who, id) {
 }
 
 export async function appReady(page) {
-  await page.waitForFunction(() => !!window.__polycode?.store, { timeout: 60_000 })
+  await page.waitForFunction(() => !!window.__polycode?.store, { timeout: 60_000, polling: 200 }) // the default polls on animation frames, and a tab in the background has none
   await page.evaluate(() => window.__polycode.store.ready)
 }
 
@@ -152,7 +152,7 @@ export async function clickButton(page, label, timeout = 15_000) {
       const norm = (s) => (s ?? "").trim().toLowerCase()
       return [...document.querySelectorAll('button, [role="button"], [role="menuitem"]')].find((b) => norm(b.textContent) === norm(wanted) || norm(b.getAttribute("aria-label")) === norm(wanted) || norm(b.getAttribute("title")) === norm(wanted))
     },
-    { timeout },
+    { timeout, polling: 200 },
     label,
   )
   await handle.asElement().click()

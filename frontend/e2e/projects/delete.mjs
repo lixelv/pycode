@@ -21,13 +21,14 @@ await scenario("projects/delete", async (browser) => {
   assert.equal((await api(alice, "GET", `/api/projects/${project.id}`)).status, 404)
   assert.equal((await api(alice, "POST", `/api/projects/${project.id}/presign`, { ops: [{ op: "get", key: "public/structure.ybin.gz" }] })).status, 404)
 
-  // The tab still open goes on editing: it gets 404, stops, and writes nothing.
+  // The tab still open is told and leaves; if it were still editing, nothing it writes reaches S3.
   const failures = []
   page.on("response", (r) => {
     if (r.url().includes(`/projects/${project.id}/`) && r.request().method() === "PUT" && r.ok()) failures.push(r.url())
   })
   await page.evaluate(() => {
-    const { store } = window.__polycode
+    const store = window.__polycode?.store
+    if (!store) return
     const meta = store.structure.getMap("files").get("main.py")
     if (meta) store.doc(`f:${meta.id}`).getText("t").insert(0, "# late edit\n")
   })

@@ -38,7 +38,7 @@ await scenario("projects/agent-visible", async (browser) => {
   // A student who joined by a code sees it too: the agent is seen by the class.
   const session = await api(alice, "POST", `/api/projects/${project.id}/session`)
   assert.ok(session.status < 300, session.text)
-  const code = session.json.code
+  const code = session.json.session.code
   const bob = await person(browser)
   const student = await newPage(bob.context)
   await student.goto(`${BASE}/s/${code}`)

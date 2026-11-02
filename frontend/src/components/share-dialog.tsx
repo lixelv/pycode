@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Link2, Loader2, LogOut, Plus, Power, Radio, X } from "lucide-react"
+import { Check, ChevronDown, Copy, Globe, Link2, Loader2, LogOut, Plus, Power, X } from "lucide-react"
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
@@ -17,7 +17,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { Peer } from "@/hooks/use-collab"
-import { addRole, formatCode, listCodes, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
+import { addRole, formatCode, listCodes, projectSession, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
+import { getProject, setProjectPublic } from "@/lib/project/cloud"
+import type { PageProject } from "@/lib/project/page"
 import { useI18n } from "@/lib/i18n"
 import type { Level, Member } from "@/lib/project/access"
 import { BUILT_IN, memberLabel, roleLabel } from "@/lib/roles"
@@ -33,7 +35,8 @@ interface ShareDialogProps {
   /** The project shown (its custom roles live in it). */
   store: ProjectStore
   peers: Peer[]
-  onStart: (askName: boolean) => Promise<void>
+  /** Our own project, whose room this is. */
+  project: Extract<PageProject, { kind: "own" }> | null
   onJoin: (code: string) => Promise<void>
   onLeave: () => void
   onEnd: () => Promise<void>
@@ -52,9 +55,8 @@ export function ShareDialog(props: ShareDialogProps) {
   )
 }
 
-function StartOrJoin({ available, store, onStart, onJoin, onOpenChange }: ShareDialogProps) {
+function StartOrJoin({ available, onJoin, onOpenChange }: ShareDialogProps) {
   const { t } = useI18n()
-  const [askName, setAskName] = useState(false)
   const [code, setCode] = useState("")
   const [busy, setBusy] = useState<"start" | "join" | null>(null)
 
@@ -89,22 +91,6 @@ function StartOrJoin({ available, store, onStart, onJoin, onOpenChange }: ShareD
           {t("share.unavailable")}
         </p>
       )}
-
-      <section className="flex flex-col gap-3">
-        <div className="text-sm font-medium">{t("share.start")}</div>
-        <CustomRoles store={store} />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={askName} onChange={(e) => setAskName(e.target.checked)} className="size-4 accent-foreground" />
-          {t("share.askName")}
-        </label>
-        <Button disabled={!available || busy !== null} onClick={() => void run("start", () => onStart(askName))}>
-          {busy === "start" ? <Loader2 className="animate-spin" /> : <Radio />} {t("share.startBtn")}
-        </Button>
-      </section>
-
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span className="h-px flex-1 bg-border" /> {t("share.or")} <span className="h-px flex-1 bg-border" />
-      </div>
 
       <form onSubmit={join} className="flex gap-2">
         <input
@@ -210,7 +196,38 @@ function Segmented({ value, onChange }: { value: "read" | "write"; onChange: (v:
   )
 }
 
-function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: ShareDialogProps & { provider: CollabProvider }) {
+/** Make public / Make private. Before going public everything is saved and nothing stays where it must not. */
+function Visibility({ project }: { project: NonNullable<ShareDialogProps["project"]> }) {
+  const { t } = useI18n()
+  const [isPublic, setPublic] = useState(project.info.public)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    getProject(project.info.id).then((p) => setPublic(p.public), () => {})
+  }, [project])
+  const change = async () => {
+    setBusy(true)
+    try {
+      if (!isPublic) await project.saver.reconcile()
+      setPublic((await setProjectPublic(project.info.id, !isPublic)).public)
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="text-sm font-medium">{t("share.visibility")}</div>
+      <p className="text-xs text-muted-foreground">{t(isPublic ? "share.publicText" : "share.privateText")}</p>
+      {isPublic && <CopyField label={t("share.link")} value={`${location.origin}/p/${project.info.id}`} />}
+      <Button variant="outline" disabled={busy} onClick={() => void change()}>
+        {busy ? <Loader2 className="animate-spin" /> : <Globe />} {t(isPublic ? "share.makePrivate" : "share.makePublic")}
+      </Button>
+    </section>
+  )
+}
+
+function LiveSession({ provider, store, peers, project, onLeave, onEnd, onOpenChange }: ShareDialogProps & { provider: CollabProvider }) {
   const { t } = useI18n()
   const [ending, setEnding] = useState(false)
   const [codes, setCodes] = useState<RoleCode[] | null>(null)
@@ -218,12 +235,19 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
   const customRoles = (codes ?? []).map((c) => c.role).filter((r) => !BUILT_IN[r])
 
   const refresh = useCallback(() => {
-    if (admin) listCodes(provider.code).then((r) => setCodes(r.codes)).catch((err: Error) => toast.error(err.message))
-  }, [admin, provider])
+    // A project's codes may have been revoked: asking for its session issues new ones.
+    if (project) {
+      projectSession(project.info.id)
+        .then((r) => {
+          provider.session = { ...provider.session, code: r.session.code }
+          setCodes(r.codes)
+        })
+        .catch((err: Error) => toast.error(err.message))
+    } else if (admin) listCodes(provider.code).then((r) => setCodes(r.codes)).catch((err: Error) => toast.error(err.message))
+  }, [admin, provider, project])
   useEffect(refresh, [refresh])
 
   const ORDER = ["admin", "write", "read"]
-  const adminCode = codes?.find((c) => c.role === "admin")?.code
   const sorted = [...(codes ?? [])].sort((a, b) => {
     const ia = ORDER.indexOf(a.role)
     const ib = ORDER.indexOf(b.role)
@@ -246,6 +270,8 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
         <DialogDescription>{admin ? t("share.rolesText") : t("share.linkText")}</DialogDescription>
       </DialogHeader>
 
+      {project && <Visibility project={project} />}
+
       {admin ? (
         <section className="flex flex-col gap-2">
           <div className="text-sm font-medium">{t("share.roles")}</div>
@@ -259,13 +285,6 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
               <RoleRow key={c.role} code={c} />
             ))}
           </ul>
-          {adminCode && (
-            <div className="grid gap-1">
-              <div className="text-xs font-medium">{t("share.mcp")}</div>
-              <CopyField label="MCP" value={`${location.origin}/s/${adminCode}/mcp`} />
-              <p className="text-xs text-muted-foreground">{t("share.mcpHint")}</p>
-            </div>
-          )}
           <CustomRoles
             store={store}
             onAdded={(name, level) =>
@@ -307,15 +326,17 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
       </section>
 
       <div className="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          onClick={() => {
-            onLeave()
-            onOpenChange(false)
-          }}
-        >
-          <LogOut /> {t("share.leave")}
-        </Button>
+        {!project && (
+          <Button
+            variant="outline"
+            onClick={() => {
+              onLeave()
+              onOpenChange(false)
+            }}
+          >
+            <LogOut /> {t("share.leave")}
+          </Button>
+        )}
         {provider.member.owner && (
           <Button
             variant="destructive"
@@ -324,7 +345,8 @@ function LiveSession({ provider, store, peers, onLeave, onEnd, onOpenChange }: S
               setEnding(true)
               try {
                 await onEnd()
-                onOpenChange(false)
+                if (project) refresh()
+                else onOpenChange(false)
               } catch (err) {
                 toast.error((err as Error).message)
               } finally {

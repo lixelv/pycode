@@ -34,7 +34,7 @@ services:
       - /tmp
     environment:
       S3_PUBLIC_ORIGIN: ${S3_PUBLIC_ORIGIN:?set S3_PUBLIC_ORIGIN, e.g. https://s3.example.com}
-      NGINX_ENVSUBST_OUTPUT_DIR: /tmp/nginx
+      NGINX_ENVSUBST_OUTPUT_DIR: /tmp
     depends_on:
       backend:
         condition: service_started

@@ -5,14 +5,15 @@ import { fetchMe } from "@/lib/collab/identity"
 import { translate } from "@/lib/i18n"
 import {
   CollabProvider,
-  createSession,
   endSession,
   getSession,
   type LinkMode,
   type PeerUser,
+  projectSession,
   type ProviderStatus,
 } from "@/lib/collab/provider"
 import type { Member } from "@/lib/project/access"
+import type { PageProject } from "@/lib/project/page"
 import { localStore, rolesOf } from "@/lib/project/project"
 import { ProjectStore } from "@/lib/project/store"
 
@@ -35,7 +36,7 @@ const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
  * every change is saved in their browser); a guest works on a fresh store that
  * fills from the others and is dropped on leaving — back to their own project.
  */
-export function useCollab() {
+export function useCollab(page: PageProject | null = null) {
   const [me, setMe] = useState<string | null>(null)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [provider, setProvider] = useState<CollabProvider | null>(null)
@@ -75,8 +76,8 @@ export function useCollab() {
       dispose(old)
       return p
     })
-    history.replaceState(null, "", `/s/${p.code}`)
-  }, [])
+    if (!page) history.replaceState(null, "", `/s/${p.code}`)
+  }, [page])
 
   const join = useCallback(
     async (rawCode: string) => {
@@ -84,24 +85,15 @@ export function useCollab() {
       const code = rawCode.trim().replace(/^.*\/s\//, "")
       const { session } = await getSession(code)
       if (session.endedAt) throw new Error("This session has ended.")
-      const isOwner = session.ownerId === me
-      // The owner rejoining shares their own project again.
+      // The owner works on their project under its own address.
+      if (session.ownerId === me && session.projectId) {
+        location.replace(`/p/${session.projectId}`)
+        return
+      }
       const name = session.askName ? await askName(session.id) : null
-      const store = isOwner ? localStore() : new ProjectStore(false)
+      const store = new ProjectStore(false)
       await store.ready
       attach(new CollabProvider(session, me, store, name))
-    },
-    [me, attach, askName],
-  )
-
-  const start = useCallback(
-    async (ask: boolean) => {
-      if (!me) throw new Error("The collaboration server is not available.")
-      const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
-      const { session } = await createSession(ask, roles)
-      const name = ask ? await askName(session.id) : null
-      await localStore().ready
-      attach(new CollabProvider(session, me, localStore(), name))
     },
     [me, attach, askName],
   )
@@ -111,26 +103,45 @@ export function useCollab() {
       dispose(old)
       return null
     })
-    setPeers([])
-    setStatus(null)
-    history.replaceState(null, "", "/")
+    location.assign("/")
   }, [])
 
   const end = useCallback(async () => {
     if (!provider) return
     await endSession(provider.code)
-    leave()
-  }, [provider, leave])
+    // A project's room goes on for its owner; the guests are gone and their codes with them.
+    if (!page) leave()
+  }, [provider, leave, page])
+
+  // The room of our own project: every tab of it is in, whether it is shared or not.
+  const own = page?.kind === "own" ? page : null
+  useEffect(() => {
+    if (!own || !me) return
+    let live = true
+    const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
+    projectSession(own.info.id, roles).then(
+      ({ session }) => {
+        if (!live) return
+        const p = new CollabProvider(session, me, localStore(), null, true)
+        p.on("saver", (token) => own.saver.setToken(token))
+        attach(p)
+      },
+      (err: Error) => toast.error(err.message),
+    )
+    return () => {
+      live = false
+    }
+  }, [own, me, attach])
 
   // Join from a /s/<code> link.
   useEffect(() => {
     const m = SESSION_PATH.exec(location.pathname)
-    if (!m || !me) return
+    if (!m || !me || page) return
     join(m[1]).catch((err: Error) => {
       toast.error(err.message)
-      history.replaceState(null, "", "/")
+      location.assign("/")
     })
-  }, [me, join])
+  }, [me, join, page])
 
   // Track status and the people in the session.
   useEffect(() => {
@@ -170,7 +181,7 @@ export function useCollab() {
     }
   }, [provider, leave])
 
-  return { me, available, provider, status, version, peers, nameAsk, start, join, leave, end }
+  return { me, available, provider, status, version, peers, nameAsk, join, leave, end }
 }
 
 const LAST_NAME = "polycode:name"

@@ -13,7 +13,7 @@ services:
     environment:
       # Into the CSP's connect-src: the browser talks to S3 directly.
       S3_PUBLIC_ORIGIN: ${S3_PUBLIC_ORIGIN:-http://localhost:9100}
-      NGINX_ENVSUBST_OUTPUT_DIR: /tmp/nginx
+      NGINX_ENVSUBST_OUTPUT_DIR: /tmp
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -53,7 +53,7 @@ services:
   # A local S3, for development and tests only: production names its own.
   s3:
     image: chrislusf/seaweedfs:4.05
-    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/s3.json -volume.max=10
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/s3.json -volume.max=100 -master.volumeSizeLimitMB=128
     configs:
       - source: s3-identities
         target: /etc/s3.json

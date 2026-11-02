@@ -1,4 +1,4 @@
-import { Bug, Code2, Columns2, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, PanelBottom, Paintbrush, Play, Radio, Square, Sun } from "lucide-react"
+import { Bot, Bug, Code2, Columns2, CopyPlus, Eye, FlaskConical, FolderTree, Moon, Presentation as PresentationIcon, Snowflake, Tag, Network, PanelBottom, Paintbrush, Play, Radio, Square, Sun } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -89,7 +89,13 @@ import { serial } from "@/lib/queue"
 import { buildPage, scriptPage } from "@/lib/web-preview"
 import type { CheckOutcome, DebugCommand } from "@/workers/protocol"
 import { format, lint, ruffVersion, type Diagnostic } from "@/lib/ruff"
-import { runTool, type AgentApp } from "@/lib/agent/tools"
+import { executeCall } from "@/lib/agent/tab-socket"
+import type { AgentApp } from "@/lib/agent/tools"
+import { CloudError, copyProject } from "@/lib/project/cloud"
+import { openPage, type PageProject } from "@/lib/project/page"
+import { sealedText, type SaveStatus } from "@/lib/project/saver"
+import { McpDrivenPage, type McpTab } from "@/components/mcp-driven-page"
+import { ProjectListPage, ProjectMissing } from "@/components/project-list"
 import { callTool } from "@/lib/python/tools-client"
 import { memberLabel } from "@/lib/roles"
 import { cn } from "@/lib/utils"
@@ -125,18 +131,32 @@ type View = "editor" | "board" | "packages"
 // The whiteboard is big: loaded the first time its tab opens.
 const Board = lazy(() => import("@/components/board"))
 
-/** Waits for the local project (IndexedDB) before showing the workspace. */
+/** The pages: the list of projects, one project, a session as a guest, a tab for an agent. */
 export default function App() {
-  const [ready, setReady] = useState(false)
-  useEffect(() => {
-    applyTheme(loadTheme())
-    localStore().ready.then(() => setReady(true))
-  }, [])
-  if (!ready) return <div className="h-full bg-background" />
-  return <Workspace />
+  useEffect(() => applyTheme(loadTheme()), [])
+  const path = location.pathname
+  if (path === "/mcp-driven") return <McpDrivenPage />
+  const project = /^\/p\/([^/]+)\/?$/.exec(path)
+  if (project) return <ProjectPage id={project[1]} />
+  if (/^\/s\/[^/]+\/?$/.test(path)) return <Workspace page={null} />
+  return <ProjectListPage />
 }
 
-function Workspace() {
+function ProjectPage({ id }: { id: string }) {
+  const [page, setPage] = useState<PageProject | null>(null)
+  const [missing, setMissing] = useState(false)
+  useEffect(() => {
+    openPage(id).then(setPage, (err) => {
+      if (!(err instanceof CloudError) || err.status !== 404) toast.error((err as Error).message)
+      setMissing(true)
+    })
+  }, [id])
+  if (missing) return <ProjectMissing />
+  if (!page) return <div className="h-full bg-background" />
+  return <Workspace page={page} />
+}
+
+export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?: McpTab }) {
   const { lang, t } = useI18n()
   const [theme, setTheme] = useState(loadTheme)
   useEffect(() => {
@@ -178,12 +198,14 @@ function Workspace() {
   const split = useRef<HTMLDivElement>(null)
 
   // ---- project & session ------------------------------------------------------
-  const collab = useCollab()
+  const collab = useCollab(page)
+  const own = page?.kind === "own" ? page : null
+  const viewing = page?.kind === "view"
   const provider = collab.provider
   const store = provider?.store ?? localStore()
   const doc = store.runtime // console and run state
   const awareness = provider?.awareness ?? null
-  const isGuest = !!provider && provider.store !== localStore()
+  const isGuest = viewing || (!!provider && provider.store !== localStore())
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
     try {
@@ -193,7 +215,18 @@ function Workspace() {
     }
   }, [store, provider])
 
-  const access = useAccess(store, provider, collab.version)
+  const access = useAccess(store, provider, collab.version, viewing)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(own?.saver.status ?? "saved")
+  useEffect(() => {
+    if (!own) return
+    return own.saver.on(() => {
+      setSaveStatus(own.saver.status)
+      if (own.saver.gone) {
+        toast.message(t("projects.deleted"))
+        location.assign("/")
+      }
+    })
+  }, [own, t])
   // The project's languages decide which runtimes load; an empty new project asks for one.
   // Nothing loads until the project is there and has a language (a guest waits for the owner's).
   const [languages, setLanguages] = useState<ProjectLanguage[]>([])
@@ -465,14 +498,18 @@ function Workspace() {
   }, [doc])
   // ---- automatic checks: name.py against name.test.py, run in an admin's browser ----
   const [check, setCheck] = useState<CheckState | null>(null)
-  const hasTest = testPathOf(active, allFiles) !== null
+  const hasTest = testPathOf(active, allFiles) !== null // a sealed test counts: it is here, only not to read
   const canCheck = !provider || provider.isAdmin || provider.adminOnline
 
   /** Runs the tests of `path` here (we are an admin, or alone). */
   const checkHere = useCallback(
     async (path: string): Promise<Pick<CheckState, "results" | "error" | "tournament"> & { testFile?: string }> => {
       const testFile = testPathOf(path, Object.keys(rulesOf(store).files))
-      const test = testFile === null ? undefined : textOf(store, testFile)?.toString()
+      const testMeta = testFile === null ? undefined : metasOf(store).get(testFile)
+      if (testMeta?.sealed && !own) return { results: null, error: t("check.noOwner") }
+      let test = testFile === null ? undefined : textOf(store, testFile)?.toString()
+      // A sealed test's text is fetched for this check and goes only to it.
+      if (testMeta?.sealed && own) test = (await sealedText(own.cloud, testMeta).catch(() => null)) ?? undefined
       if (test === undefined) return { results: null, error: t("check.noTests") }
       const finished = ({ results, tournament }: CheckOutcome) => {
         return { results, testFile: testFile!, tournament: tournament && { ...tournament, max: maxPoints(results) } }
@@ -488,7 +525,7 @@ function Workspace() {
         return { results: null, error: message === "timeout" ? t("check.timeout") : t("check.failed", { error: message }) }
       }
     },
-    [store, provider, pkgs.activeSpecs, t, cppPackages, cppPkgs.fail],
+    [store, provider, pkgs.activeSpecs, t, cppPackages, cppPkgs.fail, own],
   )
 
   /** Puts a finished check into its tournament's table; true if it was refused. */
@@ -516,7 +553,8 @@ function Workspace() {
     if (done.tournament) ensureTournament(store, done.tournament.id, done.tournament.private)
     // In a session an admin's own check is only a try: the table is for students' runs.
     const userId = collab.me ?? "local"
-    const unrecorded = provider ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
+    // Alone in our own project's room is not a session.
+    const unrecorded = provider && provider.links.size > 0 ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
     setCheck({ path: active, ...done, unrecorded })
   }, [hasTest, canRun, active, provider, checkHere, t, collab.me, recordIn])
 
@@ -653,18 +691,21 @@ function Workspace() {
     }
   }, [store, provider, setBreakpoints, setLowerTab])
   const [agentTool, setAgentTool] = useState<string | null>(null)
+  // Only a /mcp-driven tab takes an agent's calls: an ordinary one is not waiting for any.
   useEffect(() => {
-    if (!provider) return
+    if (!mcpTab || !provider || !page) return
     let running = 0
-    return provider.on("mcp", (id, name, args) => {
+    mcpTab.setCallHandler(async (frame) => {
       running++
-      setAgentTool(name)
-      void runTool(name, args, { store, provider, app: agentApp }).then((result) => {
-        provider.mcpResult(id, result)
+      setAgentTool(frame.name)
+      try {
+        return await executeCall(frame, page.info.id, { store, provider, app: agentApp })
+      } finally {
         if (--running === 0) setAgentTool(null)
-      })
+      }
     })
-  }, [provider, store, agentApp])
+    return () => mcpTab.setCallHandler(null)
+  }, [mcpTab, page, provider, store, agentApp])
 
   // ---- project actions ----------------------------------------------------------
   const download = useCallback(async () => {
@@ -1047,7 +1088,22 @@ function Workspace() {
                 onStop={follow.stop}
               />
             )}
-            <ShareButton live={!!provider} peers={collab.peers} role={provider ? memberLabel(provider.member) : undefined} onClick={() => setShareOpen(true)} />
+            {viewing ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  copyProject(page.info.id).then(
+                    (copy) => location.assign(`/p/${copy.id}`),
+                    (err: Error) => toast.error(err.message),
+                  )
+                }
+              >
+                <CopyPlus /> {t("projects.copy")}
+              </Button>
+            ) : (
+              <ShareButton live={!!provider && collab.peers.length > 1} peers={collab.peers} role={provider && collab.peers.length > 1 ? memberLabel(provider.member) : undefined} onClick={() => setShareOpen(true)} />
+            )}
             {hasTest && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1277,7 +1333,13 @@ function Workspace() {
           <button onClick={() => setConsoleOpen((open) => !open)} aria-pressed={consoleOpen} className={cn("inline-flex items-center gap-1 hover:text-console-foreground", consoleOpen && "text-console-foreground")}>
             <PanelBottom className="size-3" /> {t("footer.panel")}
           </button>
-          {isGuest && <span className="text-[#52a8ff]">{t("footer.guest")}</span>}
+          {isGuest && <span className="text-[#52a8ff]">{t(viewing ? "footer.viewing" : "footer.guest")}</span>}
+          {own && !mcpTab && (
+            <button onClick={() => window.open(`/mcp-driven?project=${own.info.id}`, "_blank")} aria-label={t("footer.agentTab")} title={t("footer.agentTab")} className="inline-flex items-center hover:text-console-foreground">
+              <Bot className="size-3" />
+            </button>
+          )}
+          {own && saveStatus !== "saved" && <span className={cn(saveStatus === "unsaved" && "text-[#ff6166]")}>{t(saveStatus === "unsaved" ? "footer.unsaved" : "footer.saving")}</span>}
           {agentTool && <span className="truncate text-[#52a8ff]">{t("footer.agent", { tool: agentTool })}</span>}
           <span className="ml-auto hidden sm:inline">
             {t("footer.position", { line: cursor.line, col: cursor.column })}
@@ -1339,7 +1401,7 @@ function Workspace() {
         provider={provider}
         store={store}
         peers={collab.peers}
-        onStart={collab.start}
+        project={page?.kind === "own" ? page : null}
         onJoin={collab.join}
         onLeave={collab.leave}
         onEnd={collab.end}

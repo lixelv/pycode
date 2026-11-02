@@ -35,7 +35,7 @@ export default defineConfig({
     headers: isolation,
     proxy: {
       '/api': { target: process.env.BACKEND_URL ?? 'http://127.0.0.1:8090', ws: true },
-      '^/s/[^/]+/mcp$': { target: process.env.BACKEND_URL ?? 'http://127.0.0.1:8090' },
+      '^/mcp$': { target: process.env.BACKEND_URL ?? 'http://127.0.0.1:8090' },
     },
   },
   preview: { headers: isolation },

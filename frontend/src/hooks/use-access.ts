@@ -6,6 +6,8 @@ import { rulesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 
 const SOLO: Member = { level: "admin", roles: [], owner: true }
+/** A stranger on a public project: reads everything it was given, changes nothing of it. */
+const VIEWER: Member = { level: "read", roles: [] }
 
 export interface AccessView {
   member: Member
@@ -18,7 +20,7 @@ export interface AccessView {
 }
 
 /** What we may do in the project: everything alone, by our role in a session. */
-export function useAccess(store: ProjectStore, provider: CollabProvider | null, version: unknown): AccessView {
+export function useAccess(store: ProjectStore, provider: CollabProvider | null, version: unknown, viewOnly = false): AccessView {
   const [rules, setRules] = useState(() => rulesOf(store))
   useEffect(() => {
     const read = () => setRules(rulesOf(store))
@@ -27,16 +29,17 @@ export function useAccess(store: ProjectStore, provider: CollabProvider | null, 
     return () => store.structure.off("update", read)
   }, [store])
   // `version` changes when the provider learns our role.
-  const member = useMemo(() => provider?.member ?? SOLO, [provider, version]) // eslint-disable-line react-hooks/exhaustive-deps
+  const member = useMemo(() => (viewOnly ? VIEWER : (provider?.member ?? SOLO)), [provider, version, viewOnly]) // eslint-disable-line react-hooks/exhaustive-deps
   return useMemo(
     () => ({
       member,
       rules,
       isAdmin: member.level === "admin",
       frozen: rules.frozen,
-      canRun: docAccess(member, "runtime", rules) === "write",
+      // A viewer's console is their own: the project stays in memory on this page.
+      canRun: viewOnly || docAccess(member, "runtime", rules) === "write",
       can: (path: string) => fileAccess(member, path, rules),
     }),
-    [member, rules],
+    [member, rules, viewOnly],
   )
 }

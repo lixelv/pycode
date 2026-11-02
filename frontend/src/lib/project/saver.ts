@@ -69,6 +69,11 @@ export class ProjectSaver {
     this.detach.push(store.onDoc((id, doc) => this.watch(id, doc)))
   }
 
+  /** S3 has this project's structure: what the browser holds is no longer the only copy. */
+  get stored() {
+    return this.known.has("private/structure.ybin.gz")
+  }
+
   /** Called when status or gone change. */
   on(fn: () => void) {
     this.listeners.add(fn)

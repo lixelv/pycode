@@ -17,6 +17,9 @@ const MOVABLE = /^(public|hidden|private)\/(f|b|t)\//
 
 const STRUCTURE = "structure"
 
+/** An object's name without its prefix. */
+const nameOf = (key: string) => key.slice(key.indexOf("/") + 1)
+
 const statusOf = (err: unknown) => (err as { status?: number }).status
 
 function tableKey(id: string) {
@@ -359,7 +362,10 @@ export class ProjectSaver {
         return
       }
     }
-    if (!this.gone && !this.failed && this.loaded) this.setStatus("saved")
+    if (!this.gone && !this.failed && this.loaded) {
+      if (this.token) this.setStatus("saved")
+      else this.statusWithoutToken()
+    }
   }
 
   private async onFailure(err: unknown) {
@@ -430,6 +436,14 @@ export class ProjectSaver {
    * opening sees this save as unfinished, so a closed tab cannot leave a file public.
    */
   private async saveStructure() {
+    // What no file holds any more goes first, or replacing a big file could not fit the limit.
+    // A file only moving stays until its new object is there.
+    const names = new Set([...this.wantedKeys()].map(nameOf))
+    for (const key of [...this.known]) {
+      if (!MOVABLE.test(key) || names.has(nameOf(key))) continue
+      await this.cloud.remove(key, this.token!)
+      this.known.delete(key)
+    }
     const folders = foldersOf(this.store).toJSON() as Record<string, string>
     const wanted = new Set<string>()
     for (const [path, meta] of metasOf(this.store).entries()) {

@@ -1092,8 +1092,8 @@ func TestMovingAFileBetweenPrefixesCountsOnce(t *testing.T) {
 	}
 }
 
-// A deleted file's place is free at once, not when its URL would have expired.
-func TestDeleteFreesAReservation(t *testing.T) {
+// A URL signed earlier works after a delete: a delete must not make room for another.
+func TestDeleteDoesNotFreeAnOutstandingURL(t *testing.T) {
 	e := setup(t)
 	alice := newUser()
 	p := e.create(alice, "free")
@@ -1103,8 +1103,8 @@ func TestDeleteFreesAReservation(t *testing.T) {
 		t.Fatalf("first: %d %s", status, body)
 	}
 	e.presign(alice, p.ID, token, del("public/f/one.ybin.gz"))
-	if status, _, body := e.presign(alice, p.ID, token, put("public/f/two.ybin.gz", 40*mb)); status != http.StatusOK {
-		t.Fatalf("after the delete: %d %s", status, body)
+	if status, _, _ := e.presign(alice, p.ID, token, put("public/f/two.ybin.gz", 40*mb)); status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("after the delete: got %d, want 413", status)
 	}
 }
 

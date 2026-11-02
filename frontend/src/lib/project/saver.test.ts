@@ -786,4 +786,16 @@ describe("after the review", () => {
     await wait(10)
     expect(saver.status).toBe("saved")
   })
+
+  it("removes what no file holds before writing what replaces it", async () => {
+    const { store, cloud, saver } = await saving()
+    createFile(store, "old.py", "1")
+    await saver.flush()
+    const old = FILE(idOf(store, "old.py"))
+    cloud.log = []
+    deletePath(store, "old.py")
+    createFile(store, "new.py", "2")
+    await saver.flush()
+    expect(cloud.log.indexOf(`del ${old}`)).toBeLessThan(cloud.log.indexOf(`put ${FILE(idOf(store, "new.py"))}`))
+  })
 })

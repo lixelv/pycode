@@ -373,12 +373,7 @@ func (h *Handlers) presign(w http.ResponseWriter, r *http.Request) {
 			deletes[op.Key] = true
 		}
 	}
-	// What is being deleted no longer needs its place held.
-	h.quotaMu.Lock()
-	for key := range deletes {
-		delete(h.reserved[p.ID], key)
-	}
-	h.quotaMu.Unlock()
+	// A delete frees no reservation: the URL given out earlier still works until it expires.
 	if len(puts) > 0 {
 		if status, err := h.checkQuota(r.Context(), p, puts, deletes); err != nil {
 			if status == http.StatusInternalServerError {

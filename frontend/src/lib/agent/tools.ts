@@ -11,6 +11,7 @@ import {
   cleanPath,
   createDir,
   createFile,
+  customRolesOf,
   deletePath,
   docKindOf,
   duplicatePath,
@@ -52,9 +53,9 @@ import { boardAdd, boardAlign, boardClear, boardDelete, boardDistribute, boardDu
  */
 
 /** A code that works: ending a project's session revokes them, and asking for the session issues new ones. */
-async function liveCode(provider: CollabProvider) {
+async function liveCode(s: ProjectStore, provider: CollabProvider) {
   const project = provider.session?.projectId
-  if (project && provider.member.owner) provider.session = { ...provider.session, code: (await projectSession(project)).session.code }
+  if (project && provider.member.owner) provider.session = { ...provider.session, code: (await projectSession(project, customRolesOf(s))).session.code }
   return provider.code
 }
 
@@ -505,8 +506,8 @@ export const TOOLS: Record<string, Tool> = {
   kick_member: (args, ctx) => kick(ctx, args, false),
   ban_member: (args, ctx) => kick(ctx, args, true),
 
-  async share_links(_args, { provider }) {
-    const { codes } = await listCodes(await liveCode(provider))
+  async share_links(_args, { store: s, provider }) {
+    const { codes } = await listCodes(await liveCode(s, provider))
     const links = codes.map((c) => ({ role: c.role, level: c.level, code: c.code, link: `${location.origin}/s/${c.code}` }))
     return { links, mcp: `${location.origin}/mcp` }
   },
@@ -514,7 +515,7 @@ export const TOOLS: Record<string, Tool> = {
   async add_role(args, { store: s, provider }) {
     const name = string(args, "name")
     const level = string(args, "level") as "read" | "write"
-    const code = await addRole(await liveCode(provider), name, level).catch((err: Error) => {
+    const code = await addRole(await liveCode(s, provider), name, level).catch((err: Error) => {
       throw new ToolError(err.message)
     })
     rolesOf(s).set(name, level)

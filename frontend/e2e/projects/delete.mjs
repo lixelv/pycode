@@ -9,7 +9,13 @@ await scenario("projects/delete", async (browser) => {
   const prefix = `projects/${project.id}/`
   const page = await openProject(alice, project.id)
   const id = await writeFile(page, "main.py", "print(1)")
-  await until("the file in S3", async () => (await storedKeys(alice, project.id)).includes(`public/f/${id}.ybin.gz`), 15_000)
+  // The whole save, whose last write is the full structure: a URL signed before the
+  // delete may still land after it, and that is the janitor's (6 minutes later).
+  await until("the save in S3", async () => {
+    const keys = await storedKeys(alice, project.id)
+    return keys.includes(`public/f/${id}.ybin.gz`) && keys.includes("private/structure.ybin.gz")
+  }, 15_000)
+  await sleep(1000)
   assert.ok((await listS3(prefix)).length > 0, "MinIO should hold the project")
   assert.ok((await databases(page, project.id)).length > 0, "IndexedDB is per project")
 

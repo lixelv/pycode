@@ -217,7 +217,9 @@ export async function listS3(prefix) {
   const secret = process.env.S3_TEST_SECRET_KEY
   const bucket = process.env.S3_TEST_BUCKET
   const host = endpoint.replace(/^https?:\/\//, "")
-  const region = "us-east-1"
+  // A real provider: S3_TEST_SSL=true, and its region (R2: auto).
+  const region = process.env.S3_TEST_REGION ?? "us-east-1"
+  const scheme = process.env.S3_TEST_SSL === "true" ? "https" : "http"
   const now = new Date().toISOString().replace(/[-:]|\.\d{3}/g, "")
   const day = now.slice(0, 8)
   const query = `list-type=2&prefix=${encodeURIComponent(prefix)}`
@@ -230,7 +232,7 @@ export async function listS3(prefix) {
   const hmac = (key, data) => createHmac("sha256", key).update(data).digest()
   const key = hmac(hmac(hmac(hmac(`AWS4${secret}`, day), region), "s3"), "aws4_request")
   const signature = createHmac("sha256", key).update(toSign).digest("hex")
-  const res = await fetch(`http://${host}/${bucket}?${query}`, {
+  const res = await fetch(`${scheme}://${host}/${bucket}?${query}`, {
     headers: {
       "x-amz-content-sha256": empty,
       "x-amz-date": now,

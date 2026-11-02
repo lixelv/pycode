@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -17,9 +18,12 @@ import (
 
 	"github.com/lixelv/polycode/backend/internal/db"
 	"github.com/lixelv/polycode/backend/internal/identity"
+	"github.com/lixelv/polycode/backend/internal/mcp"
+	"github.com/lixelv/polycode/backend/internal/projects"
 	"github.com/lixelv/polycode/backend/internal/proxy"
 	"github.com/lixelv/polycode/backend/internal/ratelimit"
 	"github.com/lixelv/polycode/backend/internal/session"
+	"github.com/lixelv/polycode/backend/internal/storage"
 )
 
 func env(key, fallback string) string {
@@ -60,8 +64,49 @@ func main() {
 		}
 	}
 
+	s3, err := storage.New(ctx, storage.Config{
+		Endpoint:       os.Getenv("S3_ENDPOINT"),
+		PublicEndpoint: env("S3_PUBLIC_ENDPOINT", os.Getenv("S3_ENDPOINT")),
+		Bucket:         os.Getenv("S3_BUCKET"),
+		AccessKey:      os.Getenv("S3_ACCESS_KEY"),
+		SecretKey:      os.Getenv("S3_SECRET_KEY"),
+		Region:         env("S3_REGION", "us-east-1"),
+		UseSSL:         env("S3_USE_SSL", "true") == "true",
+	})
+	if err != nil {
+		slog.Error("s3", "err", err)
+		os.Exit(1)
+	}
+	if origin, dev := os.LookupEnv("S3_DEV_BUCKET_ORIGIN"); dev {
+		// The local S3 may still be starting.
+		for attempt := 0; ; attempt++ {
+			if err = s3.EnsureDevBucket(ctx, origin); err == nil || attempt == 30 {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil {
+			slog.Error("s3 bucket", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	hub := session.NewHub(pool, origins)
 	go hub.Janitor(ctx)
+	registry := mcp.NewRegistry()
+	projectAPI := projects.NewHandlers(projects.NewStore(pool), s3, hub)
+	projectAPI.OnDelete(func(id uuid.UUID) {
+		hub.CloseProject(id)
+		registry.ProjectGone(id)
+	})
+	go projectAPI.Janitor(ctx)
+	agent := mcp.NewServer(mcp.Config{
+		Pool:           pool,
+		Projects:       projects.NewStore(pool),
+		Registry:       registry,
+		OriginPatterns: origins,
+		DeleteProject:  projectAPI.Delete,
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
@@ -77,10 +122,17 @@ func main() {
 	})
 	mux.Handle("/api/proxy", proxy.New(ratelimit.New(256, time.Minute), allow))
 	hub.Register(mux)
+	projectAPI.Register(mux)
+	agent.RegisterAPI(mux)
+
+	// The token says who an agent is: it stays outside the cookie's middleware.
+	root := http.NewServeMux()
+	root.Handle("/mcp", agent)
+	root.Handle("/", identity.NewMiddleware(pool).Wrap(mux))
 
 	srv := &http.Server{
 		Addr:              env("LISTEN_ADDR", ":8090"),
-		Handler:           identity.NewMiddleware(pool).Wrap(mux),
+		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

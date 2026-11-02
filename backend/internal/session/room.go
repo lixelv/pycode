@@ -1,7 +1,10 @@
 package session
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"sync"
 
@@ -33,9 +36,60 @@ type room struct {
 	// owner is who acts as the owner: the real one while connected, else
 	// the admin who joined first, else 0.
 	owner uint32
-	// Tool calls of the MCP endpoint waiting for a browser (mcp.go).
-	calls    map[uint64]*mcpPending
-	nextCall uint64
+	// saver is the owner's tab that writes the project to S3, with the token
+	// that says so when it asks for URLs (only in a project's room).
+	saver      uint32
+	saverToken string
+}
+
+// pickSaver is the owner's earliest connection: never a guest, not even an admin.
+func (r *room) pickSaver() uint32 {
+	var best uint32
+	for id, m := range r.members {
+		if m.user == r.session.OwnerID && (best == 0 || id < best) {
+			best = id
+		}
+	}
+	return best
+}
+
+// updateSaver names the saver when that changes; a newcomer hears either way.
+// Call with r.mu held.
+func (r *room) updateSaver(newcomer *member) {
+	if r.session.ProjectID == nil {
+		return
+	}
+	next := r.pickSaver()
+	if next == r.saver {
+		if newcomer != nil {
+			newcomer.enqueueJSON(control{Type: "saver", Saver: &next})
+		}
+		return
+	}
+	r.saver, r.saverToken = next, ""
+	if next != 0 {
+		r.saverToken = newSaverToken()
+	}
+	for id, m := range r.members {
+		msg := control{Type: "saver", Saver: &next}
+		if id == next {
+			msg.Token = r.saverToken
+		}
+		m.enqueueJSON(msg)
+	}
+}
+
+func newSaverToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// isSaver checks a token against the current saver's.
+func (r *room) isSaver(token string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return token != "" && r.saver != 0 && subtle.ConstantTimeCompare([]byte(token), []byte(r.saverToken)) == 1
 }
 
 // pickOwner chooses the acting owner. Call with r.mu held.
@@ -89,6 +143,7 @@ func (r *room) join(m *member) {
 			other.enqueueJSON(control{Type: "owner", Owner: &owner})
 		}
 	}
+	r.updateSaver(m)
 }
 
 func (r *room) leave(m *member) (empty bool) {
@@ -98,11 +153,11 @@ func (r *room) leave(m *member) (empty bool) {
 		return len(r.members) == 0
 	}
 	delete(r.members, m.info.Peer)
-	r.mcpGone(m.info.Peer)
 	for _, other := range r.members {
 		other.enqueueJSON(control{Type: "leave", Peer: &m.info})
 	}
 	r.updateOwner()
+	r.updateSaver(nil)
 	return len(r.members) == 0
 }
 
@@ -193,12 +248,28 @@ func (r *room) remove(user uuid.UUID, ban bool) {
 		m.enqueueJSON(control{Type: "removed", Ban: ban})
 		close(m.send) // the writer then closes the connection
 		delete(r.members, id)
-		r.mcpGone(id)
 		for _, other := range r.members {
 			other.enqueueJSON(control{Type: "leave", Peer: &m.info})
 		}
 	}
 	r.updateOwner()
+	r.updateSaver(nil)
+}
+
+// removeGuests sends away everyone but the owner: the session's codes are gone,
+// the owner's own room goes on.
+func (r *room) removeGuests() {
+	r.mu.Lock()
+	guests := map[uuid.UUID]bool{}
+	for _, m := range r.members {
+		if m.user != r.session.OwnerID {
+			guests[m.user] = true
+		}
+	}
+	r.mu.Unlock()
+	for user := range guests {
+		r.remove(user, false)
+	}
 }
 
 // hasAdmin reports whether this user is connected with admin rights.
@@ -220,8 +291,8 @@ func (r *room) end() {
 		m.enqueueJSON(control{Type: "ended"})
 		close(m.send)
 		delete(r.members, id)
-		r.mcpGone(id)
 	}
+	r.saver, r.saverToken = 0, ""
 }
 
 func (m *member) enqueueJSON(msg control) {

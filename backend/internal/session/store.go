@@ -24,7 +24,9 @@ type Session struct {
 	OwnerID uuid.UUID  `json:"-"`
 	AskName bool       `json:"askName"`
 	EndedAt *time.Time `json:"endedAt,omitempty"`
-	Created time.Time  `json:"createdAt"`
+	// ProjectID: the project whose room this is, for as long as the project lives.
+	ProjectID *uuid.UUID `json:"projectId,omitempty"`
+	Created   time.Time  `json:"createdAt"`
 }
 
 // MarshalJSON names the owner by public id (see identity.Public).
@@ -193,9 +195,9 @@ func (s *Store) ByCode(ctx context.Context, code string) (*Session, Code, error)
 	var sess Session
 	var c Code
 	err := s.pool.QueryRow(ctx,
-		`SELECT s.id, c.code, s.owner_id, s.ask_name, s.ended_at, s.created_at, c.role, c.level
+		`SELECT s.id, c.code, s.owner_id, s.ask_name, s.ended_at, s.project_id, s.created_at, c.role, c.level
 		   FROM session_codes c JOIN sessions s ON s.id = c.session_id WHERE c.code = $1`, NormalizeCode(code),
-	).Scan(&sess.ID, &sess.Code, &sess.OwnerID, &sess.AskName, &sess.EndedAt, &sess.Created, &c.Role, &c.Level)
+	).Scan(&sess.ID, &sess.Code, &sess.OwnerID, &sess.AskName, &sess.EndedAt, &sess.ProjectID, &sess.Created, &c.Role, &c.Level)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, c, ErrNotFound
 	}
@@ -219,7 +221,88 @@ func (s *Store) Touch(ctx context.Context, ids []uuid.UUID) error {
 // Expire deletes sessions idle for longer than ttl (and ended ones after a day).
 func (s *Store) Expire(ctx context.Context, ttl time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM sessions WHERE last_active < now() - make_interval(secs => $1) OR ended_at < now() - interval '1 day'`,
+		`DELETE FROM sessions WHERE project_id IS NULL AND (last_active < now() - make_interval(secs => $1) OR ended_at < now() - interval '1 day')`,
 		ttl.Seconds())
 	return tag.RowsAffected(), err
+}
+
+// ForProject is the project's one session, created on first use, with codes
+// issued again if they were revoked. The name question follows the project's settings.
+func (s *Store) ForProject(ctx context.Context, project uuid.UUID) (*Session, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	sess := Session{ProjectID: &project}
+	err = tx.QueryRow(ctx,
+		`SELECT owner_id, COALESCE((settings->>'askName')::boolean, false) FROM projects WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, project,
+	).Scan(&sess.OwnerID, &sess.AskName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	// The row lock above keeps this one session per project.
+	err = tx.QueryRow(ctx, `SELECT id, created_at FROM sessions WHERE project_id = $1`, project).Scan(&sess.ID, &sess.Created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		sess.ID, sess.Created = uuid.Must(uuid.NewV7()), time.Now()
+		for attempt := 0; ; attempt++ {
+			sess.Code = newCode()
+			tag, err := tx.Exec(ctx,
+				`INSERT INTO sessions (id, code, owner_id, mode, ask_name, project_id) VALUES ($1, $2, $3, 'read_write', $4, $5) ON CONFLICT (code) DO NOTHING`,
+				sess.ID, sess.Code, sess.OwnerID, sess.AskName, project)
+			if err != nil {
+				return nil, err
+			}
+			if tag.RowsAffected() == 1 {
+				break
+			}
+			if attempt > 5 {
+				return nil, errors.New("could not allocate a session code")
+			}
+		}
+	} else if err != nil {
+		return nil, err
+	} else if _, err := tx.Exec(ctx, `UPDATE sessions SET ask_name = $2 WHERE id = $1`, sess.ID, sess.AskName); err != nil {
+		return nil, err
+	}
+	// A revoked session has no codes: each role gets a new one here.
+	for _, c := range []Code{{Role: RoleWrite, Level: LevelWrite}, {Role: RoleRead, Level: LevelRead}, {Role: RoleAdmin, Level: LevelAdmin}} {
+		if c.Role == RoleWrite && sess.Code != "" {
+			c.Code = sess.Code
+		}
+		got, err := addCode(ctx, tx, sess.ID, c)
+		if err != nil {
+			return nil, err
+		}
+		if c.Role == RoleWrite {
+			sess.Code = got.Code
+			if _, err := tx.Exec(ctx, `UPDATE sessions SET code = $2 WHERE id = $1`, sess.ID, sess.Code); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &sess, tx.Commit(ctx)
+}
+
+// ProjectOwner says who owns a live project.
+func (s *Store) ProjectOwner(ctx context.Context, project uuid.UUID) (uuid.UUID, error) {
+	var owner uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT owner_id FROM projects WHERE id = $1 AND deleted_at IS NULL`, project).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return owner, ErrNotFound
+	}
+	return owner, err
+}
+
+// RevokeCodes ends a project's session for guests: no code works any more and
+// what was given to members is forgotten. The next Share issues new codes.
+func (s *Store) RevokeCodes(ctx context.Context, session uuid.UUID) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM session_codes WHERE session_id = $1`, session); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM session_members WHERE session_id = $1`, session)
+	return err
 }

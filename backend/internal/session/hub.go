@@ -44,7 +44,8 @@ func (h *Hub) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/roles", h.addRole)
 	mux.HandleFunc("POST /api/sessions/{code}/end", h.end)
 	mux.HandleFunc("GET /api/sessions/{code}/ws", h.ws)
-	mux.HandleFunc("/s/{code}/mcp", h.mcp)
+	mux.HandleFunc("POST /api/projects/{id}/session", h.projectSession)
+	mux.HandleFunc("GET /api/projects/{id}/ws", h.projectWS)
 }
 
 // Janitor keeps live sessions fresh and deletes idle ones.
@@ -301,6 +302,21 @@ func (h *Hub) end(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Only the owner can end the session.")
 		return
 	}
+	if sess.ProjectID != nil {
+		// The guests go, the owner's room stays: the project goes on without them.
+		if err := h.store.RevokeCodes(r.Context(), sess.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not end the session")
+			return
+		}
+		h.mu.Lock()
+		rm := h.rooms[sess.ID]
+		h.mu.Unlock()
+		if rm != nil {
+			rm.removeGuests()
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := h.store.End(r.Context(), sess.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not end the session")
 		return
@@ -324,6 +340,115 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, "This session has ended.")
 		return
 	}
+	h.serve(w, r, sess, code)
+}
+
+// SessionForProject is the project's session, with working codes.
+func (h *Hub) SessionForProject(ctx context.Context, project uuid.UUID) (*Session, error) {
+	return h.store.ForProject(ctx, project)
+}
+
+// IsSaver reports whether this token is the one the project's room gave its saver.
+func (h *Hub) IsSaver(project uuid.UUID, token string) bool {
+	rm := h.projectRoom(project)
+	return rm != nil && rm.isSaver(token)
+}
+
+// CloseProject ends the room of a deleted project.
+func (h *Hub) CloseProject(project uuid.UUID) {
+	rm := h.projectRoom(project)
+	if rm == nil {
+		return
+	}
+	h.mu.Lock()
+	delete(h.rooms, rm.session.ID)
+	h.mu.Unlock()
+	rm.end()
+}
+
+func (h *Hub) projectRoom(project uuid.UUID) *room {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, rm := range h.rooms {
+		if id := rm.session.ProjectID; id != nil && *id == project {
+			return rm
+		}
+	}
+	return nil
+}
+
+// ownedProject finds the project in the path; anyone but its owner gets the same 404.
+func (h *Hub) ownedProject(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err == nil {
+		var owner uuid.UUID
+		if owner, err = h.store.ProjectOwner(r.Context(), id); err == nil && owner == identity.FromContext(r.Context()) {
+			return id, true
+		}
+	}
+	writeError(w, http.StatusNotFound, "project not found")
+	return id, false
+}
+
+// projectSession gives the owner the project's session: Share reads its codes.
+func (h *Hub) projectSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.ownedProject(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Roles []struct {
+			Name  string `json:"name"`
+			Level string `json:"level"`
+		} `json:"roles"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	sess, err := h.store.ForProject(r.Context(), id)
+	if err != nil {
+		slog.Error("project session", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not open the session")
+		return
+	}
+	for _, ro := range body.Roles {
+		c := Code{Role: ro.Name, Level: ro.Level}
+		if !validCustom(c) {
+			writeError(w, http.StatusBadRequest, "invalid role: "+ro.Name)
+			return
+		}
+		if _, err := h.store.AddRole(r.Context(), sess.ID, c); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not add the role")
+			return
+		}
+	}
+	codes, err := h.store.Codes(r.Context(), sess.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list the codes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "level": LevelAdmin, "roles": []string{}, "owner": true, "codes": codes})
+}
+
+// projectWS is how the owner's tabs join the project's room. It takes no code:
+// ending the session revokes every code, and the owner stays.
+func (h *Hub) projectWS(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.ownedProject(w, r)
+	if !ok {
+		return
+	}
+	sess, err := h.store.ForProject(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not open the session")
+		return
+	}
+	h.serve(w, r, sess, Code{Role: RoleWrite, Level: LevelWrite, Code: sess.Code})
+}
+
+func (h *Hub) serve(w http.ResponseWriter, r *http.Request, sess *Session, code Code) {
 	user := identity.FromContext(r.Context())
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: h.originPatterns})
 	if err != nil {
@@ -396,8 +521,6 @@ func (h *Hub) ws(w http.ResponseWriter, r *http.Request) {
 			h.setRole(ctx, sess, rm, m, msg)
 		case "kick":
 			h.kick(ctx, sess, rm, m, msg)
-		case "mcp-result":
-			rm.mcpResult(m, msg)
 		}
 	}
 

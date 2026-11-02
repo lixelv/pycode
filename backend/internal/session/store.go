@@ -196,7 +196,8 @@ func (s *Store) ByCode(ctx context.Context, code string) (*Session, Code, error)
 	var c Code
 	err := s.pool.QueryRow(ctx,
 		`SELECT s.id, c.code, s.owner_id, s.ask_name, s.ended_at, s.project_id, s.created_at, c.role, c.level
-		   FROM session_codes c JOIN sessions s ON s.id = c.session_id WHERE c.code = $1`, NormalizeCode(code),
+		   FROM session_codes c JOIN sessions s ON s.id = c.session_id WHERE c.code = $1
+		    AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = s.project_id AND p.deleted_at IS NOT NULL)`, NormalizeCode(code),
 	).Scan(&sess.ID, &sess.Code, &sess.OwnerID, &sess.AskName, &sess.EndedAt, &sess.ProjectID, &sess.Created, &c.Role, &c.Level)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, c, ErrNotFound

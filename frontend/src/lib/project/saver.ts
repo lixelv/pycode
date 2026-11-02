@@ -1,6 +1,6 @@
 import * as Y from "yjs"
 
-import { getBlob, putBlob } from "./blobs"
+import { getBlob, putBlob, sha256 } from "./blobs"
 import type { ProjectCloud } from "./cloud"
 import { foldersOf, metasOf, tournamentsOf } from "./project"
 import { hiddenManifest, type ManifestEntry, placementOf, publicStructure } from "./publish"
@@ -46,6 +46,10 @@ export class ProjectSaver {
   private readonly store: ProjectStore
   private readonly cloud: ProjectCloud
   private token: string | null = null
+  /** Another tab of the owner saves: this one's edits reach it through the room. */
+  private elsewhere = false
+  /** A tab that just became the saver cannot trust what it knew of S3: another tab wrote there. */
+  private needSync = false
   private loaded = false
   private loading = false
   private known = new Set<string>()
@@ -102,6 +106,7 @@ export class ProjectSaver {
   private touched(id: string) {
     if (this.loading || this.gone) return
     this.dirty.add(id)
+    this.statusWithoutToken()
     if (id === STRUCTURE && this.placementsChanged()) {
       // Who may read a file changed: that does not wait.
       this.dropTimer(id)
@@ -149,16 +154,29 @@ export class ProjectSaver {
     return changed
   }
 
-  /** The tab becomes the saver (or stops being it): what waited goes out. */
-  setToken(token: string | null) {
+  /**
+   * The tab becomes the saver (or stops being it): what waited goes out.
+   * `elsewhere`: without a token, whether another tab of the owner is saving.
+   */
+  setToken(token: string | null, elsewhere = false) {
     if (this.gone) return
+    const gained = !!token && token !== this.token
     this.token = token
+    this.elsewhere = elsewhere
     if (!token) {
       for (const id of [...this.timers.keys()]) this.dropTimer(id)
+      this.statusWithoutToken()
       return
     }
+    if (gained) this.needSync = true
     for (const id of this.dirty) if (!this.timers.has(id) && !this.due.has(id)) this.schedule(id)
-    if (this.due.size) void this.pump()
+    void this.pump()
+  }
+
+  /** Nobody is saving what changed here: the footer must not say otherwise. */
+  private statusWithoutToken() {
+    if (this.token) return
+    this.setStatus(this.dirty.size && !this.elsewhere ? "unsaved" : "saved")
   }
 
   // ---- opening ---------------------------------------------------------------------
@@ -201,6 +219,8 @@ export class ProjectSaver {
   private afterLoad() {
     this.setStatus(this.failed ? "unsaved" : "saved")
     for (const id of this.dirty) if (this.token) this.schedule(id)
+    this.statusWithoutToken()
+    if (this.token) void this.pump()
     void this.fetchBlobs()
   }
 
@@ -255,7 +275,7 @@ export class ProjectSaver {
       if (await getBlob(meta.hash!)) continue
       const key = ["public", "hidden", "private"].map((w) => fileKey(w, meta)).find((k) => this.known.has(k))
       const bytes = key ? await this.cloud.get(key).catch(() => null) : null
-      if (bytes) await putBlob(bytes, meta.hash!)
+      if (bytes && (await sha256(bytes)) === meta.hash) await putBlob(bytes, meta.hash!)
     }
   }
 
@@ -265,6 +285,7 @@ export class ProjectSaver {
   async flush(): Promise<void> {
     if (this.gone) throw new Error("the project was deleted")
     if (!this.token) return
+    if (!this.loaded) throw new Error("the project could not be read from storage")
     for (const id of [...this.timers.keys()]) this.dropTimer(id)
     await this.running
     this.dirty.forEach((id) => this.due.add(id))
@@ -276,6 +297,9 @@ export class ProjectSaver {
 
   /** Before going public: the real list of objects, so nothing stays where it must not. */
   async reconcile(): Promise<void> {
+    // Only the saver can vouch for what lies under public/.
+    if (!this.token) throw new NotSaverError()
+    await this.flush()
     this.known = new Set((await this.cloud.keys()).map((k) => k.key))
     this.dirty.add(STRUCTURE)
     await this.flush()
@@ -290,7 +314,31 @@ export class ProjectSaver {
     return this.running
   }
 
+  /** The real list of objects; anything out of place makes the structure's save due. */
+  private async syncKnown() {
+    this.needSync = false
+    this.known = new Set((await this.cloud.keys()).map((k) => k.key))
+    const wanted = this.wantedKeys()
+    // Something missing while the structure waits its turn is only that edit, on its way.
+    const stale = [...this.known].some((key) => MOVABLE.test(key) && !wanted.has(key)) || (!this.dirty.has(STRUCTURE) && [...wanted].some((key) => !this.known.has(key)))
+    if (stale) {
+      this.dirty.add(STRUCTURE)
+      this.dropTimer(STRUCTURE)
+      this.due.add(STRUCTURE)
+    }
+  }
+
   private async drain() {
+    if (!this.token || !this.loaded || this.gone) return
+    if (this.needSync) {
+      try {
+        await this.syncKnown()
+      } catch (err) {
+        this.needSync = true
+        await this.onFailure(err)
+        return
+      }
+    }
     while (this.due.size && this.token && this.loaded && !this.gone) {
       this.setStatus("saving")
       const batch = [...this.due].sort((a) => (a === STRUCTURE ? -1 : 1))
@@ -306,7 +354,7 @@ export class ProjectSaver {
         return
       }
     }
-    if (!this.gone && !this.failed) this.setStatus("saved")
+    if (!this.gone && !this.failed && this.loaded) this.setStatus("saved")
   }
 
   private async onFailure(err: unknown) {
@@ -319,6 +367,7 @@ export class ProjectSaver {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
+      this.failed = null
       this.dirty.forEach((id) => this.due.add(id))
       void this.pump()
     }, this.nextDelay())
@@ -358,9 +407,21 @@ export class ProjectSaver {
     }
   }
 
+  /** Every object that should lie under a movable prefix. */
+  private wantedKeys() {
+    const folders = foldersOf(this.store).toJSON() as Record<string, string>
+    const wanted = new Set<string>()
+    for (const [path, meta] of metasOf(this.store).entries()) {
+      if (!meta.sealed && (meta.kind === "text" || meta.hash)) wanted.add(fileKey(placementOf(path, meta, folders), meta))
+    }
+    for (const id of tournamentsOf(this.store).keys()) wanted.add(tableKey(id))
+    return wanted
+  }
+
   /**
    * New objects first, then what names them, then the old ones: a file being hidden is
-   * never missing, and a failure at any step leaves it dirty, to be tried again.
+   * never missing. The owner's full structure goes last: until it is there the next
+   * opening sees this save as unfinished, so a closed tab cannot leave a file public.
    */
   private async saveStructure() {
     const folders = foldersOf(this.store).toJSON() as Record<string, string>
@@ -379,7 +440,6 @@ export class ProjectSaver {
       wanted.add(key)
       if (!this.known.has(key)) await this.write(key, Y.encodeStateAsUpdate(this.store.doc(`t:${id}`)))
     }
-    await this.write("private/structure.ybin.gz", Y.encodeStateAsUpdate(this.store.structure))
     await this.write("public/structure.ybin.gz", publicStructure(this.store.structure))
     await this.write("hidden/manifest.json.gz", new TextEncoder().encode(JSON.stringify(hiddenManifest(this.store.structure))))
 
@@ -394,6 +454,7 @@ export class ProjectSaver {
       await this.cloud.remove(key, this.token!)
       this.known.delete(key)
     }
+    await this.write("private/structure.ybin.gz", Y.encodeStateAsUpdate(this.store.structure))
   }
 
   /** A binary file's bytes: from this browser, else from where it lay in S3. */
@@ -402,6 +463,13 @@ export class ProjectSaver {
     if (local) return local
     const from = ["public", "hidden", "private"].map((w) => fileKey(w, meta)).find((k) => this.known.has(k))
     return from ? this.cloud.get(from) : null
+  }
+}
+
+/** Going public needs the tab that saves: only it can vouch for what lies under public/. */
+export class NotSaverError extends Error {
+  constructor() {
+    super("not the saver")
   }
 }
 
@@ -419,7 +487,8 @@ export async function loadPublic(store: ProjectStore, cloud: ProjectCloud) {
         if (text) Y.applyUpdate(store.doc(`f:${meta.id}`), text)
       } else if (meta.hash && !(await getBlob(meta.hash))) {
         const bytes = await cloud.get(fileKey("public", meta))
-        if (bytes) await putBlob(bytes, meta.hash)
+        // The blob store is shared and keyed by hash: a stranger's project must not fill it with other bytes.
+        if (bytes && (await sha256(bytes)) === meta.hash) await putBlob(bytes, meta.hash)
       }
     }),
   )

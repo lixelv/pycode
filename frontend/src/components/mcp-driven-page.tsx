@@ -127,6 +127,7 @@ export function McpDrivenPage() {
           if (!id) return
           if (!frame.ok) {
             // Open in another tab, or not ours: this one shows the list.
+            if (pageRef.current) return goTo(null) // it was taken while we were away
             wanted.current = null
             try {
               sessionStorage.removeItem(PROJECT_KEY)
@@ -149,6 +150,8 @@ export function McpDrivenPage() {
               if (err instanceof CloudError && err.status === 404) setMissing(true)
               else toast.error((err as Error).message)
               setLoading(false)
+              // An agent may be waiting for this opening.
+              socket.current?.send({ type: "open-failed", error: (err as Error).message })
               socket.current?.send({ type: "release" })
             },
           )

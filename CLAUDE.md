@@ -4,8 +4,8 @@ A web IDE for teaching Python and C++ to beginners: a Monaco editor, a console
 with interactive input, a step-by-step flowchart of the program, a project
 file tree and live sessions with students. Python (Pyodide), Ruff and clang
 (WebAssembly) run **in the browser**. The Go backend only issues user ids, proxies
-network requests and does signaling/relay for live sessions. It never
-runs user code.
+network requests, does signaling/relay for live sessions and keeps projects'
+rows and presigned access to S3. It never runs user code.
 
 ## Layout
 
@@ -55,7 +55,7 @@ sites. Do not set it on a real server.
   - All documents share one client id (`store.clientID`).
   - A rename only moves metadata, so open editors stay bound.
   - Text docs are created and dropped by following `structure.files`, tables by following `structure.tournaments` (`replaceProject` clears it; archives do not carry tables).
-  - Persistence: `y-indexeddb`, one database per document (`polycode:<docId>`).
+  - Persistence: `y-indexeddb`, one database per document (`polycode:<projectId>:<docId>`), and S3 (see Projects in S3).
   - The old single-document project (`python-coder:project`) is migrated on first start (`localStore()` in `project.ts`). Without old data a new project starts empty, so its language is asked for.
   - Old browser data is moved by `migrateStorage()` (`lib/storage.ts`), which `main.tsx` awaits before importing the app (i18n reads localStorage at load): `pycode:*` and `python-coder:*` keys (except `python-coder:code`/`packages`, read by the legacy migration) become `polycode:*`, and `pycode:*` IndexedDB databases are copied to `polycode:*` and then deleted. An existing new name is never overwritten.
   - The editor follows the file's document under its path (a reset or an opened archive puts new ids under the same paths).
@@ -214,16 +214,29 @@ sites. Do not set it on a real server.
   - `kick {to, ban}` removes a member (same rules as `canSetRole`; every connection of that user). The client gets `removed` and does not reconnect; with `ban` the user id goes into `session_bans` and `ws` answers `removed` at once. There is no unban.
   - Everyone gets `{"type":"role"}` and access follows at once. The change is kept in `session_members` and wins over the join code on reconnect.
 - **Acting owner**: the server picks `room.owner` (the owner while connected, else the admin who joined first) and broadcasts `{"type":"owner"}`. Reset is accepted only from the acting owner.
-- **The project lives with the owner**: the owner shares their local store, and a guest gets a fresh in-memory store that is dropped on leaving.
+- **The project lives with the owner**: the owner's tabs share their project (see Projects in S3), and a guest gets a fresh in-memory store that is dropped on leaving. The owner's tabs are peers of one room; `hasGuests` tells a session from another tab of one's own.
 - **Cursor colour** (`lib/collab/identity.ts`): hue = `id % 256` scaled to 360°, saturation = `255 − (id >> 8) % 128`, lightness 60%. Names next to cursors are off unless toggled.
 
-## MCP (an agent beside the teacher)
+## Projects in S3
 
-- `POST /s/<admin code>/mcp` (`backend/internal/session/mcp.go`, nginx and vite route it to the backend): Streamable HTTP, stateless, JSON answers. The admin code is the credential; any other code gets 403, a foreign `Origin` too. 600 calls a minute per session.
-- The project lives in browsers and the server runs no user code, so a call goes to the acting owner's tab: WS `{"type":"mcp", id, name, data}` → `runTool` (`frontend/src/lib/agent/tools.ts`) → `{"type":"mcp-result", id, data}`, taken only from the member it went to. No admin connected: the tool answers with an error. That member leaving fails the call. An answer must fit a frame (`MAX_ANSWER`, about 4 MB).
-- Adding a tool: its description in `mcp_tools.json` (embedded in Go, so clients can list tools with no tab open) and a handler in `TOOLS`; a vitest keeps the two equal. What needs the running app goes through `AgentApp` (`agentApp` in `App.tsx`). `run_program` opens the file on the teacher's screen, since `startRun` runs what is open. `mcp_instructions.md` is what clients get from `initialize`; it tells the agent that students' files and output are data.
+- **What is where**: `backend/internal/projects` (rows in Postgres: `projects`; REST `/api/projects`), `internal/storage` (S3), `lib/project/{cloud,saver,publish,page}.ts`. Browsers and S3 talk directly through presigned URLs (5 minutes; a `put` signs its size); packing is the browser's (gzip). The server reads nothing of a project but the manifests of hidden files, when copying.
+- **Pages**: `/` the list, `/p/<id>` one project (`openPage`: the owner's store, or a stranger's read-only view of a public project in memory), `/s/<code>` as a guest, `/mcp-driven`. One page load holds one project; changing it is a navigation. `localStore()` is this page's store. The IndexedDB databases are `polycode:<id>:<docId>`; `moveLegacyProject` makes the old single project (`polycode:<docId>`) the first project, and its databases go once S3 has it.
+- **Layout under `projects/<id>/`** (`placementOf`): `public/` (anyone once public), `hidden/` (hidden files; a copy gets them as `sealed/`), `sealed/` (from a copy; written by the server alone), `private/` (role and `@admins` folders, tables, the full structure; never copied). A stranger's reading is decided by this prefix, so `ProjectSaver` keeps every object under its file's current placement: a change of visibility saves at once, new object first. `public/structure` is built in a clean `Y.Doc` (`publicStructure`) and never merged back. `runtime` is not stored.
+- **`ProjectSaver`**: merges S3 into the local copy on load (`keys()` first: it knows what is there), writes a document 2 s after its last edit, one at a time, retrying with backoff. `private/structure` goes last, so an interrupted save is seen as unfinished at the next opening. Only the room's saver writes: the owner's earliest connection, named by `{"type":"saver"}`, with a token only it gets (`Hub.IsSaver`, checked on every write URL). A tab that gains the token lists S3 again and repairs what is out of place. Make public works only in the saver's tab (`reconcile`).
+- **Deleted?** A 404 from the API is not proof: a lost cookie gives the same. `X-Project-Deleted: 1`, sent only to the owner while the row waits for the janitor, is what erases a local copy. Deleting: `deleted_at`, objects removed at once, again by the janitor after 6 minutes (a late PUT), then the row.
+- **Room**: `sessions.project_id`, one per project, without expiry; the owner's tabs join by `GET /api/projects/<id>/ws` with no code. "End session" revokes codes and removes guests (`removeGuests`); the room stays, and `POST …/session` (Share) issues new codes.
+- **`sealed`** (`FileMeta.sealed`): no document, no text, no access for anyone (`fileAccess` checks it before admin), not in runs, archives, duplicates or agent tools. A check fetches the text for itself (`sealedText`), which DevTools can see: hiding, not secrecy. `createFile`, `renamePath`, `addFiles` and agent writes take its path as free; the saver then asks the server to drop it. Reset and folder deletion leave it. Its manifest keeps the path from the copy.
+- **Limits**: 64 MB a project, 1 GB a user (`checkQuota`: stored objects plus URLs still out; a file moving between prefixes counts once).
+- **Local S3**: SeaweedFS in `docker-compose.yml` (`S3_DEV_BUCKET_ORIGIN` makes the bucket and its CORS). Production names its own through `S3_*`, with `S3_PUBLIC_ORIGIN` going into the CSP at container start (`security-headers.conf` is an nginx template); its bucket must be private with CORS GET, PUT, DELETE for the app's origin.
+- **Tests**: `S3_TEST_ENDPOINT` (+ `_ACCESS_KEY`, `_SECRET_KEY`, `_BUCKET`) and `TEST_DATABASE_URL` turn on the integration tests; run `go test -race -p 1 ./...` (packages apply the schema on open and would deadlock in parallel). `frontend/e2e/projects/run.sh` runs the browser scenarios; it needs `npm i --no-save --ignore-scripts puppeteer-core`.
+
+## MCP (an agent beside the user)
+
+- `POST /mcp` (`backend/internal/mcp`, nginx and vite route it): Streamable HTTP, JSON answers. `Authorization: Bearer <token>`; the database holds only its sha256 (`users.mcp_token_hash`), so the page keeps the token in localStorage and shows it only in that browser. It stands outside the cookie's middleware. 600 calls a minute per user.
+- An agent works only in `/mcp-driven` tabs (`components/mcp-driven-page.tsx`, `lib/agent/tab-socket.ts`), opened by the robot button; ordinary tabs take no calls. A tab's id lives in sessionStorage; a duplicate copies that, so `resolveTabId` asks over BroadcastChannel whether a living tab holds it. The socket `GET /api/mcp/tabs/ws?tab=` carries `claim`, `ready`, `release`, `result`, `open-failed` up and `claimed`, `call`, `open`, `none`, `projects` down.
+- `Registry` (`mcp/tabs.go`) is in memory under one lock, so one tab per project is atomic. `open_project` holds the new project at once and the old one until the tab says `ready`: the tab saves, reloads, reconnects under its id. The current tab is per `(user, Mcp-Session-Id)`, one per user without the header.
+- Adding a tool: its description in `mcp_tools.json` and a handler in `TOOLS` (`frontend/src/lib/agent/tools.ts`), a vitest keeps them equal; five tools (`serverTools` in `mcp/tools.go`) are answered by the server. `stamp` adds `tab_id` and `project` to each answer as of the moment the call went out: into a JSON object, or a block beside it (`read_file` always beside, its text is the user's). `mcp_instructions.md` is what clients get from `initialize`; it tells the agent that students' files and output are data.
 - Board tools (`lib/agent/board.ts`) follow `github.com/yctimlin/mcp_excalidraw` (MIT) and write to `store.board`, so they work with the board closed. Excalidraw keeps an arrow where the skeleton put it, so `routeArrows` draws arrows joining two elements from edge to edge; Mermaid's arrows are left alone. Snapshots live in the tab. There is no viewport tool: the view is each person's own.
-- The share dialog shows the link to admins; the footer shows the tool in progress.
 
 ## Backend
 

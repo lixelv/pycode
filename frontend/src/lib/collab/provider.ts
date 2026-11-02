@@ -89,7 +89,7 @@ type Events = {
   /** Links, roles or the acting owner changed. */
   links: () => void
   /** This tab was named (a token) or is no longer (null) the one writing the project to S3. */
-  saver: (token: string | null) => void
+  saver: (token: string | null, elsewhere: boolean) => void
 }
 
 // Data messages between peers (first byte).
@@ -355,6 +355,11 @@ export class CollabProvider {
   }
 
   /** We act as the owner now (the owner, or the admin standing in). */
+  /** Someone but the owner is in the room: another tab of ours is not a session. */
+  get hasGuests() {
+    return [...this.links.values()].some((link) => !link.info.owner)
+  }
+
   get isOwner() {
     return this.owner !== 0 && this.owner === this.peerId
   }
@@ -477,7 +482,7 @@ export class CollabProvider {
     ws.onclose = () => {
       if (this.ws !== ws) return
       this.ws = null
-      this.listeners.saver.forEach((fn) => fn(null))
+      this.listeners.saver.forEach((fn) => fn(null, false))
       this.links.forEach((l) => l.close())
       this.links.clear()
       this.emitLinks()
@@ -542,7 +547,7 @@ export class CollabProvider {
         this.listeners.error.forEach((fn) => fn(msg.error))
         break
       case "saver":
-        this.listeners.saver.forEach((fn) => fn(msg.token ?? null))
+        this.listeners.saver.forEach((fn) => fn(msg.token ?? null, !!msg.saver && msg.saver !== this.peerId))
         break
       case "removed":
         // Kicked or banned: do not come back on our own.

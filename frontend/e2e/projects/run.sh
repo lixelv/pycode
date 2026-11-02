@@ -7,7 +7,7 @@ export S3_TEST_ENDPOINT="${S3_TEST_ENDPOINT:-localhost:9100}"
 export S3_TEST_ACCESS_KEY="${S3_TEST_ACCESS_KEY:-polycode}"
 export S3_TEST_SECRET_KEY="${S3_TEST_SECRET_KEY:-polycode-dev-secret}"
 export S3_TEST_BUCKET="${S3_TEST_BUCKET:-polycode}"
-[ $# -gt 0 ] || set -- persist delete public-copy mcp-tabs mcp-client agent-visible
+[ $# -gt 0 ] || set -- persist delete legacy public-copy mcp-tabs mcp-client agent-visible
 status=0
 for name in "$@"; do
   echo "== $name"

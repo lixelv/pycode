@@ -143,7 +143,7 @@ export function addLanguagesFor(s: ProjectStore, paths: string[]) {
 }
 
 /** A new project without files: its owner chooses the language first. */
-export const needsLanguage = (s: ProjectStore) => metasOf(s).size === 0 && !stateOf(s).has("languages")
+export const needsLanguage = (s: ProjectStore) => ![...metasOf(s).values()].some((m) => !m.sealed) && !stateOf(s).has("languages")
 
 export const STARTERS: Record<ProjectLanguage, { path: string; code: string }> = {
   python: { path: DEFAULT_FILE, code: DEFAULT_CODE },
@@ -213,7 +213,8 @@ export function deletePath(s: ProjectStore, path: string) {
   s.structure.transact(() => {
     const metas = metasOf(s)
     const dirs = dirsOf(s)
-    for (const key of [...metas.keys()]) if (key === path || key.startsWith(path + "/")) metas.delete(key)
+    // A sealed file goes only when a new file takes its path.
+    for (const [key, meta] of [...metas.entries()]) if (!meta.sealed && (key === path || key.startsWith(path + "/"))) metas.delete(key)
     for (const key of [...dirs.keys()]) if (key === path || key.startsWith(path + "/")) dirs.delete(key)
     const folders = foldersOf(s)
     for (const key of [...folders.keys()]) if (key === path || key.startsWith(path + "/")) folders.delete(key)
@@ -333,7 +334,7 @@ export function replaceProject(
   s.structure.transact(() => {
     const metas = metasOf(s)
     const d = dirsOf(s)
-    for (const k of [...metas.keys()]) metas.delete(k)
+    for (const [k, meta] of [...metas.entries()]) if (!meta.sealed) metas.delete(k)
     for (const k of [...d.keys()]) d.delete(k)
     for (const [path, content] of Object.entries(files)) {
       const id = newId()
@@ -624,23 +625,19 @@ export function localStore(): ProjectStore {
 /** Makes a project of this user this page's own, kept in IndexedDB under its id. */
 export function openProjectStore(id: string): ProjectStore {
   local = new ProjectStore(true, id)
-  return settle(local)
+  return local
+}
+
+/** A run cannot survive a reload; call once we know no other tab of the project is running it. */
+export function endStaleRun(s: ProjectStore) {
+  const run = s.runtime.getMap("run")
+  if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
 }
 
 /** A public project of someone else: in memory, gone with the page. */
 export function openViewStore(): ProjectStore {
   local = new ProjectStore(false)
   return local
-}
-
-function settle(s: ProjectStore) {
-  const ready = s.ready.then(() => {
-    // A run cannot survive a reload.
-    const run = s.runtime.getMap("run")
-    if (run.get("status") && run.get("status") !== "finished" && run.get("status") !== "idle") run.set("status", "idle")
-  })
-  s.ready = ready
-  return s
 }
 
 const MIGRATED_KEY = "polycode:migrated-to"

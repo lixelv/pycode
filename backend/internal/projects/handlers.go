@@ -39,10 +39,19 @@ type Handlers struct {
 	onDelete func(uuid.UUID)
 	// Rewriting a manifest is read, change, write.
 	manifestMu sync.Mutex
+	// URLs given out and maybe not used yet: a limit must count them, or many
+	// requests could each pass alone. In memory, like rooms: they last 5 minutes.
+	quotaMu  sync.Mutex
+	reserved map[uuid.UUID]map[string]reservation
+}
+
+type reservation struct {
+	size    int64
+	expires time.Time
 }
 
 func NewHandlers(store *Store, s3 *storage.S3, savers SaverChecker) *Handlers {
-	return &Handlers{store: store, s3: s3, savers: savers, onDelete: func(uuid.UUID) {}}
+	return &Handlers{store: store, s3: s3, savers: savers, onDelete: func(uuid.UUID) {}, reserved: map[uuid.UUID]map[string]reservation{}}
 }
 
 // OnDelete is called after a project is deleted, to close what is open on it.
@@ -132,6 +141,10 @@ func (h *Handlers) load(w http.ResponseWriter, r *http.Request, ownerOnly bool) 
 	}
 	p, err := h.store.Get(r.Context(), id)
 	if errors.Is(err, ErrNotFound) {
+		// Told only to its owner, whose browser may erase its copy on this and nothing less.
+		if owner, deleted := h.store.DeletedOwner(r.Context(), id); deleted && owner == user {
+			w.Header().Set("X-Project-Deleted", "1")
+		}
 		notFound(w)
 		return nil, user, false
 	}
@@ -265,6 +278,9 @@ func (h *Handlers) Delete(ctx context.Context, owner, id uuid.UUID) error {
 	if err := h.store.MarkDeleted(ctx, owner, id); err != nil {
 		return err
 	}
+	h.quotaMu.Lock()
+	delete(h.reserved, id)
+	h.quotaMu.Unlock()
 	// A failure here is repeated by the janitor.
 	if err := h.s3.DeletePrefix(ctx, prefixOf(id)); err != nil {
 		slog.Warn("delete project objects", "project", id, "err", err)
@@ -392,18 +408,45 @@ func (h *Handlers) presign(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"urls": urls})
 }
 
-// checkQuota counts what is stored now, without what these operations replace,
-// plus the declared sizes. A URL is signed for its size, so S3 holds them to it.
+// tailOf is an object's name without its prefix: the same file under another
+// prefix is a move, and counts once.
+func tailOf(key string) string { return key[strings.Index(key, "/")+1:] }
+
+// checkQuota counts what is stored now and the URLs still out, without what these
+// operations replace, plus the declared sizes. A URL is signed for its size, so S3
+// holds them to it. On success the sizes are reserved until the URLs expire.
 func (h *Handlers) checkQuota(ctx context.Context, p *Project, puts map[string]int64, deletes map[string]bool) (int, error) {
+	h.quotaMu.Lock()
+	defer h.quotaMu.Unlock()
 	objects, err := h.s3.List(ctx, prefixOf(p.ID))
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
-	var total int64
+	now := time.Now()
+	outstanding := h.reserved[p.ID]
+	if outstanding == nil {
+		outstanding = map[string]reservation{}
+		h.reserved[p.ID] = outstanding
+	}
+	counted := map[string]int64{}
 	for _, o := range objects {
-		key := strings.TrimPrefix(o.Key, prefixOf(p.ID))
-		if _, replaced := puts[key]; !replaced && !deletes[key] {
-			total += o.Size
+		counted[strings.TrimPrefix(o.Key, prefixOf(p.ID))] = o.Size
+	}
+	for key, r := range outstanding {
+		if now.After(r.expires) {
+			delete(outstanding, key)
+		} else {
+			counted[key] = r.size
+		}
+	}
+	moving := map[string]bool{}
+	for key := range puts {
+		moving[tailOf(key)] = true
+	}
+	var total int64
+	for key, size := range counted {
+		if _, replaced := puts[key]; !replaced && !deletes[key] && !moving[tailOf(key)] {
+			total += size
 		}
 	}
 	for _, size := range puts {
@@ -421,6 +464,9 @@ func (h *Handlers) checkQuota(ctx context.Context, p *Project, puts map[string]i
 	}
 	if err := h.store.SetSize(ctx, p.ID, total); err != nil {
 		return http.StatusInternalServerError, err
+	}
+	for key, size := range puts {
+		outstanding[key] = reservation{size, now.Add(PresignTTL)}
 	}
 	return http.StatusOK, nil
 }

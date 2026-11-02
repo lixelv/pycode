@@ -198,14 +198,15 @@ export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?:
   const split = useRef<HTMLDivElement>(null)
 
   // ---- project & session ------------------------------------------------------
-  const collab = useCollab(page)
+  const home = mcpTab ? "/mcp-driven" : "/"
+  const collab = useCollab(page, home)
   const own = page?.kind === "own" ? page : null
   const viewing = page?.kind === "view"
   const provider = collab.provider
   const store = provider?.store ?? localStore()
   const doc = store.runtime // console and run state
   const awareness = provider?.awareness ?? null
-  const isGuest = viewing || (!!provider && provider.store !== localStore())
+  const isGuest = viewing || !page || (!!provider && provider.store !== localStore())
   useEffect(() => {
     // End-to-end tests read the project through this hook (opt-in per browser).
     try {
@@ -223,10 +224,10 @@ export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?:
       setSaveStatus(own.saver.status)
       if (own.saver.gone) {
         toast.message(t("projects.deleted"))
-        location.assign("/")
+        location.assign(home)
       }
     })
-  }, [own, t])
+  }, [own, t, home])
   // The project's languages decide which runtimes load; an empty new project asks for one.
   // Nothing loads until the project is there and has a language (a guest waits for the owner's).
   const [languages, setLanguages] = useState<ProjectLanguage[]>([])
@@ -554,7 +555,7 @@ export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?:
     // In a session an admin's own check is only a try: the table is for students' runs.
     const userId = collab.me ?? "local"
     // Alone in our own project's room is not a session.
-    const unrecorded = provider && provider.links.size > 0 ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
+    const unrecorded = provider?.hasGuests ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
     setCheck({ path: active, ...done, unrecorded })
   }, [hasTest, canRun, active, provider, checkHere, t, collab.me, recordIn])
 
@@ -788,7 +789,7 @@ export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?:
   }, [drop.dragging])
 
   // In a session only the owner resets — the session's project, for everyone.
-  const canReset = !provider || provider.isOwner
+  const canReset = !provider || provider.isOwner || !!provider.member.owner
 
   const reset = useCallback(() => {
     if (!canReset) return

@@ -6,10 +6,19 @@
 
 export class CloudError extends Error {
   readonly status: number
-  constructor(message: string, status: number) {
+  /** The server says this very user's project was deleted, not merely that it is out of reach. */
+  readonly deleted: boolean
+  constructor(message: string, status: number, deleted = false) {
     super(message)
     this.status = status
+    this.deleted = deleted
   }
+}
+
+/** To ProjectSaver a 404 means deleted, so anything else out of reach (a lost cookie) is not one. */
+function forSaver(err: unknown): never {
+  if (err instanceof CloudError && err.status === 404 && !err.deleted) throw new CloudError(err.message, 403)
+  throw err
 }
 
 export interface ProjectInfo {
@@ -32,7 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   if (!res.ok) {
     const answer = (await res.json().catch(() => null)) as { error?: string } | null
-    throw new CloudError(answer?.error ?? res.statusText, res.status)
+    throw new CloudError(answer?.error ?? res.statusText, res.status, res.headers.get("X-Project-Deleted") === "1")
   }
   return (res.status === 204 ? undefined : await res.json()) as T
 }
@@ -66,7 +75,7 @@ export class ProjectCloud {
     const { urls } = await request<{ urls: { key: string; url: string }[] }>("POST", `/api/projects/${this.id}/presign`, {
       saverToken: token,
       ops: [{ op, key, size }],
-    })
+    }).catch(forSaver)
     return urls[0].url
   }
 
@@ -90,11 +99,11 @@ export class ProjectCloud {
   }
 
   async keys(): Promise<{ key: string; size: number }[]> {
-    return (await request<{ keys: { key: string; size: number }[] }>("GET", `/api/projects/${this.id}/keys`)).keys
+    return (await request<{ keys: { key: string; size: number }[] }>("GET", `/api/projects/${this.id}/keys`).catch(forSaver)).keys
   }
 
   /** Sealed files gave way to new ones: only the server writes under sealed/. */
   async dropSealed(paths: string[], token: string): Promise<void> {
-    await request<void>("POST", `/api/projects/${this.id}/sealed/remove`, { saverToken: token, paths })
+    await request<void>("POST", `/api/projects/${this.id}/sealed/remove`, { saverToken: token, paths }).catch(forSaver)
   }
 }

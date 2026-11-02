@@ -131,6 +131,13 @@ func (s *Store) UsedByOthers(ctx context.Context, owner, except uuid.UUID) (int6
 	return used, err
 }
 
+// DeletedOwner says whose this project was, if it is deleted and not swept yet.
+func (s *Store) DeletedOwner(ctx context.Context, id uuid.UUID) (uuid.UUID, bool) {
+	var owner uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT owner_id FROM projects WHERE id = $1 AND deleted_at IS NOT NULL`, id).Scan(&owner)
+	return owner, err == nil
+}
+
 // MarkDeleted makes the project gone for everyone; its name is free at once.
 func (s *Store) MarkDeleted(ctx context.Context, owner, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE projects SET deleted_at = now() WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL`, id, owner)

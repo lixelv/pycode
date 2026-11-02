@@ -174,7 +174,8 @@ func (r *room) signal(from *member, msg control) {
 func (r *room) reset(from *member) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if from.info.Peer != r.owner {
+	// Any tab of the owner: a project may be open in several.
+	if from.info.Peer != r.owner && from.user != r.session.OwnerID {
 		from.enqueueJSON(control{Type: "error", Error: "Only the owner can reset the session's project."})
 		return
 	}

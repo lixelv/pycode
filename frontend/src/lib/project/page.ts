@@ -15,9 +15,10 @@ export async function openPage(id: string): Promise<PageProject> {
   const cloud = new ProjectCloud(id)
   const info = await getProject(id).catch(async (err) => {
     if (err instanceof CloudError) {
-      // Deleted (from another device, say): a copy left here must not outlive it.
-      if (err.status === 404) await eraseLocalCopy(id)
-      throw err
+      // Deleted (from another device, say): a copy left here must not outlive it. A 404
+      // alone proves nothing: with a lost cookie every project of ours answers so.
+      if (err.deleted) await eraseLocalCopy(id)
+      if (err.status < 500) throw err
     }
     // No answer at all: the local copy may be there, and it is ours to work on.
     return { id, name: "", settings: {}, public: false, sizeBytes: 0, ownerId: "", mine: true, createdAt: "", updatedAt: "" } satisfies ProjectInfo

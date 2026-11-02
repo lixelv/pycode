@@ -673,7 +673,7 @@ export const TOOLS: Record<string, Tool> = {
   },
 
   reset_project(args, { store: s, provider, app }) {
-    if (!provider.isOwner) throw new ToolError("only the owner can reset the project")
+    if (!provider.isOwner && !provider.member.owner) throw new ToolError("only the owner can reset the project")
     resetProject(s)
     provider.announceReset()
     if (args.language === "python" || args.language === "cpp") {

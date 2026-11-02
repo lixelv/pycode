@@ -20,10 +20,11 @@ import type { Peer } from "@/hooks/use-collab"
 import { addRole, formatCode, listCodes, projectSession, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
 import { getProject, setProjectPublic } from "@/lib/project/cloud"
 import type { PageProject } from "@/lib/project/page"
+import { rolesOf } from "@/lib/project/project"
+import { NotSaverError } from "@/lib/project/saver"
 import { useI18n } from "@/lib/i18n"
 import type { Level, Member } from "@/lib/project/access"
 import { BUILT_IN, memberLabel, roleLabel } from "@/lib/roles"
-import { rolesOf } from "@/lib/project/project"
 import type { ProjectStore } from "@/lib/project/store"
 import { cn } from "@/lib/utils"
 
@@ -208,9 +209,10 @@ function Visibility({ project }: { project: NonNullable<ShareDialogProps["projec
     setBusy(true)
     try {
       if (!isPublic) await project.saver.reconcile()
+      // Make private needs nothing saved first: it closes the link at once.
       setPublic((await setProjectPublic(project.info.id, !isPublic)).public)
     } catch (err) {
-      toast.error((err as Error).message)
+      toast.error(err instanceof NotSaverError ? t("share.notSaver") : (err as Error).message)
     } finally {
       setBusy(false)
     }
@@ -237,14 +239,15 @@ function LiveSession({ provider, store, peers, project, onLeave, onEnd, onOpenCh
   const refresh = useCallback(() => {
     // A project's codes may have been revoked: asking for its session issues new ones.
     if (project) {
-      projectSession(project.info.id)
+      const roles = Object.entries(rolesOf(store).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
+      projectSession(project.info.id, roles)
         .then((r) => {
           provider.session = { ...provider.session, code: r.session.code }
           setCodes(r.codes)
         })
         .catch((err: Error) => toast.error(err.message))
     } else if (admin) listCodes(provider.code).then((r) => setCodes(r.codes)).catch((err: Error) => toast.error(err.message))
-  }, [admin, provider, project])
+  }, [admin, provider, project, store])
   useEffect(refresh, [refresh])
 
   const ORDER = ["admin", "write", "read"]

@@ -14,7 +14,7 @@ import {
 } from "@/lib/collab/provider"
 import type { Member } from "@/lib/project/access"
 import type { PageProject } from "@/lib/project/page"
-import { localStore, rolesOf } from "@/lib/project/project"
+import { endStaleRun, localStore, rolesOf } from "@/lib/project/project"
 import { ProjectStore } from "@/lib/project/store"
 
 export interface Peer {
@@ -29,6 +29,8 @@ export interface Peer {
   member?: Member & { peer: number; acting: boolean }
 }
 
+const RETRY_ROOM_MS = 5000
+
 const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
 
 /**
@@ -36,7 +38,7 @@ const SESSION_PATH = /^\/s\/([A-Za-z0-9-]+)\/?$/
  * every change is saved in their browser); a guest works on a fresh store that
  * fills from the others and is dropped on leaving — back to their own project.
  */
-export function useCollab(page: PageProject | null = null) {
+export function useCollab(page: PageProject | null = null, home = "/") {
   const [me, setMe] = useState<string | null>(null)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [provider, setProvider] = useState<CollabProvider | null>(null)
@@ -103,8 +105,8 @@ export function useCollab(page: PageProject | null = null) {
       dispose(old)
       return null
     })
-    location.assign("/")
-  }, [])
+    location.assign(home)
+  }, [home])
 
   const end = useCallback(async () => {
     if (!provider) return
@@ -118,18 +120,36 @@ export function useCollab(page: PageProject | null = null) {
   useEffect(() => {
     if (!own || !me) return
     let live = true
-    const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
-    projectSession(own.info.id, roles).then(
-      ({ session }) => {
-        if (!live) return
-        const p = new CollabProvider(session, me, localStore(), null, true)
-        p.on("saver", (token) => own.saver.setToken(token))
-        attach(p)
-      },
-      (err: Error) => toast.error(err.message),
-    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let warned = false
+    const enter = () => {
+      const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
+      projectSession(own.info.id, roles).then(
+        ({ session }) => {
+          if (!live) return
+          const p = new CollabProvider(session, me, localStore(), null, true)
+          p.on("saver", (token, elsewhere) => own.saver.setToken(token, elsewhere))
+          // Only when no other tab is here: a run in it is still going.
+          const off = p.on("status", (s) => {
+            if (s !== "synced") return
+            off()
+            if (p.links.size === 0) endStaleRun(localStore())
+          })
+          attach(p)
+        },
+        (err: Error) => {
+          if (!live) return
+          // Without the room nothing is saved: keep trying, and say so once.
+          if (!warned) toast.error(err.message)
+          warned = true
+          timer = setTimeout(enter, RETRY_ROOM_MS)
+        },
+      )
+    }
+    enter()
     return () => {
       live = false
+      clearTimeout(timer)
     }
   }, [own, me, attach])
 
@@ -139,9 +159,9 @@ export function useCollab(page: PageProject | null = null) {
     if (!m || !me || page) return
     join(m[1]).catch((err: Error) => {
       toast.error(err.message)
-      location.assign("/")
+      location.assign(home)
     })
-  }, [me, join, page])
+  }, [me, join, page, home])
 
   // Track status and the people in the session.
   useEffect(() => {

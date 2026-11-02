@@ -1070,3 +1070,63 @@ func TestCopyOfPrivateForeign404(t *testing.T) {
 		t.Fatalf("own copy: %v", e.keys(c.ID))
 	}
 }
+
+// Hiding writes the new object before the old one goes: that must not count twice,
+// or a big file could never be hidden and would stay public.
+func TestMovingAFileBetweenPrefixesCountsOnce(t *testing.T) {
+	e := setup(t)
+	alice := newUser()
+	p := e.create(alice, "move")
+	token := e.saverOf(p)
+	const mb = int64(1 << 20)
+	from, to := "public/b/"+sha+".gz", "hidden/b/"+sha+".gz"
+	if status, _, body := e.presign(alice, p.ID, token, put(from, 40*mb)); status != http.StatusOK {
+		t.Fatalf("first: %d %s", status, body)
+	}
+	if status, _, body := e.presign(alice, p.ID, token, put(to, 40*mb)); status != http.StatusOK {
+		t.Fatalf("the move was refused: %d %s", status, body)
+	}
+}
+
+// Each request alone is under the limit; URLs still out must count.
+func TestQuotaCountsURLsNotUsedYet(t *testing.T) {
+	e := setup(t)
+	alice := newUser()
+	p := e.create(alice, "many")
+	token := e.saverOf(p)
+	const mb = int64(1 << 20)
+	if status, _, body := e.presign(alice, p.ID, token, put("public/f/one.ybin.gz", 40*mb)); status != http.StatusOK {
+		t.Fatalf("first: %d %s", status, body)
+	}
+	if status, _, _ := e.presign(alice, p.ID, token, put("public/f/two.ybin.gz", 40*mb)); status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("second, with the first URL still out: got %d, want 413", status)
+	}
+}
+
+func TestOnlyTheOwnerHearsADeleteAsADelete(t *testing.T) {
+	e := setup(t)
+	alice, bob := newUser(), newUser()
+	p := e.create(alice, "gone")
+	if status, _ := e.do(alice, "DELETE", "/api/projects/"+p.ID, nil); status >= 300 {
+		t.Fatal(status)
+	}
+	header := func(user uuid.UUID) string {
+		req, _ := http.NewRequest("GET", e.srv.URL+"/api/projects/"+p.ID, nil)
+		req.AddCookie(&http.Cookie{Name: "pc_uid", Value: user.String()})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		return resp.Header.Get("X-Project-Deleted")
+	}
+	if header(alice) != "1" {
+		t.Error("the owner should learn it was deleted")
+	}
+	if header(bob) != "" {
+		t.Error("a stranger learned the project existed")
+	}
+}

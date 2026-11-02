@@ -241,3 +241,16 @@ func TestOldEndpointGone(t *testing.T) {
 		t.Fatalf("got %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestAnyTabOfTheOwnerResets(t *testing.T) {
+	ownerID := uuid.Must(uuid.NewV7())
+	_, r, _ := projectHub(ownerID)
+	first := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(first)
+	second := newMember(ownerID, RoleOwner, LevelAdmin)
+	r.join(second)
+	r.reset(second)
+	if last(second, "error") != nil || last(first, "reset") == nil {
+		t.Fatal("a second tab of the owner should reset")
+	}
+}

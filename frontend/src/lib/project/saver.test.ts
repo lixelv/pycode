@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
 
-import { addFiles, createFile, deletePath, foldersOf, metasOf, renamePath, setFlag, setFolderRole, snapshotFiles, textOf, tournamentsOf } from "./project"
+import { addFiles, createFile, deletePath, foldersOf, metasOf, renamePath, resetProject, setFlag, setFolderRole, snapshotFiles, textOf, tournamentsOf } from "./project"
 import { publicStructure } from "./publish"
 import { ProjectSaver } from "./saver"
 import { type FileMeta, ProjectStore } from "./store"
@@ -667,5 +667,77 @@ describe("a project deleted elsewhere", () => {
     await wait(10)
     expect(clear).not.toHaveBeenCalled()
     expect(saver.status).toBe("unsaved")
+  })
+})
+
+describe("after the review", () => {
+  // A tab that becomes the saver did not see what the previous one wrote.
+  it("a tab that takes over learns what is in S3, and hiding then removes the old object", async () => {
+    const { store, cloud, saver } = setup()
+    await saver.load()
+    const before = new ProjectStore(false)
+    createFile(before, "t.py", "x")
+    Y.applyUpdate(store.structure, Y.encodeStateAsUpdate(before.structure))
+    const id = idOf(store, "t.py")
+    cloud.objects.set(FILE(id), new Uint8Array([1])) // written by the tab that was the saver
+    saver.setToken(TOKEN)
+    await wait(10)
+    setFlag(store, "t.py", "hidden", true)
+    await wait(50)
+    await saver.flush()
+    expect(cloud.objects.has(FILE(id))).toBe(false)
+    expect(cloud.objects.has(FILE(id, "hidden"))).toBe(true)
+  })
+
+  it("taking over heals a file left in the wrong place", async () => {
+    const { store, cloud, saver } = setup()
+    createFile(store, "t.test.py", "x") // hidden
+    await saver.load()
+    const id = idOf(store, "t.test.py")
+    cloud.objects.set(FILE(id), new Uint8Array([1]))
+    saver.setToken(TOKEN)
+    await wait(50)
+    expect(cloud.objects.has(FILE(id))).toBe(false)
+  })
+
+  it("writes the full structure last: an interrupted save is seen as unfinished", async () => {
+    const { store, cloud, saver } = await saving()
+    createFile(store, "a.py", "1")
+    await saver.flush()
+    cloud.log = []
+    cloud.failing.add(FILE(idOf(store, "a.py")))
+    setFlag(store, "a.py", "hidden", true)
+    await wait(50)
+    expect(cloud.log).not.toContain("put private/structure.ybin.gz")
+  })
+
+  it("going public from a tab that is not saving is refused", async () => {
+    const { saver } = setup()
+    await saver.load()
+    await expect(saver.reconcile()).rejects.toThrow()
+  })
+
+  it("says unsaved when an edit has nobody to save it, and saved when another tab does", async () => {
+    const { store, saver } = setup()
+    await saver.load()
+    saver.setToken(null, false)
+    createFile(store, "a.py", "1")
+    expect(saver.status).toBe("unsaved")
+    saver.setToken(null, true)
+    expect(saver.status).toBe("saved")
+  })
+
+  it("a reset keeps a sealed test; only a new file under its path replaces it", async () => {
+    const { store, cloud, saver } = setup()
+    metasOf(store).set("t.test.py", { id: "sealedid", kind: "text", size: 3, sealed: true })
+    cloud.objects.set("sealed/manifest.json.gz", new TextEncoder().encode(JSON.stringify([{ path: "t.test.py", id: "sealedid", kind: "text", size: 3 }])))
+    await saver.load()
+    saver.setToken(TOKEN)
+    createFile(store, "main.py", "1")
+    resetProject(store)
+    deletePath(store, "t.test.py")
+    await saver.flush()
+    expect(metasOf(store).get("t.test.py")?.sealed).toBe(true)
+    expect(cloud.dropped).toEqual([])
   })
 })

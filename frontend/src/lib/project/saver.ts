@@ -51,7 +51,6 @@ export class ProjectSaver {
   /** A tab that just became the saver cannot trust what it knew of S3: another tab wrote there. */
   private needSync = false
   private loaded = false
-  private loading = false
   private known = new Set<string>()
   /** Paths of the sealed manifest, with their ids: what the server must be told about. */
   private sealedKnown = new Map<string, string>()
@@ -92,7 +91,10 @@ export class ProjectSaver {
 
   private watch(id: string, doc: Y.Doc) {
     if (id === "runtime") return
-    const onUpdate = () => this.touched(id)
+    const onUpdate = (_update: Uint8Array, origin: unknown) => {
+      // What load merges in is not an edit; an edit made meanwhile is.
+      if (origin !== this) this.touched(id)
+    }
     doc.on("update", onUpdate)
     this.detach.push(() => doc.off("update", onUpdate))
   }
@@ -104,7 +106,7 @@ export class ProjectSaver {
   }
 
   private touched(id: string) {
-    if (this.loading || this.gone) return
+    if (this.gone) return
     this.dirty.add(id)
     this.statusWithoutToken()
     if (id === STRUCTURE && this.placementsChanged()) {
@@ -183,11 +185,12 @@ export class ProjectSaver {
 
   /** Merges S3's copy into the local one. Without either, or for a deleted project, it throws. */
   async load(): Promise<void> {
-    this.loading = true
     try {
       await this.read()
       this.loaded = true
       this.placements = this.currentPlacements()
+      // A file hidden during the read has not moved: the check after a load finds it.
+      this.needSync = true
     } catch (err) {
       if (statusOf(err) === 404) {
         await this.lost()
@@ -197,8 +200,6 @@ export class ProjectSaver {
       this.setStatus("unsaved")
       this.retryLoad()
       return
-    } finally {
-      this.loading = false
     }
     this.afterLoad()
   }
@@ -240,7 +241,8 @@ export class ProjectSaver {
     } else {
       // A copy's first opening: public/structure is a clean document, only ever read while there is no structure of our own.
       const start = has("public/structure.ybin.gz") ? await this.cloud.get("public/structure.ybin.gz") : null
-      if (start) Y.applyUpdate(this.store.structure, start, this)
+      // Only into nothing: a first save cut short leaves this file too, with our real structure here.
+      if (start && metasOf(this.store).size === 0) Y.applyUpdate(this.store.structure, start, this)
       const sealed = parseManifest(has("sealed/manifest.json.gz") ? await this.cloud.get("sealed/manifest.json.gz") : null)
       const metas = metasOf(this.store)
       this.store.structure.transact(() => {
@@ -293,6 +295,7 @@ export class ProjectSaver {
     await this.pump()
     if (this.gone) throw new Error("the project was deleted")
     if (this.failed) throw this.failed
+    if (!this.token) throw new NotSaverError() // lost on the way: nothing says it was written
   }
 
   /** Before going public: the real list of objects, so nothing stays where it must not. */
@@ -300,6 +303,7 @@ export class ProjectSaver {
     // Only the saver can vouch for what lies under public/.
     if (!this.token) throw new NotSaverError()
     await this.flush()
+    if (!this.token) throw new NotSaverError()
     this.known = new Set((await this.cloud.keys()).map((k) => k.key))
     this.dirty.add(STRUCTURE)
     await this.flush()
@@ -329,6 +333,7 @@ export class ProjectSaver {
   }
 
   private async drain() {
+    if (!this.token) this.statusWithoutToken()
     if (!this.token || !this.loaded || this.gone) return
     if (this.needSync) {
       try {
@@ -364,6 +369,7 @@ export class ProjectSaver {
       return
     }
     this.setStatus("unsaved")
+    this.statusWithoutToken() // the saver moved on while this was in flight
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null

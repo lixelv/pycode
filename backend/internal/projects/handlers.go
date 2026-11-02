@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -372,6 +373,12 @@ func (h *Handlers) presign(w http.ResponseWriter, r *http.Request) {
 			deletes[op.Key] = true
 		}
 	}
+	// What is being deleted no longer needs its place held.
+	h.quotaMu.Lock()
+	for key := range deletes {
+		delete(h.reserved[p.ID], key)
+	}
+	h.quotaMu.Unlock()
 	if len(puts) > 0 {
 		if status, err := h.checkQuota(r.Context(), p, puts, deletes); err != nil {
 			if status == http.StatusInternalServerError {
@@ -408,9 +415,9 @@ func (h *Handlers) presign(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"urls": urls})
 }
 
-// tailOf is an object's name without its prefix: the same file under another
-// prefix is a move, and counts once.
-func tailOf(key string) string { return key[strings.Index(key, "/")+1:] }
+// movable: a file's object, which a change of visibility moves between prefixes.
+// New object first, old one last, with other writes between: it counts once all that time.
+var movable = regexp.MustCompile(`^(?:public|hidden|private)/((?:f|b)/.+)$`)
 
 // checkQuota counts what is stored now and the URLs still out, without what these
 // operations replace, plus the declared sizes. A URL is signed for its size, so S3
@@ -439,17 +446,24 @@ func (h *Handlers) checkQuota(ctx context.Context, p *Project, puts map[string]i
 			counted[key] = r.size
 		}
 	}
-	moving := map[string]bool{}
-	for key := range puts {
-		moving[tailOf(key)] = true
+	for key, size := range puts {
+		counted[key] = size
+	}
+	for key := range deletes {
+		if _, put := puts[key]; !put {
+			delete(counted, key)
+		}
 	}
 	var total int64
+	largest := map[string]int64{}
 	for key, size := range counted {
-		if _, replaced := puts[key]; !replaced && !deletes[key] && !moving[tailOf(key)] {
+		if m := movable.FindStringSubmatch(key); m != nil {
+			largest[m[1]] = max(largest[m[1]], size)
+		} else {
 			total += size
 		}
 	}
-	for _, size := range puts {
+	for _, size := range largest {
 		total += size
 	}
 	if total > ProjectLimit {

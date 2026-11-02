@@ -20,7 +20,7 @@ import type { Peer } from "@/hooks/use-collab"
 import { addRole, formatCode, listCodes, projectSession, type CollabProvider, type RoleCode } from "@/lib/collab/provider"
 import { getProject, setProjectPublic } from "@/lib/project/cloud"
 import type { PageProject } from "@/lib/project/page"
-import { rolesOf } from "@/lib/project/project"
+import { customRolesOf, rolesOf } from "@/lib/project/project"
 import { NotSaverError } from "@/lib/project/saver"
 import { useI18n } from "@/lib/i18n"
 import type { Level, Member } from "@/lib/project/access"
@@ -239,8 +239,7 @@ function LiveSession({ provider, store, peers, project, onLeave, onEnd, onOpenCh
   const refresh = useCallback(() => {
     // A project's codes may have been revoked: asking for its session issues new ones.
     if (project) {
-      const roles = Object.entries(rolesOf(store).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
-      projectSession(project.info.id, roles)
+      projectSession(project.info.id, customRolesOf(store))
         .then((r) => {
           provider.session = { ...provider.session, code: r.session.code }
           setCodes(r.codes)

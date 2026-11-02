@@ -14,7 +14,7 @@ import {
 } from "@/lib/collab/provider"
 import type { Member } from "@/lib/project/access"
 import type { PageProject } from "@/lib/project/page"
-import { endStaleRun, localStore, rolesOf } from "@/lib/project/project"
+import { customRolesOf, endStaleRun, localStore } from "@/lib/project/project"
 import { ProjectStore } from "@/lib/project/store"
 
 export interface Peer {
@@ -123,24 +123,26 @@ export function useCollab(page: PageProject | null = null, home = "/") {
     let timer: ReturnType<typeof setTimeout> | undefined
     let warned = false
     const enter = () => {
-      const roles = Object.entries(rolesOf(localStore()).toJSON() as Record<string, "read" | "write">).map(([name, level]) => ({ name, level }))
-      projectSession(own.info.id, roles).then(
+      projectSession(own.info.id, customRolesOf(localStore())).then(
         ({ session }) => {
           if (!live) return
           const p = new CollabProvider(session, me, localStore(), null, true)
           p.on("saver", (token, elsewhere) => own.saver.setToken(token, elsewhere))
           // Only when no other tab is here: a run in it is still going.
           const off = p.on("status", (s) => {
-            if (s !== "synced") return
+            if (s === "connecting") return
             off()
-            if (p.links.size === 0) endStaleRun(localStore())
+            if (s !== "synced" || p.links.size === 0) endStaleRun(localStore())
           })
           attach(p)
         },
         (err: Error) => {
           if (!live) return
           // Without the room nothing is saved: keep trying, and say so once.
-          if (!warned) toast.error(err.message)
+          if (!warned) {
+            toast.error(err.message)
+            endStaleRun(localStore())
+          }
           warned = true
           timer = setTimeout(enter, RETRY_ROOM_MS)
         },

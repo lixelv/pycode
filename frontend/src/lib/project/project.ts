@@ -7,7 +7,7 @@ import type { PackageEntry } from "@/hooks/use-packages"
 import { cppPackagesOf, type CppPackage } from "@/lib/cpp/packages"
 import { DEFAULT_CODE } from "@/lib/storage"
 
-import { isTest, parseEnv, renameRules, isReserved, LEGACY_ENV, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
+import { isRoleName, isTest, parseEnv, renameRules, isReserved, LEGACY_ENV, RESERVED, runVisible, serializeEnv, type EnvRules, type Rules } from "./access"
 import { ensureBlob, putBlob, sha256 } from "./blobs"
 import { ProjectStore, type FileMeta } from "./store"
 
@@ -46,6 +46,11 @@ export function ensureTournament(s: ProjectStore, id: string, isPrivate: boolean
 
 export const foldersOf = (s: ProjectStore) => s.structure.getMap<string>("folders")
 export const rolesOf = (s: ProjectStore) => s.structure.getMap<"read" | "write">("roles")
+/** Custom roles the server takes: an old archive may have written anything. */
+export const customRolesOf = (s: ProjectStore) =>
+  Object.entries(rolesOf(s).toJSON() as Record<string, "read" | "write">)
+    .filter(([name]) => isRoleName(name))
+    .map(([name, level]) => ({ name, level }))
 export const stateOf = (s: ProjectStore) => s.structure.getMap<unknown>("state")
 
 export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)

@@ -1086,6 +1086,26 @@ func TestMovingAFileBetweenPrefixesCountsOnce(t *testing.T) {
 	if status, _, body := e.presign(alice, p.ID, token, put(to, 40*mb)); status != http.StatusOK {
 		t.Fatalf("the move was refused: %d %s", status, body)
 	}
+	// Other writes come between the new object and the old one's removal.
+	if status, _, body := e.presign(alice, p.ID, token, put("public/structure.ybin.gz", 1000)); status != http.StatusOK {
+		t.Fatalf("a write during the move was refused: %d %s", status, body)
+	}
+}
+
+// A deleted file's place is free at once, not when its URL would have expired.
+func TestDeleteFreesAReservation(t *testing.T) {
+	e := setup(t)
+	alice := newUser()
+	p := e.create(alice, "free")
+	token := e.saverOf(p)
+	const mb = int64(1 << 20)
+	if status, _, body := e.presign(alice, p.ID, token, put("public/f/one.ybin.gz", 40*mb)); status != http.StatusOK {
+		t.Fatalf("first: %d %s", status, body)
+	}
+	e.presign(alice, p.ID, token, del("public/f/one.ybin.gz"))
+	if status, _, body := e.presign(alice, p.ID, token, put("public/f/two.ybin.gz", 40*mb)); status != http.StatusOK {
+		t.Fatalf("after the delete: %d %s", status, body)
+	}
 }
 
 // Each request alone is under the limit; URLs still out must count.

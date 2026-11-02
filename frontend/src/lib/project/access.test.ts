@@ -222,3 +222,10 @@ describe("sealed files", () => {
     expect(runVisible("main.py", "main.py", r)).toBe(true)
   })
 })
+
+describe("role names from an archive", () => {
+  it("keeps only names the server accepts", () => {
+    const env = parseEnv("role good write\nrole a.b write\nrole @x read\nrole " + "z".repeat(33) + " read\nrole write read\n")
+    expect(Object.keys(env.roles)).toEqual(["good"])
+  })
+})

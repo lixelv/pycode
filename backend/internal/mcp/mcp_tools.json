@@ -552,7 +552,7 @@
   },
   {
     "name": "share_links",
-    "description": "Every role's join link and code, and this MCP link.",
+    "description": "Every role's join link and code, and the address of this MCP server.",
     "inputSchema": {
       "type": "object",
       "properties": {}

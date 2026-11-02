@@ -740,4 +740,50 @@ describe("after the review", () => {
     expect(metasOf(store).get("t.test.py")?.sealed).toBe(true)
     expect(cloud.dropped).toEqual([])
   })
+
+  it("loses no edit made while a retried load is reading", async () => {
+    const { store, cloud, saver } = setup()
+    createFile(store, "a.py", "1")
+    cloud.down = true
+    await saver.load()
+    saver.setToken(TOKEN)
+    cloud.down = false
+    await wait(5000) // the retry
+    await saver.flush()
+    expect(cloud.objects.has(FILE(idOf(store, "a.py")))).toBe(true)
+  })
+
+  it("does not merge public/structure into a structure of our own when a first save was cut short", async () => {
+    const { store, cloud, saver } = setup()
+    createFile(store, "a.py", "1")
+    const other = new ProjectStore(false)
+    createFile(other, "gone.py", "x")
+    cloud.objects.set("public/structure.ybin.gz", publicStructure(other.structure))
+    await saver.load()
+    expect(metasOf(store).has("gone.py")).toBe(false)
+  })
+
+  it("a flush that loses the token on the way rejects", async () => {
+    const { store, cloud, saver } = await saving()
+    createFile(store, "a.py", "1")
+    const key = "public/structure.ybin.gz"
+    cloud.holdKeys.add(key)
+    const flushing = saver.flush()
+    await wait(10)
+    saver.setToken(null, true)
+    cloud.holdKeys.clear()
+    cloud.held.get(key)?.()
+    await expect(flushing).rejects.toThrow()
+  })
+
+  it("a save failing after the saver moved does not stay unsaved here", async () => {
+    const { store, cloud, saver } = await saving()
+    createFile(store, "a.py", "1")
+    cloud.down = true
+    const pending = saver.flush().catch(() => {})
+    saver.setToken(null, true)
+    await pending
+    await wait(10)
+    expect(saver.status).toBe("saved")
+  })
 })

@@ -1,6 +1,6 @@
 import { parseCppSpec, cppPackagesOf, type CppPackage } from "@/lib/cpp/packages"
 import { readRun, readTerminal, sharedRun, sharedTerminal } from "@/lib/collab/doc"
-import { addRole, listCodes, type CollabProvider, type PeerUser } from "@/lib/collab/provider"
+import { addRole, listCodes, projectSession, type CollabProvider, type PeerUser } from "@/lib/collab/provider"
 import type { PackageEntry } from "@/hooks/use-packages"
 import { parseSpec } from "@/hooks/use-packages"
 import { ADMINS_ONLY, isReserved, type Level } from "@/lib/project/access"
@@ -50,6 +50,13 @@ import { boardAdd, boardAlign, boardClear, boardDelete, boardDistribute, boardDu
  * /mcp-driven tab's browser, on the same project and the same runners as the
  * person at it.
  */
+
+/** A code that works: ending a project's session revokes them, and asking for the session issues new ones. */
+async function liveCode(provider: CollabProvider) {
+  const project = provider.session?.projectId
+  if (project && provider.member.owner) provider.session = { ...provider.session, code: (await projectSession(project)).session.code }
+  return provider.code
+}
 
 /** A file as an agent knows it: a sealed one does not exist, its path is free. */
 const liveMeta = (s: ProjectStore, path: string) => {
@@ -499,16 +506,15 @@ export const TOOLS: Record<string, Tool> = {
   ban_member: (args, ctx) => kick(ctx, args, true),
 
   async share_links(_args, { provider }) {
-    const { codes } = await listCodes(provider.code)
+    const { codes } = await listCodes(await liveCode(provider))
     const links = codes.map((c) => ({ role: c.role, level: c.level, code: c.code, link: `${location.origin}/s/${c.code}` }))
-    const admin = codes.find((c) => c.role === "admin")
-    return { links, mcp: admin && `${location.origin}/s/${admin.code}/mcp` }
+    return { links, mcp: `${location.origin}/mcp` }
   },
 
   async add_role(args, { store: s, provider }) {
     const name = string(args, "name")
     const level = string(args, "level") as "read" | "write"
-    const code = await addRole(provider.code, name, level).catch((err: Error) => {
+    const code = await addRole(await liveCode(provider), name, level).catch((err: Error) => {
       throw new ToolError(err.message)
     })
     rolesOf(s).set(name, level)

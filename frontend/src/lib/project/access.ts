@@ -119,6 +119,9 @@ export function serializeEnv(e: EnvRules): string {
   return lines.join("\n") + "\n"
 }
 
+/** What the server accepts as a custom role's name. */
+export const isRoleName = (name: string) => /^[\p{L}\p{N}_-]{1,32}$/u.test(name) && !BUILT_IN_ROLES.has(name)
+
 export function parseEnv(text: string): EnvRules {
   const e: EnvRules = { roles: {}, folders: {}, protected: [], hidden: [] }
   for (const line of text.split("\n")) {
@@ -127,7 +130,7 @@ export function parseEnv(text: string): EnvRules {
     const rest = m[2]
     if (m[1] === "role") {
       const [name, level] = rest.split(" ")
-      if ((level === "read" || level === "write") && !BUILT_IN_ROLES.has(name)) e.roles[name] = level
+      if ((level === "read" || level === "write") && isRoleName(name)) e.roles[name] = level
     } else if (m[1] === "folder") {
       // A folder given to "write" (say) would open it to everyone with that code.
       const space = rest.indexOf(" ")

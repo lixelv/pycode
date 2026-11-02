@@ -555,7 +555,7 @@ export function Workspace({ page, mcpTab }: { page: PageProject | null; mcpTab?:
     // In a session an admin's own check is only a try: the table is for students' runs.
     const userId = collab.me ?? "local"
     // Alone in our own project's room is not a session.
-    const unrecorded = provider?.hasGuests ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
+    const unrecorded = provider && !(provider.member.owner && !provider.hasGuests) ? false : recordIn(active, done, { userId, name: nameFor(userId) }, null)
     setCheck({ path: active, ...done, unrecorded })
   }, [hasTest, canRun, active, provider, checkHere, t, collab.me, recordIn])
 

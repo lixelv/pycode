@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +13,21 @@ import (
 	"github.com/lixelv/polycode/backend/internal/projects"
 )
 
+//go:embed guide.md
+var guide string
+
+//go:embed tests_guide.md
+var testsGuide string
+
 // serverTools need no browser, except open_project, which waits for one.
 var serverTools = map[string]func(*Server, context.Context, sessionKey, json.RawMessage) (any, error){
-	"list_tabs":      (*Server).listTabs,
-	"list_projects":  (*Server).listProjects,
-	"create_project": (*Server).createProject,
-	"delete_project": (*Server).deleteProject,
-	"open_project":   (*Server).openProject,
+	"polycode_guide":       docTool(guide),
+	"polycode_tests_guide": docTool(testsGuide),
+	"list_tabs":            (*Server).listTabs,
+	"list_projects":        (*Server).listProjects,
+	"create_project":       (*Server).createProject,
+	"delete_project":       (*Server).deleteProject,
+	"open_project":         (*Server).openProject,
 }
 
 // ServerToolNames is what a tab never gets.
@@ -28,6 +37,13 @@ func ServerToolNames() []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// docTool answers with a fixed Markdown text.
+func docTool(text string) func(*Server, context.Context, sessionKey, json.RawMessage) (any, error) {
+	return func(*Server, context.Context, sessionKey, json.RawMessage) (any, error) {
+		return map[string]any{"content": []map[string]string{{"type": "text", "text": text}}}, nil
+	}
 }
 
 func stringArg(args json.RawMessage, name string) string {

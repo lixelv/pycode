@@ -1,7 +1,23 @@
 [
   {
+    "name": "polycode_guide",
+    "description": "A short guide to polycode and these tools: tabs and projects, files, access, running programs, tests, sessions. Call it once at the start of every session, before any other tool.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "polycode_tests_guide",
+    "description": "How checks work and the full reference of `polycode_test` (run, call, module, points, tournament, limits, messages, run_check's answer), with an example. Call it before writing, fixing or explaining a name.test.py.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "project_overview",
-    "description": "The whole picture, as JSON: file tree with flags, folders and who may see them, roles, members, the console's state, packages, tournaments, the board, the file open on the teacher's screen. Call it first.",
+    "description": "The whole picture, as JSON: file tree with flags, folders and who may see them, roles, members, the console's state, packages, tournaments, the board, the file open on the teacher's screen. Call it right after open_project.",
     "inputSchema": {
       "type": "object",
       "properties": {}

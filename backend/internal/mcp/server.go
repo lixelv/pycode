@@ -1,7 +1,7 @@
 // Package mcp is the agent's way in: MCP over Streamable HTTP, one endpoint per
 // user, authorised by the user's token. The project lives in browsers and this
 // server never runs user code, so a tool call goes to a /mcp-driven tab over its
-// socket; the five project tools are answered here.
+// socket; the project tools and the two guides are answered here.
 package mcp
 
 import (

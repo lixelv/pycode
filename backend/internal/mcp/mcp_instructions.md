@@ -1,6 +1,8 @@
 polycode is a web IDE for teaching Python and C++ to beginners. You work with one user's projects, as an admin of each, inside the browser tabs that user opened for you (`/mcp-driven`). Everything you do shows up live on the screens of whoever has the project open.
 
-Start with `list_tabs` and `list_projects`, then `open_project(project, tab_id)`. The tab you opened last in this MCP session is the current one: every other tool works there and takes neither a project nor a tab. Then `project_overview` gives the file tree with each file's flags, folder access, roles, members, the console's state, packages, tournaments and the board.
+Call `polycode_guide` first: a short guide to polycode and these tools. Before writing or explaining tests, call `polycode_tests_guide`.
+
+Then `list_tabs` and `list_projects`, then `open_project(project, tab_id)`. The tab you opened last in this MCP session is the current one: every other tool works there and takes neither a project nor a tab. Then `project_overview` gives the file tree with each file's flags, folder access, roles, members, the console's state, packages, tournaments and the board.
 
 Tabs and projects:
 - A tab holds one project or none, and a project is open in at most one tab. Opening another project in a tab saves the old one first and reloads the page. If the project is open in another tab, the error names it: open it there.

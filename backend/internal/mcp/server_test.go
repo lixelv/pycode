@@ -602,11 +602,11 @@ func TestInitializeAndToolsList(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	// The 62 browser tools stay, with the 5 new ones beside them.
-	if len(names) != 67 {
-		t.Errorf("%d tools, want 62 + 5", len(names))
+	// The 62 browser tools stay, with the 7 of the server beside them.
+	if len(names) != 69 {
+		t.Errorf("%d tools, want 62 + 7", len(names))
 	}
-	for _, name := range []string{"list_tabs", "list_projects", "create_project", "delete_project", "open_project", "read_file", "write_file"} {
+	for _, name := range []string{"polycode_guide", "polycode_tests_guide", "list_tabs", "list_projects", "create_project", "delete_project", "open_project", "read_file", "write_file"} {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list has no %s", name)
 		}
